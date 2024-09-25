@@ -1,0 +1,21 @@
+[project]
+name = "scratchpad"
+version = "0.0.1"
+description = "scratchpad"
+authors = [{ name = "Xiaozhe Yao", email = "askxzyao@gmail.com" }]
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "MIT" }
+dynamic = ["dependencies", "optional-dependencies"]
+
+[tool.flake8]
+max-line-length = 120
+
+[project.scripts]
+sp = "scratchpad.cli.sp:app"
+
+[tool.setuptools]
+packages = ["scratchpad"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
