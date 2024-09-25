@@ -1,2 +1,9 @@
 loguru
 typer
+fastapi
+aiohttp
+requests
+uvicorn
+zmq
+huggingface_hub
+transformers
