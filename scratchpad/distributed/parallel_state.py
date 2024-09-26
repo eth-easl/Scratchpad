@@ -31,10 +31,7 @@ import torch
 import torch.distributed
 from torch.distributed import Backend, ProcessGroup
 
-import vllm.envs as envs
-from scratchpad.utils.logger import logger
-from vllm.platforms import current_platform
-from vllm.utils import supports_custom_op
+from scratchpad.utils import envs, logger, current_platform, supports_custom_op
 
 
 @dataclass

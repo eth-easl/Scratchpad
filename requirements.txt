@@ -7,3 +7,4 @@ uvicorn
 zmq
 huggingface_hub
 transformers
+pynvml

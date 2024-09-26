@@ -35,7 +35,6 @@ async def health() -> Response:
 async def generate_request(obj: GenerateReqInput, request: Request):
     """Handle a generate request."""
     if obj.stream:
-
         async def stream_results():
             try:
                 async for out in tokenizer_manager.generate_request(obj, request):
