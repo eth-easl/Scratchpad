@@ -19,11 +19,14 @@ for name, cls in _CONFIG_REGISTRY.items():
     with contextlib.suppress(ValueError):
         AutoConfig.register(name, cls)
 
+
 def download_from_hf(model_path: str):
     if os.path.exists(model_path):
         return model_path
 
-    return snapshot_download(model_path, allow_patterns=["*.json", "*.bin", "*.model", "*.safetensors"])
+    return snapshot_download(
+        model_path, allow_patterns=["*.json", "*.bin", "*.model", "*.safetensors"]
+    )
 
 
 def get_config(
@@ -44,6 +47,7 @@ def get_config(
     if model_override_args:
         config.update(model_override_args)
     return config
+
 
 # Models don't use the same configuration key for determining the maximum
 # context length.  Store them here so we can sanely check them.
@@ -76,6 +80,7 @@ def get_context_length(config):
             return int(rope_scaling_factor * val)
     return 2048
 
+
 def get_processor(
     tokenizer_name: str,
     *args,
@@ -95,6 +100,7 @@ def get_processor(
 
 
 _FAST_LLAMA_TOKENIZER = "hf-internal-testing/llama-tokenizer"
+
 
 def get_tokenizer(
     tokenizer_name: str,

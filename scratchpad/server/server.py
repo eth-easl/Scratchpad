@@ -28,13 +28,17 @@ app.add_middleware(
     allow_credentials=True,
 )
 tokenizer_manager = None
+
+
 @app.get("/health")
 async def health() -> Response:
     return Response(status_code=200, content="OK")
 
+
 async def generate_request(obj: GenerateReqInput, request: Request):
     """Handle a generate request."""
     if obj.stream:
+
         async def stream_results():
             try:
                 async for out in tokenizer_manager.generate_request(obj, request):
@@ -58,15 +62,12 @@ async def generate_request(obj: GenerateReqInput, request: Request):
                 {"error": {"message": str(e)}}, status_code=HTTPStatus.BAD_REQUEST
             )
 
+
 def launch_server(model_name, args):
     download_from_hf(model_name)
     try:
         uvicorn.run(
-            app,
-            host=args.host,
-            port=args.port,
-            timeout_keep_alive=5,
-            loop="auto"
+            app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto"
         )
     except Exception as e:
         logger.error(f"Error in server: {e}")

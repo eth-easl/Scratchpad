@@ -3,12 +3,13 @@ from functools import lru_cache
 from typing import Optional
 from . import envs
 
+
 def supports_custom_op() -> bool:
     return hasattr(torch.library, "custom_op")
 
+
 @lru_cache(maxsize=8)
-def _cuda_device_count_stateless(
-        cuda_visible_devices: Optional[str] = None) -> int:
+def _cuda_device_count_stateless(cuda_visible_devices: Optional[str] = None) -> int:
     # Note: cuda_visible_devices is not used, but we keep it as an argument for
     # LRU Cache purposes.
 
@@ -24,6 +25,7 @@ def _cuda_device_count_stateless(
     raw_count = torch.cuda._device_count_nvml()
     r = torch._C._cuda_getDeviceCount() if raw_count < 0 else raw_count
     return r
+
 
 def cuda_device_count_stateless() -> int:
     """Get number of CUDA devices, caching based on the value of

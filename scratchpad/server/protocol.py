@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 import uuid
 
+
 @dataclass
 class GenerateReqInput:
     # The input prompt. It can be a single prompt or a batch of prompts.
@@ -106,7 +107,7 @@ class GenerateReqInput:
 
             if self.image_data is None:
                 self.image_data = [None] * num
-            
+
             elif not isinstance(self.image_data, list):
                 self.image_data = [self.image_data] * num
             elif isinstance(self.image_data, list):

@@ -3,6 +3,7 @@ import yaml
 import typer
 import dataclasses
 
+
 def conf_callback(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:
     """
     Callback for typer.Option that loads a config file from the first
@@ -19,6 +20,7 @@ def conf_callback(ctx: typer.Context, param: typer.CallbackParam, value: str) ->
         except Exception as ex:
             raise typer.BadParameter(str(ex))
     return value
+
 
 def dataclass_to_cli(func):
     """
@@ -39,16 +41,21 @@ def dataclass_to_cli(func):
     param = [x for x in list(sig.parameters.values())]
     cls = [x.annotation for x in param if dataclasses.is_dataclass(x.annotation)][0]
     remaining_params = [x for x in param if x.annotation != cls]
+
     def wrapped(**kwargs):
         conf = {}
         # CLI options override the config file.
         # if the k in kwargs are in cls, then we update the conf
-        dataclass_kwargs = {k: v for k, v in kwargs.items() if k in cls.__dataclass_fields__}
+        dataclass_kwargs = {
+            k: v for k, v in kwargs.items() if k in cls.__dataclass_fields__
+        }
         conf.update(dataclass_kwargs)
         # Convert back to the original dataclass type.
         arg = cls(**conf)
         # for remaining_params, we need to update the arg with the remaining params
-        remaining_params = [x for x in kwargs.keys() if x not in cls.__dataclass_fields__]
+        remaining_params = [
+            x for x in kwargs.keys() if x not in cls.__dataclass_fields__
+        ]
         # Actually call the entry point function.
         # in the func call, first process remaining_params, then arg
         remaining_params = [kwargs[x] for x in remaining_params]

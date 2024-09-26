@@ -8,7 +8,8 @@ from torch.distributed import ProcessGroup
 from scratchpad.utils import envs
 from vllm import _custom_ops as ops
 from scratchpad.distributed.device_communicators.custom_all_reduce_utils import (
-    gpu_p2p_access_check)
+    gpu_p2p_access_check,
+)
 from scratchpad.distributed.parallel_state import in_the_same_node_as
 from scratchpad.utils.logger import logger
 from scratchpad.utils.platforms import current_platform
@@ -21,6 +22,7 @@ except Exception:
     # For AMD GPUs and CPUs
     custom_ar = False
 
+
 def _can_p2p(rank: int, world_size: int) -> bool:
     for i in range(world_size):
         if i == rank:
@@ -31,9 +33,10 @@ def _can_p2p(rank: int, world_size: int) -> bool:
 
 
 def is_weak_contiguous(inp: torch.Tensor):
-    return inp.is_contiguous() or (inp.storage().nbytes() -
-                                   inp.storage_offset() * inp.element_size()
-                                   == inp.numel() * inp.element_size())
+    return inp.is_contiguous() or (
+        inp.storage().nbytes() - inp.storage_offset() * inp.element_size()
+        == inp.numel() * inp.element_size()
+    )
 
 
 class CustomAllreduce:
@@ -41,10 +44,12 @@ class CustomAllreduce:
     _SUPPORTED_WORLD_SIZES = [2, 4, 6, 8]
 
     # max_size: max supported allreduce size
-    def __init__(self,
-                 group: ProcessGroup,
-                 device: Union[int, str, torch.device],
-                 max_size=8192 * 1024) -> None:
+    def __init__(
+        self,
+        group: ProcessGroup,
+        device: Union[int, str, torch.device],
+        max_size=8192 * 1024,
+    ) -> None:
         """
         Args:
             group: the process group to work on. If None, it will use the
@@ -65,14 +70,16 @@ class CustomAllreduce:
 
         self.group = group
 
-        assert dist.get_backend(group) != dist.Backend.NCCL, (
-            "CustomAllreduce should be attached to a non-NCCL group.")
+        assert (
+            dist.get_backend(group) != dist.Backend.NCCL
+        ), "CustomAllreduce should be attached to a non-NCCL group."
 
         if not all(in_the_same_node_as(group, source_rank=0)):
             # No need to initialize custom allreduce for multi-node case.
             logger.warning(
                 "Custom allreduce is disabled because this process group"
-                " spans across nodes.")
+                " spans across nodes."
+            )
             return
 
         rank = dist.get_rank(group=self.group)
@@ -86,7 +93,9 @@ class CustomAllreduce:
                 "Custom allreduce is disabled due to an unsupported world"
                 " size: %d. Supported world sizes: %s. To silence this "
                 "warning, specify disable_custom_all_reduce=True explicitly.",
-                world_size, str(CustomAllreduce._SUPPORTED_WORLD_SIZES))
+                world_size,
+                str(CustomAllreduce._SUPPORTED_WORLD_SIZES),
+            )
             return
 
         if isinstance(device, int):
@@ -104,12 +113,9 @@ class CustomAllreduce:
             device_ids = list(range(cuda_device_count_stateless()))
 
         physical_device_id = device_ids[device.index]
-        tensor = torch.tensor([physical_device_id],
-                              dtype=torch.int,
-                              device="cpu")
+        tensor = torch.tensor([physical_device_id], dtype=torch.int, device="cpu")
         gather_list = [
-            torch.tensor([0], dtype=torch.int, device="cpu")
-            for _ in range(world_size)
+            torch.tensor([0], dtype=torch.int, device="cpu") for _ in range(world_size)
         ]
         dist.all_gather(gather_list, tensor, group=self.group)
         physical_device_ids = [t.item() for t in gather_list]
@@ -119,13 +125,15 @@ class CustomAllreduce:
         # this checks hardware and driver support for NVLink
         assert current_platform.is_cuda()
         from vllm.platforms.cuda import CudaPlatform
+
         cuda_platform: CudaPlatform = current_platform
         full_nvlink = cuda_platform.is_full_nvlink(physical_device_ids)
         if world_size > 2 and not full_nvlink:
             logger.warning(
                 "Custom allreduce is disabled because it's not supported on"
                 " more than two PCIe-only GPUs. To silence this warning, "
-                "specify disable_custom_all_reduce=True explicitly.")
+                "specify disable_custom_all_reduce=True explicitly."
+            )
             return
         # test P2P capability, this checks software/cudaruntime support
         # this is expensive to compute at the first time
@@ -134,7 +142,8 @@ class CustomAllreduce:
             logger.warning(
                 "Custom allreduce is disabled because your platform lacks "
                 "GPU P2P capability or P2P test failed. To silence this "
-                "warning, specify disable_custom_all_reduce=True explicitly.")
+                "warning, specify disable_custom_all_reduce=True explicitly."
+            )
             return
 
         self.disabled = False
@@ -142,35 +151,34 @@ class CustomAllreduce:
         # meta data composes of two parts: meta data for synchronization
         # (256 bytes) and a temporary buffer for storing intermediate
         # allreduce results.
-        self.meta = torch.zeros(ops.meta_size() + max_size,
-                                dtype=torch.uint8,
-                                device=self.device)
+        self.meta = torch.zeros(
+            ops.meta_size() + max_size, dtype=torch.uint8, device=self.device
+        )
         # This is a pre-registered IPC buffer. In eager mode, input tensors
         # are first copied into this buffer before allreduce is performed
-        self.buffer = torch.empty(max_size,
-                                  dtype=torch.uint8,
-                                  device=self.device)
+        self.buffer = torch.empty(max_size, dtype=torch.uint8, device=self.device)
         # This is a buffer for storing the tuples of pointers pointing to
         # IPC buffers from all ranks. Each registered tuple has size of
         # 8*world_size bytes where world_size is at most 8. Allocating 8MB
         # is enough for 131072 such tuples. The largest model I've seen only
         # needs less than 10000 of registered tuples.
-        self.rank_data = torch.empty(8 * 1024 * 1024,
-                                     dtype=torch.uint8,
-                                     device=self.device)
+        self.rank_data = torch.empty(
+            8 * 1024 * 1024, dtype=torch.uint8, device=self.device
+        )
         self.max_size = max_size
         self.rank = rank
         self.world_size = world_size
         handles, offsets = self._get_ipc_meta(self.meta)
         self.full_nvlink = full_nvlink
-        self._ptr = ops.init_custom_ar(self.meta, self.rank_data, handles,
-                                       offsets, rank, self.full_nvlink)
+        self._ptr = ops.init_custom_ar(
+            self.meta, self.rank_data, handles, offsets, rank, self.full_nvlink
+        )
         self.register_buffer(self.buffer)
 
     @contextmanager
     def capture(self):
         """
-        The main responsibility of this context manager is the 
+        The main responsibility of this context manager is the
         `register_graph_buffers` call at the end of the context.
         It records all the buffer addresses used in the CUDA graph.
         """
@@ -193,17 +201,15 @@ class CustomAllreduce:
     def _gather_ipc_meta(self, shard_data):
         # Note: don't use `[[None]] * self.world_size` here
         # because it will create a list of the same reference
-        all_data: List[Optional[Any]] = [[None]
-                                         for i in range(self.world_size)]
+        all_data: List[Optional[Any]] = [[None] for i in range(self.world_size)]
         all_data[self.rank][0] = shard_data
 
         ranks = dist.get_process_group_ranks(group=self.group)
         ranks.sort()
         for i, rank in enumerate(ranks):
-            dist.broadcast_object_list(all_data[i],
-                                       src=rank,
-                                       group=self.group,
-                                       device="cpu")
+            dist.broadcast_object_list(
+                all_data[i], src=rank, group=self.group, device="cpu"
+            )
 
         # we cannot directly use `dist.all_gather_object` here
         # because it is incompatible with `gloo` backend under inference mode.
