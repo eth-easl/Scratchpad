@@ -20,6 +20,15 @@ class ServerArgs(metaclass=Singleton):
     tokenizer_mode: str = "auto"
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
+    stream_interval: int = 1
+    # memory and scheduling
+    chunked_prefill_size: int = 8192
+    max_prefill_tokens: int = 16384
+    mem_fraction_static: Optional[float] = None
+    max_running_requests: Optional[int] = None
+    max_total_tokens: Optional[int] = None
+    kv_cache_dtype: str = "auto"
+    schedule_conservativeness: float = 1.0
     # model
     load_format: str = "auto"
     quantization: Optional[str] = None
@@ -43,6 +52,8 @@ class ServerArgs(metaclass=Singleton):
     num_continue_decode_steps: int = 10
     retract_decode_steps: int = 20
     mem_fraction_static: float = 0.9
+    # constrained
+    constrained_json_whitespace_pattern: Optional[str] = None
     # tokenization
     skip_special_tokens_in_output = True
     spaces_between_special_tokens_in_out = True
@@ -50,7 +61,7 @@ class ServerArgs(metaclass=Singleton):
     enable_parallel_encoding = True
 
     # toppings config
-    lora_paths: str = ""
+    lora_paths: Optional[str] = None
     max_loras_per_batch: int = 1
 
     # debugging
@@ -60,7 +71,7 @@ class ServerArgs(metaclass=Singleton):
     disable_flashinfer_sampling: bool = False
     disable_radix_cache: bool = False
     disable_regex_jump_forward: bool = False
-    disable_cuda_graph: bool = False
+    disable_cuda_graph: bool = True
     disable_cuda_graph_padding: bool = False
     disable_disk_cache: bool = False
     disable_custom_all_reduce: bool = False
@@ -70,7 +81,7 @@ class ServerArgs(metaclass=Singleton):
     max_torch_compile_bs: int = 32
     torchao_config: str = ""
     enable_p2p_check: bool = False
-
+    flashinfer_workspace_size: int = 384 * 1024 * 1024
     triton_attention_reduce_in_fp32: bool = False
 
     def translate_auto(self):
@@ -80,6 +91,12 @@ class ServerArgs(metaclass=Singleton):
             self.tokenizer_path = self.model_path
         if type(self.nccl_ports) == str:
             self.nccl_ports = self.nccl_ports.split(",")
+        if self.attention_backend is None:
+            self.attention_backend = "triton"
+        if self.sampling_backend is None:
+            self.sampling_backend = "pytorch"
+        if self.random_seed is None:
+            self.random_seed = 3407  # default seed
 
     def update(self, args):
         for k, v in args.items():

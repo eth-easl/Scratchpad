@@ -165,7 +165,7 @@ class ModelRunner:
             )
             self.server_args.dtype = "float16"
             if torch.cuda.get_device_capability()[1] < 5:
-                raise RuntimeError("SGLang only supports sm75 and above.")
+                raise RuntimeError("scratchpad only supports sm75 and above.")
 
         # Prepare the vllm model config
         self.device_config = DeviceConfig()
@@ -191,10 +191,6 @@ class ModelRunner:
             model_config=self.vllm_model_config,
             load_config=self.load_config,
             device_config=self.device_config,
-            parallel_config=None,
-            scheduler_config=None,
-            lora_config=None,
-            cache_config=None,
         )
         self.sliding_window_size = (
             self.model.get_attention_sliding_window_size()
@@ -454,7 +450,7 @@ class ModelRunner:
             return self.cuda_graph_runner.replay(batch)
 
         input_metadata = InputMetadata.from_schedule_batch(self, batch)
-
+        
         return self.model.forward(
             batch.input_ids, input_metadata.positions, input_metadata
         )
@@ -490,7 +486,6 @@ class ModelRunner:
 
     def forward(self, batch: ScheduleBatch) -> Tuple[LogitsProcessorOutput]:
         assert batch.forward_mode is not None
-
         if self.is_multimodal_model and batch.forward_mode.is_extend():
             return self.forward_extend_multi_modal(batch)
         elif batch.forward_mode.is_decode():
@@ -543,7 +538,7 @@ class ModelRunner:
 @lru_cache()
 def import_model_classes():
     model_arch_name_to_cls = {}
-    package_name = "sglang.srt.models"
+    package_name = "scratchpad.nn.models"
     package = importlib.import_module(package_name)
     for _, name, ispkg in pkgutil.iter_modules(package.__path__, package_name + "."):
         if not ispkg:

@@ -1,6 +1,6 @@
 import enum
-import json
 from dataclasses import dataclass, field, fields
+import contextlib
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -12,23 +12,47 @@ from typing import (
 )
 from pathlib import Path
 import torch
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, AutoConfig
 from scratchpad.utils import (
     logger,
     get_hf_text_config,
-    get_config,
     print_warning_once,
     get_hf_image_processor_config,
 )
 from scratchpad.config.modality_config import MultiModalConfig
 from scratchpad.nn.models import ModelRegistry
 from .utils import _get_and_verify_dtype, _get_and_verify_max_len, get_served_model_name
+import huggingface_hub
+from huggingface_hub import file_exists, try_to_load_from_cache
+from transformers.utils import CONFIG_NAME as HF_CONFIG_NAME
 
 
 class ConfigFormat(str, enum.Enum):
     AUTO = "auto"
     HF = "hf"
     MISTRAL = "mistral"
+
+
+def file_or_path_exists(model: Union[str, Path], config_name, revision, token) -> bool:
+    if Path(model).exists():
+        return (Path(model) / config_name).is_file()
+
+    # Offline mode support: Check if config file is cached already
+    cached_filepath = try_to_load_from_cache(
+        repo_id=model, filename=config_name, revision=revision
+    )
+    if isinstance(cached_filepath, str):
+        # The config file exists in cache- we can continue trying to load
+        return True
+
+    # NB: file_exists will only check for the existence of the config file on
+    # hf_hub. This will fail in offline mode.
+    try:
+        return file_exists(model, config_name, revision=revision, token=token)
+    except huggingface_hub.errors.OfflineModeIsEnabled:
+        # Don't raise in offline mode, all we know is that we don't have this
+        # file cached.
+        return False
 
 
 def get_vllm_config(
@@ -62,35 +86,29 @@ def get_vllm_config(
 
         # Use custom model class if it's in our registry
         model_type = config_dict.get("model_type")
-        if model_type in _CONFIG_REGISTRY:
-            config_class = _CONFIG_REGISTRY[model_type]
-            config = config_class.from_pretrained(
-                model, revision=revision, code_revision=code_revision
+        try:
+            config = AutoConfig.from_pretrained(
+                model,
+                trust_remote_code=trust_remote_code,
+                revision=revision,
+                code_revision=code_revision,
+                **kwargs,
             )
-        else:
-            try:
-                config = AutoConfig.from_pretrained(
-                    model,
-                    trust_remote_code=trust_remote_code,
-                    revision=revision,
-                    code_revision=code_revision,
-                    **kwargs,
+        except ValueError as e:
+            if (
+                not trust_remote_code
+                and "requires you to execute the configuration file" in str(e)
+            ):
+                err_msg = (
+                    "Failed to load the model config. If the model "
+                    "is a custom model not yet available in the "
+                    "HuggingFace transformers library, consider setting "
+                    "`trust_remote_code=True` in LLM or using the "
+                    "`--trust-remote-code` flag in the CLI."
                 )
-            except ValueError as e:
-                if (
-                    not trust_remote_code
-                    and "requires you to execute the configuration file" in str(e)
-                ):
-                    err_msg = (
-                        "Failed to load the model config. If the model "
-                        "is a custom model not yet available in the "
-                        "HuggingFace transformers library, consider setting "
-                        "`trust_remote_code=True` in LLM or using the "
-                        "`--trust-remote-code` flag in the CLI."
-                    )
-                    raise RuntimeError(err_msg) from e
-                else:
-                    raise e
+                raise RuntimeError(err_msg) from e
+            else:
+                raise e
 
     else:
         raise ValueError(f"Unsupported config format: {config_format}")
@@ -242,7 +260,7 @@ class ModelConfig:
         self.disable_sliding_window = disable_sliding_window
         self.skip_tokenizer_init = skip_tokenizer_init
 
-        self.hf_config = get_config(
+        self.hf_config = get_vllm_config(
             self.model,
             trust_remote_code,
             revision,
@@ -290,7 +308,6 @@ class ModelConfig:
 
         self.override_neuron_config = None
         self._verify_embedding_mode()
-        self._verify_quantization()
         self._verify_cuda_graph()
         self._verify_bnb_config()
 

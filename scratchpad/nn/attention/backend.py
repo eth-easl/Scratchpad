@@ -316,10 +316,10 @@ class FlashInferAttnBackend(AttentionBackend):
 class TritonAttnBackend(AttentionBackend):
     def __init__(self, model_runner: "ModelRunner"):
         # Lazy import to avoid the initialization of cuda context
-        from sglang.srt.layers.triton_attention.decode_attention import (
+        from scratchpad.nn.attention.triton_attn.decode_attention import (
             decode_attention_fwd,
         )
-        from sglang.srt.layers.triton_attention.extend_attention import (
+        from scratchpad.nn.attention.triton_attn.extend_attention import (
             extend_attention_fwd,
         )
 

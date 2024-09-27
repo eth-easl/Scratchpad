@@ -23,7 +23,7 @@ from scratchpad.nn.layers.logits_processor import LogitsProcessor, LogitsProcess
 from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
-from scratchpad.scheduler.schedule_batch import global_server_args_dict
+from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import InputMetadata
 
 
@@ -281,7 +281,7 @@ class LlamaForCausalLM(nn.Module):
         super().__init__()
         self.config = config
         self.quant_config = quant_config
-        self.torchao_config = global_server_args_dict["torchao_config"]
+        self.torchao_config = global_args.torchao_config
         self.model = LlamaModel(config, quant_config=quant_config)
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
         self.logits_processor = LogitsProcessor(config)
