@@ -2,6 +2,7 @@ import inspect
 import yaml
 import typer
 import dataclasses
+from functools import lru_cache
 
 
 def conf_callback(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:

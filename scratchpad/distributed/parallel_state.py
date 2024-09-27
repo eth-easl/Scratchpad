@@ -196,13 +196,11 @@ class GroupCoordinator:
 
         self.use_pynccl = use_pynccl
         self.use_custom_allreduce = use_custom_allreduce
-        self.use_tpu_communicator = use_tpu_communicator
 
         # lazy import to avoid documentation build error
-        from vllm.distributed.device_communicators.custom_all_reduce import (
-            CustomAllreduce,
+        from scratchpad.distributed.device_communicators.pynccl import (
+            PyNcclCommunicator,
         )
-        from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
 
         self.pynccl_comm: Optional[PyNcclCommunicator] = None
         if use_pynccl and self.world_size > 1:
@@ -211,23 +209,9 @@ class GroupCoordinator:
                 device=self.device,
             )
 
-        self.ca_comm: Optional[CustomAllreduce] = None
-        if use_custom_allreduce and self.world_size > 1:
-            # Initialize a custom fast all-reduce implementation.
-            self.ca_comm = CustomAllreduce(
-                group=self.cpu_group,
-                device=self.device,
-            )
-
-        from vllm.distributed.device_communicators.tpu_communicator import (
-            TpuCommunicator,
+        from scratchpad.distributed.device_communicators.shm_broadcast import (
+            MessageQueue,
         )
-
-        self.tpu_communicator: Optional[TpuCommunicator] = None
-        if use_tpu_communicator and self.world_size > 1:
-            self.tpu_communicator = TpuCommunicator(group=self.cpu_group)
-
-        from vllm.distributed.device_communicators.shm_broadcast import MessageQueue
 
         self.mq_broadcaster: Optional[MessageQueue] = None
         if use_message_queue_broadcaster and self.world_size > 1:
@@ -339,10 +323,6 @@ class GroupCoordinator:
         if not supports_custom_op():
             return self._all_reduce(input_)
 
-        if self.tpu_communicator is not None and not self.tpu_communicator.disabled:
-            # TPU handles Dynamo with its own logic.
-            return self._all_reduce(input_)
-
         if self.ca_comm is not None and self.ca_comm.should_custom_ar(input_):
             return torch.ops.vllm.outplace_all_reduce(
                 input_, group_name=self.unique_name
@@ -361,11 +341,6 @@ class GroupCoordinator:
         """
         ca_comm = self.ca_comm
 
-        # For TPUs, use TPU communicator.
-        tpu_comm = self.tpu_communicator
-        if tpu_comm is not None and not tpu_comm.disabled:
-            return tpu_comm.all_reduce(input_)
-
         if ca_comm is not None:
             out = ca_comm.custom_all_reduce(input_)
             if out is not None:
@@ -373,10 +348,6 @@ class GroupCoordinator:
         pynccl_comm = self.pynccl_comm
         if pynccl_comm is not None and not pynccl_comm.disabled:
             pynccl_comm.all_reduce(input_)
-        elif input_.is_cpu:
-            import intel_extension_for_pytorch as ipex
-
-            ipex.distributed.all_reduce(input_, group=self.device_group)
         else:
             torch.distributed.all_reduce(input_, group=self.device_group)
         return input_
@@ -389,11 +360,6 @@ class GroupCoordinator:
         assert (
             -input_.dim() <= dim < input_.dim()
         ), f"Invalid dim ({dim}) for input tensor with shape {input_.size()}"
-
-        # For TPUs, use TPU communicator.
-        tpu_comm = self.tpu_communicator
-        if tpu_comm is not None and not tpu_comm.disabled:
-            return tpu_comm.all_gather(input_, dim)
 
         if dim < 0:
             # Convert negative dim to positive.

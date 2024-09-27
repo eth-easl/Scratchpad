@@ -7,4 +7,7 @@ uvicorn
 zmq
 huggingface_hub
 transformers
-pynvml
+outlines
+uvloop
+nvidia-ml-py
+psutil

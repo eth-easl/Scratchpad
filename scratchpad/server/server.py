@@ -1,12 +1,11 @@
 import asyncio
-import dataclasses
 import json
-import logging
 import multiprocessing as mp
 import os
 import threading
 import aiohttp
 import requests
+import uvloop
 import uvicorn
 from fastapi import FastAPI, Request
 from http import HTTPStatus
@@ -14,12 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.utils import logger
 from scratchpad.utils.hf import download_from_hf
+from scratchpad.managers import TokenizerManager
+from .args import ServerArgs
 from .protocol import GenerateReqInput
+from scratchpad.managers.controller_single import (
+    start_controller_process as start_controller_process_single,
+)
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
 app = FastAPI()
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -63,12 +67,22 @@ async def generate_request(obj: GenerateReqInput, request: Request):
             )
 
 
-def launch_server(model_name, args):
-    download_from_hf(model_name)
-    try:
-        uvicorn.run(
-            app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto"
-        )
-    except Exception as e:
-        logger.error(f"Error in server: {e}")
-        os._exit(1)
+app.post("/generate")(generate_request)
+app.put("/generate")(generate_request)
+
+
+def launch_server(model_name, args: "ServerArgs"):
+    global tokenizer_manager
+    args.model_path = model_name
+    args.translate_auto()
+    pipe_controller_reader, pipe_controller_writer = mp.Pipe(duplex=False)
+
+    start_controller_process = start_controller_process_single
+    proc_controller = mp.Process(
+        target=start_controller_process,
+        args=(args, pipe_controller_writer),
+    )
+    proc_controller.start()
+    tokenizer_manager = TokenizerManager(args)
+
+    uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")

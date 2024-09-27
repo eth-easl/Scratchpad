@@ -1,8 +1,14 @@
-import contextlib
 import os
+import fnmatch
+import filelock
+import tempfile
 import warnings
-from typing import Dict, Optional, Type, Union
-
+import contextlib
+import hashlib
+from tqdm import tqdm
+import huggingface_hub
+from pathlib import Path
+from typing import Dict, Optional, Type, Union, Any, List
 from huggingface_hub import snapshot_download
 from transformers import (
     AutoConfig,
@@ -12,12 +18,32 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerFast,
 )
+from transformers.models.auto.image_processing_auto import get_image_processor_config
+
+from scratchpad.utils import logger
 
 _CONFIG_REGISTRY: Dict[str, Type[PretrainedConfig]] = {}
 
 for name, cls in _CONFIG_REGISTRY.items():
     with contextlib.suppress(ValueError):
         AutoConfig.register(name, cls)
+
+temp_dir = tempfile.gettempdir()
+
+
+def enable_hf_transfer():
+    """automatically activates hf_transfer"""
+    if "HF_HUB_ENABLE_HF_TRANSFER" not in os.environ:
+        try:
+            # enable hf hub transfer if available
+            import hf_transfer  # type: ignore # noqa
+
+            huggingface_hub.constants.HF_HUB_ENABLE_HF_TRANSFER = True
+        except ImportError:
+            pass
+
+
+enable_hf_transfer()
 
 
 def download_from_hf(model_path: str):
@@ -156,3 +182,131 @@ def get_tokenizer(
             "slowdown. Consider using a fast tokenizer instead."
         )
     return tokenizer
+
+
+def get_hf_image_processor_config(
+    model: Union[str, Path],
+    revision: Optional[str] = None,
+    **kwargs,
+) -> Dict[str, Any]:
+    # ModelScope does not provide an interface for image_processor
+    # Separate model folder from file path for GGUF models
+    return get_image_processor_config(model, revision=revision, **kwargs)
+
+
+def get_hf_text_config(config: PretrainedConfig):
+    """Get the "sub" config relevant to llm for multi modal models.
+    No op for pure text models.
+    """
+    if hasattr(config, "text_config"):
+        # The code operates under the assumption that text_config should have
+        # `num_attention_heads` (among others). Assert here to fail early
+        # if transformers config doesn't align with this assumption.
+        assert hasattr(config.text_config, "num_attention_heads")
+        return config.text_config
+    else:
+        return config
+
+
+class DisabledTqdm(tqdm):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs, disable=True)
+
+
+def get_lock(model_name_or_path: str, cache_dir: Optional[str] = None):
+    lock_dir = cache_dir or temp_dir
+    os.makedirs(os.path.dirname(lock_dir), exist_ok=True)
+    model_name = model_name_or_path.replace("/", "-")
+    hash_name = hashlib.sha256(model_name.encode()).hexdigest()
+    # add hash to avoid conflict with old users' lock files
+    lock_file_name = hash_name + model_name + ".lock"
+    # mode 0o666 is required for the filelock to be shared across users
+    lock = filelock.FileLock(os.path.join(lock_dir, lock_file_name), mode=0o666)
+    return lock
+
+
+def download_weights_from_hf(
+    model_name_or_path: str,
+    cache_dir: Optional[str],
+    allow_patterns: List[str],
+    revision: Optional[str] = None,
+    ignore_patterns: Optional[Union[str, List[str]]] = None,
+) -> str:
+    """Download model weights from Hugging Face Hub.
+
+    Args:
+        model_name_or_path (str): The model name or path.
+        cache_dir (Optional[str]): The cache directory to store the model
+            weights. If None, will use HF defaults.
+        allow_patterns (List[str]): The allowed patterns for the
+            weight files. Files matched by any of the patterns will be
+            downloaded.
+        revision (Optional[str]): The revision of the model.
+        ignore_patterns (Optional[Union[str, List[str]]]): The patterns to
+            filter out the weight files. Files matched by any of the patterns
+            will be ignored.
+
+    Returns:
+        str: The path to the downloaded model weights.
+    """
+    if not huggingface_hub.constants.HF_HUB_OFFLINE:
+        # Before we download we look at that is available:
+        fs = huggingface_hub.HfFileSystem()
+        file_list = fs.ls(model_name_or_path, detail=False, revision=revision)
+
+        # depending on what is available we download different things
+        for pattern in allow_patterns:
+            matching = fnmatch.filter(file_list, pattern)
+            if len(matching) > 0:
+                allow_patterns = [pattern]
+                break
+
+    logger.info("Using model weights format %s", allow_patterns)
+    # Use file lock to prevent multiple processes from
+    # downloading the same model weights at the same time.
+    with get_lock(model_name_or_path, cache_dir):
+        hf_folder = snapshot_download(
+            model_name_or_path,
+            allow_patterns=allow_patterns,
+            ignore_patterns=ignore_patterns,
+            cache_dir=cache_dir,
+            tqdm_class=DisabledTqdm,
+            revision=revision,
+            local_files_only=huggingface_hub.constants.HF_HUB_OFFLINE,
+        )
+    return hf_folder
+
+
+def download_safetensors_index_file_from_hf(
+    model_name_or_path: str,
+    index_file: str,
+    cache_dir: Optional[str],
+    revision: Optional[str] = None,
+) -> None:
+    """Download hf safetensors index file from Hugging Face Hub.
+
+    Args:
+        model_name_or_path (str): The model name or path.
+        cache_dir (Optional[str]): The cache directory to store the model
+            weights. If None, will use HF defaults.
+        revision (Optional[str]): The revision of the model.
+    """
+    # Use file lock to prevent multiple processes from
+    # downloading the same model weights at the same time.
+    with get_lock(model_name_or_path, cache_dir):
+        try:
+            # Download the safetensors index file.
+            huggingface_hub.hf_hub_download(
+                repo_id=model_name_or_path,
+                filename=index_file,
+                cache_dir=cache_dir,
+                revision=revision,
+                local_files_only=huggingface_hub.constants.HF_HUB_OFFLINE,
+            )
+        # If file not found on remote or locally, we should not fail since
+        # only some models will have index_file.
+        except huggingface_hub.utils.EntryNotFoundError:
+            logger.info("No %s found in remote.", index_file)
+        except huggingface_hub.utils.LocalEntryNotFoundError:
+            logger.info("No %s found in local cache.", index_file)
