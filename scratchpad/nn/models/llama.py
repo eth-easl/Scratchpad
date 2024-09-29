@@ -295,7 +295,6 @@ class LlamaForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
     ) -> LogitsProcessorOutput:
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)
-        print(f"input metadata: {input_metadata}")
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head.weight, input_metadata
         )

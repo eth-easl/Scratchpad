@@ -46,9 +46,6 @@ class LogitsMetadata:
     @classmethod
     def from_input_metadata(cls, input_metadata: InputMetadata):
         return_top_logprob = any(x > 0 for x in input_metadata.top_logprobs_nums)
-        print(
-            f"input_metadata: {input_metadata}, forward_mode: {input_metadata.forward_mode}, is_extend: {input_metadata.forward_mode.is_extend()}"
-        )
         if input_metadata.forward_mode.is_extend():
             extend_logprob_pruned_lens_cpu = [
                 extend_len - start_len
