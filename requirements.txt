@@ -11,3 +11,4 @@ outlines
 uvloop
 nvidia-ml-py
 psutil
+python-multipart

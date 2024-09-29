@@ -19,6 +19,4 @@ packages = ["scratchpad"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
-
-[project.optional-dependencies]
-extra = {file = "requirements-extra.txt"}
+optional-dependencies = {extra = { file = ["requirements-extra.txt"] }}

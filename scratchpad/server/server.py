@@ -1,24 +1,33 @@
 import asyncio
 import json
 import multiprocessing as mp
-import os
 import threading
-import aiohttp
-import requests
 import uvloop
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, File, Form, UploadFile
 from http import HTTPStatus
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from scratchpad.utils import logger
-from scratchpad.utils.hf import download_from_hf
 from scratchpad.managers import TokenizerManager, start_detokenizer_process
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 from scratchpad.managers.controller_single import (
     start_controller_process as start_controller_process_single,
 )
+from scratchpad.server.openai_api.handler import (
+    load_chat_template_for_openai_api,
+    v1_batches,
+    v1_cancel_batch,
+    v1_chat_completions,
+    v1_completions,
+    v1_delete_file,
+    v1_embeddings,
+    v1_files_create,
+    v1_retrieve_batch,
+    v1_retrieve_file,
+    v1_retrieve_file_content,
+)
+from scratchpad.server.openai_api.protocol import ModelCard, ModelList
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
@@ -69,6 +78,73 @@ async def generate_request(obj: GenerateReqInput, request: Request):
 
 app.post("/generate")(generate_request)
 app.put("/generate")(generate_request)
+
+
+@app.post("/v1/completions")
+async def openai_v1_completions(raw_request: Request):
+    return await v1_completions(tokenizer_manager, raw_request)
+
+
+@app.post("/v1/chat/completions")
+async def openai_v1_chat_completions(raw_request: Request):
+    return await v1_chat_completions(tokenizer_manager, raw_request)
+
+
+@app.post("/v1/embeddings")
+async def openai_v1_embeddings(raw_request: Request):
+    response = await v1_embeddings(tokenizer_manager, raw_request)
+    return response
+
+
+@app.get("/v1/models")
+def available_models():
+    """Show available models."""
+    served_model_names = [tokenizer_manager.served_model_name]
+    model_cards = []
+    for served_model_name in served_model_names:
+        model_cards.append(ModelCard(id=served_model_name, root=served_model_name))
+    return ModelList(data=model_cards)
+
+
+@app.post("/v1/files")
+async def openai_v1_files(file: UploadFile = File(...), purpose: str = Form("batch")):
+    return await v1_files_create(
+        file, purpose, tokenizer_manager.server_args.file_storage_pth
+    )
+
+
+@app.delete("/v1/files/{file_id}")
+async def delete_file(file_id: str):
+    # https://platform.openai.com/docs/api-reference/files/delete
+    return await v1_delete_file(file_id)
+
+
+@app.post("/v1/batches")
+async def openai_v1_batches(raw_request: Request):
+    return await v1_batches(tokenizer_manager, raw_request)
+
+
+@app.post("/v1/batches/{batch_id}/cancel")
+async def cancel_batches(batch_id: str):
+    # https://platform.openai.com/docs/api-reference/batch/cancel
+    return await v1_cancel_batch(tokenizer_manager, batch_id)
+
+
+@app.get("/v1/batches/{batch_id}")
+async def retrieve_batch(batch_id: str):
+    return await v1_retrieve_batch(batch_id)
+
+
+@app.get("/v1/files/{file_id}")
+async def retrieve_file(file_id: str):
+    # https://platform.openai.com/docs/api-reference/files/retrieve
+    return await v1_retrieve_file(file_id)
+
+
+@app.get("/v1/files/{file_id}/content")
+async def retrieve_file_content(file_id: str):
+    # https://platform.openai.com/docs/api-reference/files/retrieve-contents
+    return await v1_retrieve_file_content(file_id)
 
 
 def launch_server(model_name, args: "ServerArgs"):
