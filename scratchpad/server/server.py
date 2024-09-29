@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.utils import logger
 from scratchpad.utils.hf import download_from_hf
-from scratchpad.managers import TokenizerManager
+from scratchpad.managers import TokenizerManager, start_detokenizer_process
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 from scratchpad.managers.controller_single import (
@@ -84,5 +84,27 @@ def launch_server(model_name, args: "ServerArgs"):
     )
     proc_controller.start()
     tokenizer_manager = TokenizerManager(args)
+    pipe_detoken_reader, pipe_detoken_writer = mp.Pipe(duplex=False)
+    proc_detoken = mp.Process(
+        target=start_detokenizer_process,
+        args=(
+            args,
+            pipe_detoken_writer,
+        ),
+    )
+    proc_detoken.start()
+
+    controller_init_state = pipe_controller_reader.recv()
+    detoken_init_state = pipe_detoken_reader.recv()
+
+    if controller_init_state != "init ok" or detoken_init_state != "init ok":
+        proc_controller.kill()
+        proc_detoken.kill()
+        raise RuntimeError(
+            "Initialization failed. "
+            f"controller_init_state: {controller_init_state}, "
+            f"detoken_init_state: {detoken_init_state}"
+        )
+    assert proc_controller.is_alive() and proc_detoken.is_alive()
 
     uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")

@@ -886,12 +886,7 @@ def init_distributed_environment(
     backend: str = "nccl",
 ):
     logger.debug(
-        "world_size=%d rank=%d local_rank=%d " "distributed_init_method=%s backend=%s",
-        world_size,
-        rank,
-        local_rank,
-        distributed_init_method,
-        backend,
+        f"world_size={world_size} rank={rank} local_rank={local_rank} distributed_init_method={distributed_init_method} backend={backend}"
     )
     if not torch.distributed.is_initialized():
         assert distributed_init_method is not None, (

@@ -193,6 +193,9 @@ class CudaGraphRunner:
                 top_logprobs_nums=[0] * bs,
                 positions=(seq_lens - 1 + position_ids_offsets).to(torch.int64),
             )
+            print(
+                f"runner input_metadata: {input_metadata}, is_extend: {input_metadata.forward_mode.is_extend()}"
+            )
             return forward(input_ids, input_metadata.positions, input_metadata)
 
         for _ in range(2):

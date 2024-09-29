@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 @dataclass
 class ForwardMode(IntEnum):
     # Extend a sequence. The KV cache of the first part of the sequence is already computed (e.g., system prompt).
+
     EXTEND = auto()
     # Decode one token.
     DECODE = auto()
@@ -21,13 +22,16 @@ class ForwardMode(IntEnum):
     MIXED = auto()
 
     def is_extend(self):
-        return self == ForwardMode.EXTEND or self == ForwardMode.MIXED
+        # print(f"self {self}, {ForwardMode.EXTEND}")
+        # print(f"self == ForwardMode.EXTEND {self == 1}")
+        # (note: xiaozhe) fix later: change 1 to ForwardMode.EXTEND, etc.
+        return self == 1 or self == 3
 
     def is_decode(self):
-        return self == ForwardMode.DECODE
+        return self == 2
 
     def is_mixed(self):
-        return self == ForwardMode.MIXED
+        return self == 3
 
 
 @dataclass

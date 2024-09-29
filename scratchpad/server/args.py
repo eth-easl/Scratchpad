@@ -83,6 +83,7 @@ class ServerArgs(metaclass=Singleton):
     enable_p2p_check: bool = False
     flashinfer_workspace_size: int = 384 * 1024 * 1024
     triton_attention_reduce_in_fp32: bool = False
+    log_requests: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":
@@ -92,11 +93,11 @@ class ServerArgs(metaclass=Singleton):
         if type(self.nccl_ports) == str:
             self.nccl_ports = self.nccl_ports.split(",")
         if self.attention_backend is None:
-            self.attention_backend = "triton"
+            self.attention_backend = "flashinfer"
         if self.sampling_backend is None:
-            self.sampling_backend = "pytorch"
+            self.sampling_backend = "flashinfer"
         if self.random_seed is None:
-            self.random_seed = 3407  # default seed
+            self.random_seed = 0  # default seed
 
     def update(self, args):
         for k, v in args.items():

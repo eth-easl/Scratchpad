@@ -5,4 +5,4 @@ payload = {
 }
 
 res = requests.post("http://localhost:3000/generate", json=payload)
-print(res)
+print(res.json())

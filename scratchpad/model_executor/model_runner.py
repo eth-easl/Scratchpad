@@ -450,7 +450,7 @@ class ModelRunner:
             return self.cuda_graph_runner.replay(batch)
 
         input_metadata = InputMetadata.from_schedule_batch(self, batch)
-        
+
         return self.model.forward(
             batch.input_ids, input_metadata.positions, input_metadata
         )
