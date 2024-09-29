@@ -40,14 +40,8 @@ from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.radix_cache import RadixCache
 from scratchpad.model_executor.model_runner import ModelRunner
 from scratchpad.server.args import ServerArgs
-from scratchpad.utils import (
-    is_multimodal_model,
-    set_random_seed,
-)
+from scratchpad.utils import is_multimodal_model, set_random_seed, logger
 from scratchpad.utils import get_exception_traceback
-
-logger = logging.getLogger(__name__)
-
 
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SGLANG_IS_IN_CI", "false") == "true"

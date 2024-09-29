@@ -24,4 +24,4 @@ def custom_format(record):
     return "{name} - {level} - {extra[abspath]} - {message}\n{exception}"
 
 
-logger.add(sys.stderr, format=custom_format)
+# logger.add(sys.stderr, format=custom_format)
