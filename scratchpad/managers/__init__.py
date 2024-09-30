@@ -1,4 +1,4 @@
 from .tokenizer import TokenizerManager
-from .detokenizer import DetokenizerManager, start_detokenizer_process
+from .detokenizer import DetokenizerManager, run_detokenizer_process
 
-__all__ = ["TokenizerManager", "DetokenizerManager", "start_detokenizer_process"]
+__all__ = ["TokenizerManager", "DetokenizerManager", "run_detokenizer_process"]

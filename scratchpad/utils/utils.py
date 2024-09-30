@@ -1,15 +1,19 @@
 import os
 import torch
 from functools import lru_cache
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import socket
 import ipaddress
 import sys
 import traceback
-from . import envs, logger
 import random
 import numpy as np
 import psutil
+import torch.distributed as dist
+import pickle
+from . import envs, logger
+
+show_time_cost = False
 
 
 def supports_custom_op() -> bool:
@@ -138,7 +142,7 @@ def find_nccl_library() -> str:
         so_file = "librccl.so.1"
     else:
         raise ValueError("NCCL only supports CUDA and ROCm backends.")
-    logger.info("Found nccl from library %s", so_file)
+    logger.info(f"Found nccl from library {so_file}")
     return so_file
 
 
@@ -339,3 +343,42 @@ def monkey_patch_vllm_all_gather(reverse: bool = False):
         setattr(GroupCoordinator, "all_gather", vllm_all_gather_backup)
     else:
         setattr(GroupCoordinator, "all_gather", all_gather)
+
+
+def broadcast_pyobj(
+    data: List[Any], rank: int, dist_group: torch.distributed.ProcessGroup
+):
+    """Broadcast inputs from rank=0 to all other ranks with torch.dist backend."""
+
+    if rank == 0:
+        if len(data) == 0:
+            tensor_size = torch.tensor([0], dtype=torch.long)
+            dist.broadcast(tensor_size, src=0, group=dist_group)
+        else:
+            serialized_data = pickle.dumps(data)
+            size = len(serialized_data)
+            tensor_data = torch.ByteTensor(list(serialized_data))
+            tensor_size = torch.tensor([size], dtype=torch.long)
+
+            dist.broadcast(tensor_size, src=0, group=dist_group)
+            dist.broadcast(tensor_data, src=0, group=dist_group)
+        return data
+    else:
+        tensor_size = torch.tensor([0], dtype=torch.long)
+        dist.broadcast(tensor_size, src=0, group=dist_group)
+        size = tensor_size.item()
+
+        if size == 0:
+            return []
+
+        tensor_data = torch.empty(size, dtype=torch.uint8)
+        dist.broadcast(tensor_data, src=0, group=dist_group)
+
+        serialized_data = bytes(tensor_data.tolist())
+        data = pickle.loads(serialized_data)
+        return data
+
+
+def enable_show_time_cost():
+    global show_time_cost
+    show_time_cost = True

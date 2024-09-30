@@ -64,7 +64,7 @@ class PyNcclCommunicator:
         self.available = True
         self.disabled = False
 
-        logger.info("vLLM is using nccl==%s", self.nccl.ncclGetVersion())
+        logger.info(f"Scratchpad is using nccl=={self.nccl.ncclGetVersion()}")
 
         if self.rank == 0:
             # get the unique id from NCCL

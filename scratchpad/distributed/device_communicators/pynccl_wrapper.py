@@ -192,15 +192,14 @@ class NCCLLibrary:
             self.lib = NCCLLibrary.path_to_library_cache[so_file]
         except Exception as e:
             logger.error(
-                "Failed to load NCCL library from %s ."
+                f"Failed to load NCCL library from {so_file}. "
                 "It is expected if you are not running on NVIDIA/AMD GPUs."
                 "Otherwise, the nccl library might not exist, be corrupted "
-                "or it does not support the current platform %s."
+                f"or it does not support the current platform {platform.platform()}."
                 "If you already have the library, please set the "
-                "environment variable VLLM_NCCL_SO_PATH"
+                "environment variable SP_NCCL_SO_PATH"
                 " to point to the correct nccl library path.",
                 so_file,
-                platform.platform(),
             )
             raise e
 

@@ -4,7 +4,7 @@ from scratchpad.utils import Singleton
 
 
 @dataclass
-class ServerArgs(metaclass=Singleton):
+class ServerArgs:
     host: str = "0.0.0.0"
     port: int = 3000
     debug: bool = False
@@ -24,7 +24,6 @@ class ServerArgs(metaclass=Singleton):
     # memory and scheduling
     chunked_prefill_size: int = 8192
     max_prefill_tokens: int = 16384
-    mem_fraction_static: Optional[float] = None
     max_running_requests: Optional[int] = None
     max_total_tokens: Optional[int] = None
     kv_cache_dtype: str = "auto"
@@ -34,14 +33,15 @@ class ServerArgs(metaclass=Singleton):
     quantization: Optional[str] = None
     dtype: str = "auto"
     # parallelism
-    nccl_init_addr: Optional[str] = None
+    dist_init_addr: Optional[str] = None
     dp_size: int = 1
     tp_size: int = 1
     nnodes: int = 1
+    node_rank: int = 0
     load_balance_method: str = "round_robin"
     # internal ports
     tokenizer_port: int = 30001
-    controller_port: int = 30002
+    scheduler_port: int = 30002
     detokenizer_port: int = 30003
     ## note(xiaozhe): this is actually a list of ints, but can be provided as a comma-separated string
     nccl_ports: str = "30004"
@@ -51,7 +51,7 @@ class ServerArgs(metaclass=Singleton):
     new_token_ratio_decay: float = 0.001
     num_continue_decode_steps: int = 10
     retract_decode_steps: int = 20
-    mem_fraction_static: float = 0.9
+    mem_fraction_static: float = 0.8
     # constrained
     constrained_json_whitespace_pattern: Optional[str] = None
     # tokenization
@@ -84,6 +84,7 @@ class ServerArgs(metaclass=Singleton):
     flashinfer_workspace_size: int = 384 * 1024 * 1024
     triton_attention_reduce_in_fp32: bool = False
     log_requests: bool = False
+    show_time_cost: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":

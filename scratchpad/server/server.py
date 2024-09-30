@@ -8,12 +8,10 @@ from fastapi import FastAPI, Request, File, Form, UploadFile
 from http import HTTPStatus
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from scratchpad.managers import TokenizerManager, start_detokenizer_process
+from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from .args import ServerArgs
 from .protocol import GenerateReqInput
-from scratchpad.managers.controller_single import (
-    start_controller_process as start_controller_process_single,
-)
+from scratchpad.scheduler.scheduler import run_scheduler_process
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -151,36 +149,39 @@ def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     args.model_path = model_name
     args.translate_auto()
-    pipe_controller_reader, pipe_controller_writer = mp.Pipe(duplex=False)
 
-    start_controller_process = start_controller_process_single
-    proc_controller = mp.Process(
-        target=start_controller_process,
-        args=(args, pipe_controller_writer),
+    # Launch tensor parallel scheduler processes
+    scheduler_procs = []
+    scheduler_pipe_readers = []
+    tp_size_per_node = args.tp_size // args.nnodes
+    tp_rank_range = range(
+        tp_size_per_node * args.node_rank,
+        tp_size_per_node * (args.node_rank + 1),
     )
-    proc_controller.start()
-    tokenizer_manager = TokenizerManager(args)
-    pipe_detoken_reader, pipe_detoken_writer = mp.Pipe(duplex=False)
-    proc_detoken = mp.Process(
-        target=start_detokenizer_process,
-        args=(
-            args,
-            pipe_detoken_writer,
-        ),
-    )
-    proc_detoken.start()
-
-    controller_init_state = pipe_controller_reader.recv()
-    detoken_init_state = pipe_detoken_reader.recv()
-
-    if controller_init_state != "init ok" or detoken_init_state != "init ok":
-        proc_controller.kill()
-        proc_detoken.kill()
-        raise RuntimeError(
-            "Initialization failed. "
-            f"controller_init_state: {controller_init_state}, "
-            f"detoken_init_state: {detoken_init_state}"
+    for tp_rank in tp_rank_range:
+        reader, writer = mp.Pipe(duplex=False)
+        gpu_id = tp_rank % tp_size_per_node
+        proc = mp.Process(
+            target=run_scheduler_process,
+            args=(args, gpu_id, tp_rank, writer),
         )
-    assert proc_controller.is_alive() and proc_detoken.is_alive()
+        proc.start()
+        scheduler_procs.append(proc)
+        scheduler_pipe_readers.append(reader)
 
+    if args.node_rank >= 1:
+        # For other nodes, they do not need to run tokenizer or detokenizer,
+        # so they can just wait here.
+        while True:
+            pass
+    detoken_proc = mp.Process(
+        target=run_detokenizer_process,
+        args=(args,),
+    )
+    detoken_proc.start()
+
+    # Launch tokenizer process
+    tokenizer_manager = TokenizerManager(args)
+    for i in range(len(scheduler_pipe_readers)):
+        scheduler_pipe_readers[i].recv()
     uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")

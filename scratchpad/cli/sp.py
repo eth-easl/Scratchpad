@@ -1,5 +1,6 @@
 import typer
 from scratchpad.server import dataclass_to_cli, ServerArgs, launch_server
+from scratchpad.server.args import global_args
 from .handlers import ChatHandler
 
 app = typer.Typer()
@@ -12,7 +13,8 @@ def serve(
     args: ServerArgs,
 ):
     """Spin up the server"""
-    typer.echo(f"Serving model: {model}")
+    typer.echo(f"Serving model: {model}, args: {args}")
+    global_args = args
     launch_server(model, args)
 
 

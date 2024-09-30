@@ -151,12 +151,8 @@ class TokenizedGenerateReqInput:
     input_text: str
     # The input token ids
     input_ids: List[int]
-    # The pixel values for input images
-    pixel_values: List[float]
-    # The hash values of input images
-    image_hashes: List[int]
-    # The image sizes
-    image_sizes: List[List[int]]
+    # The image input
+    image_inputs: dict
     # The sampling parameters
     sampling_params: SamplingParams
     # Whether to return the logprobs
@@ -167,8 +163,6 @@ class TokenizedGenerateReqInput:
     top_logprobs_num: int
     # Whether to stream output
     stream: bool
-    # Modalities of the input images
-    modalites: Optional[List[str]] = None
 
     # LoRA related
     lora_path: Optional[str] = None  # None means just use the base model
@@ -299,3 +293,49 @@ class UpdateWeightReqOutput:
 class AbortReq:
     # The request id
     rid: str
+
+
+@dataclass
+class TokenizedRewardReqInput:
+    # The request id
+    rid: str
+    # The input text
+    input_text: str
+    # The input token ids
+    input_ids: List[int]
+    # Dummy sampling params for compatibility
+    sampling_params: SamplingParams
+
+
+@dataclass
+class RewardReqInput:
+    # The input prompt in the chat format. It can be a single prompt or a batch of prompts.
+    conv: Union[List[List[Dict]], List[Dict]]
+    # The request id.
+    rid: Optional[Union[List[str], str]] = None
+    # Dummy sampling params for compatibility
+    sampling_params: Union[List[Dict], Dict] = None
+
+    is_single: bool = True
+
+    def post_init(self):
+        self.is_single = isinstance(self.conv[0], dict)
+
+        if self.is_single:
+            if self.rid is None:
+                self.rid = uuid.uuid4().hex
+            if self.sampling_params is None:
+                self.sampling_params = {}
+            self.sampling_params["max_new_tokens"] = 1
+        else:
+            # support select operation
+            self.batch_size = len(self.conv)
+            if self.rid is None:
+                self.rid = [uuid.uuid4().hex for _ in range(self.batch_size)]
+            else:
+                if not isinstance(self.rid, list):
+                    raise ValueError("The rid should be a list.")
+            if self.sampling_params is None:
+                self.sampling_params = [{}] * self.batch_size
+            for i in range(self.batch_size):
+                self.sampling_params[i]["max_new_tokens"] = 1

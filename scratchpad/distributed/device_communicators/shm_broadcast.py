@@ -197,7 +197,7 @@ class MessageQueue:
             self.local_socket.setsockopt(XPUB_VERBOSE, True)
             local_subscribe_port = get_open_port()
             socket_addr = f"tcp://127.0.0.1:{local_subscribe_port}"
-            logger.debug("Binding to %s", socket_addr)
+            logger.debug(f"Binding to {socket_addr}")
             self.local_socket.bind(socket_addr)
 
             self.current_idx = 0
@@ -237,7 +237,7 @@ class MessageQueue:
             remote_subscribe_port=remote_subscribe_port,
         )
 
-        logger.info("vLLM message queue communication handle: %s", self.handle)
+        logger.info(f"vLLM message queue communication handle: {self.handle}")
 
     def export_handle(self) -> Handle:
         return self.handle
@@ -261,7 +261,7 @@ class MessageQueue:
             self.local_socket = context.socket(SUB)
             self.local_socket.setsockopt_string(SUBSCRIBE, "")
             socket_addr = f"tcp://127.0.0.1:{handle.local_subscribe_port}"
-            logger.debug("Connecting to %s", socket_addr)
+            logger.debug(f"Connecting to {socket_addr}")
             self.local_socket.connect(socket_addr)
 
             self.remote_socket = None
@@ -463,7 +463,7 @@ class MessageQueue:
         group_world_size = dist.get_world_size(pg)
         global_ranks = dist.get_process_group_ranks(pg)
 
-        from vllm.distributed.parallel_state import in_the_same_node_as
+        from ..parallel_state import in_the_same_node_as
 
         status = in_the_same_node_as(pg, source_rank=writer_rank)
         same_node_ranks = [i for i, s in enumerate(status) if s]

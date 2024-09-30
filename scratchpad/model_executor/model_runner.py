@@ -24,20 +24,22 @@ from scratchpad.config.model_config import AttentionArch, ModelConfig
 from scratchpad.nn.attention.backend import FlashInferAttnBackend, TritonAttnBackend
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from scratchpad.nn.layers.sampler import Sampler
-from scratchpad.scheduler.schedule_batch import ScheduleBatch, global_args
+from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.memory.pool import (
     MHATokenToKVPool,
     MLATokenToKVPool,
     ReqToTokenPool,
 )
-from scratchpad.model_executor.forward_info import InputMetadata
+from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.server.args import ServerArgs
 from scratchpad.utils import (
     get_available_gpu_memory,
     is_generation_model,
     is_multimodal_model,
+    enable_show_time_cost,
 )
+from scratchpad.constrained import disable_cache
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +69,26 @@ class ModelRunner:
             self.model_config.hf_config.architectures
         )
 
+        # Model-specific adjustment
         if (
             self.model_config.attention_arch == AttentionArch.MLA
             and not self.server_args.disable_mla
         ):
             logger.info("MLA optimization is tunred on. Use triton backend.")
             self.server_args.attention_backend = "triton"
+
+        if self.is_multimodal_model:
+            logger.info(
+                "Automatically turn off --chunked-prefill-size and adjust --mem-fraction-static for multimodal models."
+            )
+            server_args.chunked_prefill_size = None
+            server_args.mem_fraction_static *= 0.95
+
+        # Global vars
+        if server_args.show_time_cost:
+            enable_show_time_cost()
+        if server_args.disable_disk_cache:
+            disable_cache()
 
         global_args.update(
             {
@@ -83,14 +99,6 @@ class ModelRunner:
                 "torchao_config": server_args.torchao_config,
             }
         )
-
-        # Model-specific adjustment
-        if self.is_multimodal_model:
-            logger.info(
-                "Automatically turn off --chunked-prefill-size and adjust --mem-fraction-static for multimodal models."
-            )
-            server_args.chunked_prefill_size = None
-            server_args.mem_fraction_static *= 0.95
 
         # Init componnets
         min_per_gpu_memory = self.init_torch_distributed()
@@ -115,8 +123,8 @@ class ModelRunner:
         # if not self.server_args.enable_p2p_check:
         #     monkey_patch_vllm_p2p_access_check(self.gpu_id)
 
-        if self.server_args.nccl_init_addr:
-            nccl_init_method = f"tcp://{self.server_args.nccl_init_addr}"
+        if self.server_args.dist_init_addr:
+            nccl_init_method = f"tcp://{self.server_args.dist_init_addr}"
         else:
             nccl_init_method = f"tcp://127.0.0.1:{self.nccl_port}"
         set_custom_all_reduce(not self.server_args.disable_custom_all_reduce)
@@ -165,9 +173,10 @@ class ModelRunner:
             )
             self.server_args.dtype = "float16"
             if torch.cuda.get_device_capability()[1] < 5:
-                raise RuntimeError("scratchpad only supports sm75 and above.")
+                raise RuntimeError("SGLang only supports sm75 and above.")
 
         # Prepare the vllm model config
+        # monkey_patch_vllm_dummy_weight_loader()
         self.device_config = DeviceConfig()
         self.load_config = LoadConfig(load_format=self.server_args.load_format)
         self.vllm_model_config = VllmModelConfig(
@@ -375,8 +384,7 @@ class ModelRunner:
             )
 
         self.req_to_token_pool = ReqToTokenPool(
-            max_num_reqs + 1,
-            self.model_config.context_len + 4,
+            max_num_reqs + 1, self.model_config.context_len + 4, device="cuda"
         )
         if (
             self.model_config.attention_arch == AttentionArch.MLA
@@ -442,69 +450,59 @@ class ModelRunner:
         logger.info("Capture cuda graph begin. This can take up to several minutes.")
         self.cuda_graph_runner = CudaGraphRunner(self)
 
-    def forward_decode(self, batch: ScheduleBatch):
-        if self.server_args.lora_paths is not None:
-            self.lora_manager.prepare_lora_batch(batch)
-
-        if self.cuda_graph_runner and self.cuda_graph_runner.can_run(len(batch.reqs)):
-            return self.cuda_graph_runner.replay(batch)
-
-        input_metadata = InputMetadata.from_schedule_batch(self, batch)
+    def forward_decode(self, forward_batch: ForwardBatch):
+        if self.cuda_graph_runner and self.cuda_graph_runner.can_run(
+            forward_batch.batch_size
+        ):
+            return self.cuda_graph_runner.replay(forward_batch)
 
         return self.model.forward(
-            batch.input_ids, input_metadata.positions, input_metadata
+            forward_batch.input_ids, forward_batch.positions, forward_batch
         )
 
-    def forward_extend(self, batch: ScheduleBatch):
-        input_metadata = InputMetadata.from_schedule_batch(self, batch)
-        if self.server_args.lora_paths is not None:
-            self.lora_manager.prepare_lora_batch(batch, input_metadata.extend_seq_lens)
-
+    def forward_extend(self, forward_batch: ForwardBatch):
         if self.is_generation:
             return self.model.forward(
-                batch.input_ids, input_metadata.positions, input_metadata
+                forward_batch.input_ids, forward_batch.positions, forward_batch
             )
         else:
             # Only embedding models have get_embedding parameter
             return self.model.forward(
-                batch.input_ids,
-                input_metadata.positions,
-                input_metadata,
+                forward_batch.input_ids,
+                forward_batch.positions,
+                forward_batch,
                 get_embedding=True,
             )
 
-    def forward_extend_multi_modal(self, batch: ScheduleBatch):
-        input_metadata = InputMetadata.from_schedule_batch(self, batch)
-        return self.model.forward(
-            batch.input_ids,
-            input_metadata.positions,
-            input_metadata,
-            input_metadata.pixel_values,
-            input_metadata.image_sizes,
-            input_metadata.image_offsets,
-        )
-
-    def forward(self, batch: ScheduleBatch) -> Tuple[LogitsProcessorOutput]:
-        assert batch.forward_mode is not None
-        if self.is_multimodal_model and batch.forward_mode.is_extend():
-            return self.forward_extend_multi_modal(batch)
-        elif batch.forward_mode.is_decode():
-            return self.forward_decode(batch)
-        elif batch.forward_mode.is_extend():
-            return self.forward_extend(batch)
+    def forward(self, forward_batch: ForwardBatch) -> LogitsProcessorOutput:
+        if forward_batch.forward_mode.is_decode():
+            return self.forward_decode(forward_batch)
+        elif forward_batch.forward_mode.is_extend():
+            return self.forward_extend(forward_batch)
         else:
-            raise ValueError(f"Invaid forward mode: {batch.forward_mode}")
+            raise ValueError(f"Invaid forward mode: {forward_batch.forward_mode}")
 
-    def _apply_logits_bias(
-        self, logits: torch.Tensor, sampling_info: SamplingBatchInfo
-    ):
+    def sample(
+        self, logits_output: LogitsProcessorOutput, forward_batch: ForwardBatch
+    ) -> torch.Tensor:
+        # Put CPU-heavy tasks here. They will be overlapped with the forward pass.
+        sampling_info = forward_batch.sampling_info
+        sampling_info.update_regex_vocab_mask()
+        sampling_info.update_penalties()
+        logits = self.apply_logits_bias(logits_output.next_token_logits, sampling_info)
+
+        # Sample the next tokens.
+        next_token_ids = self.sampler(logits, sampling_info)
+        return next_token_ids
+
+    def apply_logits_bias(self, logits: torch.Tensor, sampling_info: SamplingBatchInfo):
         # Apply logit_bias
         if sampling_info.logit_bias is not None:
             logits.add_(sampling_info.logit_bias)
 
         # min-token, presence, frequency
         if sampling_info.linear_penalties is not None:
-            logits += sampling_info.linear_penalties
+            logits.add_(sampling_info.linear_penalties)
 
         # repetition
         if sampling_info.scaling_penalties is not None:
@@ -519,20 +517,6 @@ class ModelRunner:
             logits = logits.masked_fill(sampling_info.vocab_mask, float("-inf"))
 
         return logits
-
-    def sample(
-        self, logits_output: LogitsProcessorOutput, batch: ScheduleBatch
-    ) -> torch.Tensor:
-        # Put CPU-heavy tasks here. They will be overlapped with the forward pass.
-        batch.sampling_info.update_regex_vocab_mask(batch)
-        batch.sampling_info.update_penalties()
-        logits = self._apply_logits_bias(
-            logits_output.next_token_logits, batch.sampling_info
-        )
-
-        # Sample the next tokens.
-        next_token_ids = self.sampler(logits, batch.sampling_info)
-        return next_token_ids
 
 
 @lru_cache()

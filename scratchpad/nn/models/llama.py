@@ -24,7 +24,7 @@ from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
 from scratchpad.scheduler.schedule_batch import global_args
-from scratchpad.model_executor.forward_info import InputMetadata
+from scratchpad.model_executor.forward_info import ForwardBatch
 
 
 class LlamaMLP(nn.Module):
@@ -143,7 +143,7 @@ class LlamaAttention(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
-        input_metadata: InputMetadata,
+        input_metadata: ForwardBatch,
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
@@ -202,7 +202,7 @@ class LlamaDecoderLayer(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
-        input_metadata: InputMetadata,
+        input_metadata: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
@@ -251,7 +251,7 @@ class LlamaModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        input_metadata: InputMetadata,
+        input_metadata: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
         if input_embeds is None:
@@ -291,7 +291,7 @@ class LlamaForCausalLM(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-        input_metadata: InputMetadata,
+        input_metadata: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> LogitsProcessorOutput:
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)

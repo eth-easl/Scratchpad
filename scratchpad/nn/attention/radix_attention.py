@@ -1,6 +1,6 @@
 from torch import nn
 
-from scratchpad.model_executor.forward_info import InputMetadata
+from scratchpad.model_executor.forward_info import ForwardBatch
 
 
 class RadixAttention(nn.Module):
@@ -31,7 +31,7 @@ class RadixAttention(nn.Module):
         self.logit_cap = logit_cap
         self.sliding_window_size = sliding_window_size or -1
 
-    def forward(self, q, k, v, input_metadata: InputMetadata):
+    def forward(self, q, k, v, input_metadata: ForwardBatch):
         if k is not None:
             # For cross-layer sharing, kv can be None
             assert v is not None
