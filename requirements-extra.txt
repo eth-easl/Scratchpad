@@ -1,2 +1,4 @@
 gguf
 pillow
+prompt_toolkit
+openai
