@@ -73,9 +73,12 @@ def search(topic):
     # using duckduckgo
     topics = [topic.strip() for topics in topics] + [topic]
     search_results = []
-    topics = "%2d".join(topics)
+    topics = "%20".join(topics)
+    topic = topic.replace(" ", "%20")
     endpoint = f"http://api.duckduckgo.com/?q={topic}&format=json&pretty=1&no_html=1&skip_disambig=1"
     results = requests.get(endpoint).json()
+    print(endpoint)
     search_results.append(results["AbstractText"])
+
     search_results = "\n\n".join(search_results)
     return search_results
