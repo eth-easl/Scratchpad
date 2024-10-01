@@ -1,0 +1,19 @@
+FROM nvcr.io/nvidia/pytorch:24.09-py3 AS base
+
+LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/scratchpad
+LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
+LABEL org.opencontainers.image.licenses=Apache-2.0
+
+ARG CUDA_VERSION=12.4.1
+ARG PYTHON_VERSION=3.10
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && apt upgrade -y
+
+WORKDIR /scratchpad
+
+COPY . /scratchpad
+
+RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_aarch64.whl
+RUN pip install .
+RUN pip install -r requirements-extra.txt
