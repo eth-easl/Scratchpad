@@ -1,6 +1,6 @@
 FROM nvcr.io/nvidia/pytorch:24.09-py3 AS base
 
-LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/scratchpad
+LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
 LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
 LABEL org.opencontainers.image.licenses=Apache-2.0
 LABEL org.opencontainers.image.architecture=amd64
@@ -15,7 +15,8 @@ WORKDIR /scratchpad
 
 COPY . /scratchpad
 
-RUN pip install flashinfer -i https://flashinfer.ai/whl/cu124/torch2.4/
+RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_x86_64.whl
 RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/triteia-0.1.0-cp310-cp310-linux_x86_64.whl
-RUN pip install .
 RUN pip install -r requirements-extra.txt
+RUN pip install .
+RUN pip uninstall pynvml -y

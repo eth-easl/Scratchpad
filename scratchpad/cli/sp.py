@@ -27,7 +27,7 @@ def version():
 @app.command()
 def chat(
     model: str,
-    backend: str = "http://localhost:3000",
+    backend: str = "http://localhost:8080",
 ):
     chat_handler = ChatHandler(server_addr=backend, model_name=model)
     chat_handler.chat()
