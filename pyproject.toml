@@ -3,7 +3,7 @@ name = "scratchpad"
 version = "0.0.1"
 description = "scratchpad"
 authors = [{ name = "Xiaozhe Yao", email = "askxzyao@gmail.com" }]
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 readme = "README.md"
 license = { text = "MIT" }
 dynamic = ["dependencies", "optional-dependencies"]

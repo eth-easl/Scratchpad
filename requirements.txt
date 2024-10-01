@@ -13,4 +13,3 @@ nvidia-ml-py
 psutil
 python-multipart
 rich
-triteia@git+https://github.com/xiaozheyao/triteia.git@main
