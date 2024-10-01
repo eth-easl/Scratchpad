@@ -1,4 +1,3 @@
-import logging
 from typing import Optional
 
 import torch
@@ -17,8 +16,7 @@ from scratchpad.model_executor.custom_op import CustomOp
 
 from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.utils import set_weight_attrs
-
-logger = logging.getLogger(__name__)
+from scratchpad.utils import logger
 
 
 class SiluAndMul(CustomOp):

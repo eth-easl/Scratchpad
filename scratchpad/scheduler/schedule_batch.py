@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
@@ -13,11 +12,9 @@ from scratchpad.model_executor.forward_info import ForwardMode
 from scratchpad.server.args import global_args
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.sampling.sampling_params import SamplingParams
-from scratchpad.utils import envs
+from scratchpad.utils import envs, logger
 
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
-
-logger = logging.getLogger(__name__)
 
 
 class BaseFinishReason:

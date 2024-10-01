@@ -1,10 +1,10 @@
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:3000/v1",
+    base_url="http://localhost:8080/v1",
     api_key="sk_test_123",
 )
-for i in range(50):
+for i in range(150):
     res = client.chat.completions.create(
         model="meta-llama/Llama-3.2-1B-Instruct",
         messages=[

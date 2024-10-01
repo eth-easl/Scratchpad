@@ -1,5 +1,4 @@
 import json
-import logging
 from scratchpad.utils import (
     broadcast_pyobj,
     is_multimodal_model,

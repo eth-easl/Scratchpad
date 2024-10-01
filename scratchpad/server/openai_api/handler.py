@@ -17,7 +17,6 @@ limitations under the License.
 
 import asyncio
 import json
-import logging
 import os
 import time
 import uuid
@@ -65,8 +64,7 @@ from .protocol import (
     TopLogprob,
     UsageInfo,
 )
-
-logger = logging.getLogger(__name__)
+from scratchpad.utils import logger
 
 chat_template_name = None
 

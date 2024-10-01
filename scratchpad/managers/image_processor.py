@@ -1,6 +1,5 @@
 import asyncio
 import concurrent.futures
-import logging
 import multiprocessing as mp
 import os
 from abc import ABC, abstractmethod
@@ -15,10 +14,9 @@ from scratchpad.utils import (
     process_anyres_image,
     load_image,
     get_exception_traceback,
+    logger,
 )
 from scratchpad.server.args import ServerArgs
-
-logger = logging.getLogger(__name__)
 
 global global_processor
 

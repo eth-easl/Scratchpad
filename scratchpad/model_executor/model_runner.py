@@ -1,7 +1,6 @@
 import gc
 import importlib
 import importlib.resources
-import logging
 import pkgutil
 from functools import lru_cache
 from typing import Optional, Tuple, Type
@@ -38,10 +37,9 @@ from scratchpad.utils import (
     is_generation_model,
     is_multimodal_model,
     enable_show_time_cost,
+    logger,
 )
 from scratchpad.constrained import disable_cache
-
-logger = logging.getLogger(__name__)
 
 
 class ModelRunner:

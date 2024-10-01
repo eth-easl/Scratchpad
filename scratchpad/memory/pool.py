@@ -1,8 +1,7 @@
-import logging
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Union
-from scratchpad.utils import logger
 import torch
+from scratchpad.utils import logger
 
 
 class ReqToTokenPool:
