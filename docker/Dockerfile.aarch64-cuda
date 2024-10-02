@@ -17,7 +17,7 @@ COPY . /scratchpad
 
 RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_aarch64.whl
 RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/triteia-0.1.0-cp310-cp310-linux_aarch64.whl
-RUN pip install .
 RUN pip install -r requirements-extra.txt
+RUN pip install .
 # todo(xiaozhe): figure out why pynvml is installed in the first place. We should use nvidia-ml-py instead.
 RUN pip uninstall pynvml -y

@@ -473,7 +473,7 @@ def v1_generate_request(
         if request.echo and request.logprobs:
             logger.warning(
                 "Echo is not compatible with logprobs. "
-                "To compute logprobs of input prompt, please use SGLang /request API."
+                "To compute logprobs of input prompt, please use /request API."
             )
 
     for request in all_requests:

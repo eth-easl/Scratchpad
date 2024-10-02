@@ -1,0 +1,1 @@
+lm_eval[api] @git+https://github.com/EleutherAI/lm-evaluation-harness
