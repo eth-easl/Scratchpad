@@ -1,5 +1,5 @@
 from typing import Optional
-
+from scratchpad.utils import logger
 
 class CacheConfig:
     """Configuration for the KV cache.
