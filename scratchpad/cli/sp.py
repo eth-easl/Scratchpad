@@ -37,10 +37,12 @@ def chat(
 def benchmark(
     model: str,
     tasks: str = "mmlu",
-    url: str = "http://localhost:8080/v1/completions",
+    url: str = "http://localhost:8080/v1",
     num_fewshot: int = 0,
+    instruct_model: bool = False,
 ):
-    benchmark_quality(model, url, tasks, num_fewshot)
+    url = url + "/completions"
+    benchmark_quality(model, url, tasks, num_fewshot, instruct_model)
 
 
 if __name__ == "__main__":

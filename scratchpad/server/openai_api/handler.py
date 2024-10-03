@@ -473,13 +473,13 @@ def v1_generate_request(
         if request.echo and request.logprobs:
             logger.warning(
                 "Echo is not compatible with logprobs. "
-                "To compute logprobs of input prompt, please use /request API."
+                "To compute logprobs of input prompt, please use /generate API."
             )
 
     for request in all_requests:
         prompts.append(request.prompt)
         return_logprobs.append(request.logprobs is not None and request.logprobs > 0)
-        logprob_start_lens.append(-1)
+        logprob_start_lens.append(0)
         top_logprobs_nums.append(
             request.logprobs if request.logprobs is not None else 0
         )
@@ -885,7 +885,7 @@ def v1_chat_generate_request(
             modalities = []
         input_ids.append(prompt_ids)
         return_logprobs.append(request.logprobs)
-        logprob_start_lens.append(-1)
+        logprob_start_lens.append(0)
         top_logprobs_nums.append(request.top_logprobs or 0)
 
         sampling_params = {

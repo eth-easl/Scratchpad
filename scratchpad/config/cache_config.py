@@ -1,4 +1,5 @@
 from typing import Optional
+from scratchpad.utils import logger
 
 
 class CacheConfig:
