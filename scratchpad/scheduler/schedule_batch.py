@@ -732,7 +732,7 @@ class ScheduleBatch:
         self.has_stream = any(req.stream for req in self.reqs)
         self.reqs.extend(other.reqs)
         self.return_logprob = self.return_logprob or other.return_logprob
-        
+
     def get_model_worker_batch(self):
         if self.forward_mode.is_decode():
             extend_seq_lens = extend_prefix_lens = extend_logprob_start_lens = (

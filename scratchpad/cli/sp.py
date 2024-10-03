@@ -39,7 +39,7 @@ def benchmark(
     tasks: str = "mmlu",
     url: str = "http://localhost:8080/v1",
     num_fewshot: int = 0,
-    instruct_model: bool=False,
+    instruct_model: bool = False,
 ):
     url = url + "/completions"
     benchmark_quality(model, url, tasks, num_fewshot, instruct_model)

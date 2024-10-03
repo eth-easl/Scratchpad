@@ -1,2 +1,2 @@
-class AsyncLLMEngine():
+class AsyncLLMEngine:
     pass
