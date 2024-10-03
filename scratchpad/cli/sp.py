@@ -36,15 +36,12 @@ def chat(
 @app.command()
 def benchmark(
     model: str,
-    tasks: str = "truthfulqa",
+    tasks: str = "mmlu",
     url: str = "http://localhost:8080/v1",
     num_fewshot: int = 0,
     instruct_model: bool=False,
 ):
-    if instruct_model:
-        url = url +"/chat/completions"
-    else:
-        url = url + "/completions"
+    url = url + "/completions"
     benchmark_quality(model, url, tasks, num_fewshot, instruct_model)
 
 

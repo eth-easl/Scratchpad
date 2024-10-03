@@ -3,3 +3,4 @@
 pyrightconfig.json
 *.history
 .local
+.vscode
