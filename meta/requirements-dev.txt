@@ -1,1 +1,7 @@
 black
+furo
+sphinx-autobuild
+myst-parser
+sphinxext-opengraph
+sphinx-copybutton
+sphinx-rtd-theme

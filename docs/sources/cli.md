@@ -1,4 +1,4 @@
-# `scratchpad`
+# CLI Reference
 
 **Usage**:
 
@@ -14,9 +14,30 @@ $ scratchpad [OPTIONS] COMMAND [ARGS]...
 
 **Commands**:
 
+* `benchmark`
 * `chat`
 * `serve`: Spin up the server
 * `version`: Print the version
+
+## `scratchpad benchmark`
+
+**Usage**:
+
+```console
+$ scratchpad benchmark [OPTIONS] MODEL
+```
+
+**Arguments**:
+
+* `MODEL`: [required]
+
+**Options**:
+
+* `--tasks TEXT`: [default: mmlu]
+* `--url TEXT`: [default: http://localhost:8080/v1]
+* `--num-fewshot INTEGER`: [default: 0]
+* `--instruct-model / --no-instruct-model`: [default: no-instruct-model]
+* `--help`: Show this message and exit.
 
 ## `scratchpad chat`
 
@@ -32,7 +53,7 @@ $ scratchpad chat [OPTIONS] MODEL
 
 **Options**:
 
-* `--backend TEXT`: [default: http://localhost:3000]
+* `--backend TEXT`: [default: http://localhost:8080]
 * `--help`: Show this message and exit.
 
 ## `scratchpad serve`
