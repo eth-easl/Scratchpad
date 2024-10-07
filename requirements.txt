@@ -13,3 +13,4 @@ nvidia-ml-py
 psutil
 python-multipart
 rich
+humanize
