@@ -18,7 +18,7 @@ sp = "scratchpad.cli.sp:app"
 packages = ["scratchpad"]
 
 [tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+dependencies = {file = ["meta/requirements.txt"]}
 optional-dependencies.extra = { file = ["meta/requirements-extra.txt"] }
 optional-dependencies.dev = { file = ["meta/requirements-dev.txt"] }
 optional-dependencies.benchmark = { file = ["meta/requirements-benchmark.txt"] }
