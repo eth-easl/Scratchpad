@@ -37,7 +37,9 @@ class RooflineSimulator:
             self.analyze_results[stage][name][k] = None
         self.analyze_results[stage][name][k] = v
 
-    def _analyze_linear_module(self, name, ic, oc, bsz, seq_len):
+    def _analyze_linear_module(
+        self, name, ic, oc, bsz, seq_len, w_bit=16, a_bit=16, rank=None
+    ):
         """prefill first"""
         is_kv_proj = name in ["k_proj", "v_proj"]
         is_normal_proj = not is_kv_proj
@@ -64,7 +66,16 @@ class RooflineSimulator:
         )
 
         for name, (ic, oc) in linear_layers.items():
-            self._analyze_linear_module(name, ic, oc, bsz, seq_len)
+            self._analyze_linear_module(
+                name,
+                ic,
+                oc,
+                bsz,
+                seq_len,
+                w_bit=self.w_bit,
+                a_bit=self.a_bit,
+                rank=None,
+            )
 
     @property
     def results(self):
