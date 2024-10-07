@@ -7,7 +7,7 @@ uvicorn
 zmq
 huggingface_hub
 transformers
-outlines
+outlines==0.0.46
 uvloop
 nvidia-ml-py
 psutil
