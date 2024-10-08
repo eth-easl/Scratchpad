@@ -1,3 +1,6 @@
+from transformers import AutoConfig
+
+
 def flops_matmul(b, m, n, k, rank=None):
     # (b, m, r)
     if not rank:
@@ -40,6 +43,17 @@ def roofline_analyze(bandwidth, max_OPS, OPs, memory_access):
     if performance == 0:
         pass
     return arithmetic_intensity, performance, bound
+
+
+def get_linear_layers_from_config(config: AutoConfig):
+    hidden_size = config.hidden_size
+    intermediate_size = config.intermediate_size
+    key_value_heads = config.num_key_value_heads
+    attention_heads = config.num_attention_heads
+
+    return get_linear_layers(
+        hidden_size, intermediate_size, key_value_heads, attention_heads
+    )
 
 
 def get_linear_layers(

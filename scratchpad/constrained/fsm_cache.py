@@ -1,7 +1,7 @@
 from outlines.fsm.json_schema import build_regex_from_schema
 from transformers import AutoTokenizer
-from . import RegexGuide, TransformerTokenizer
 from .base_tool_cache import BaseToolCache
+from . import RegexGuide, TransformerTokenizer
 
 
 class FSMCache(BaseToolCache):
