@@ -2,7 +2,6 @@ import humanize
 from transformers import AutoConfig
 from tools.simulator.utils import get_linear_layers_from_config
 
-
 def calculate_size(args):
     print(args)
     model = AutoConfig.from_pretrained(args.model)
@@ -23,6 +22,9 @@ def calculate_size(args):
     lm_head_size = model.hidden_size * model.vocab_size
     other_params = embedding_size + lm_head_size
     print(f"Embedding size: {humanize.intword(other_params)}")
+    print(
+        f"Linear Only Size (FFN + ATTN): {humanize.intword(total_linear_params)}, Physical size: {humanize.naturalsize(total_linear_params * args.bpw // 8)}"
+    )
     print(
         f"Total size: {humanize.intword(total_linear_params + other_params)}, Physical size: {humanize.naturalsize((total_linear_params + other_params) * args.bpw // 8)}"
     )
