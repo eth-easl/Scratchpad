@@ -209,7 +209,6 @@ def get_hf_text_config(config: PretrainedConfig):
 
 
 class DisabledTqdm(tqdm):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs, disable=True)
 

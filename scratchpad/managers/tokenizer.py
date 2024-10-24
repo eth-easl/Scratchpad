@@ -630,16 +630,16 @@ class TokenizerManager:
             )
 
             if top_logprobs_num > 0:
-                ret["meta_info"]["input_top_logprobs"] = (
-                    self.detokenize_top_logprobs_tokens(
-                        ret["meta_info"]["input_top_logprobs"],
-                        return_text_in_logprobs,
-                    )
+                ret["meta_info"][
+                    "input_top_logprobs"
+                ] = self.detokenize_top_logprobs_tokens(
+                    ret["meta_info"]["input_top_logprobs"],
+                    return_text_in_logprobs,
                 )
-                ret["meta_info"]["output_top_logprobs"] = (
-                    self.detokenize_top_logprobs_tokens(
-                        ret["meta_info"]["output_top_logprobs"], return_text_in_logprobs
-                    )
+                ret["meta_info"][
+                    "output_top_logprobs"
+                ] = self.detokenize_top_logprobs_tokens(
+                    ret["meta_info"]["output_top_logprobs"], return_text_in_logprobs
                 )
         return ret
 
@@ -667,3 +667,7 @@ class TokenizerManager:
                     token_top_logprobs, decode_to_text
                 )
         return top_logprobs
+
+    def shutdown(self):
+        self.recv_from_detokenizer.close()
+        self.send_to_scheduler.close()

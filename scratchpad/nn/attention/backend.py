@@ -245,9 +245,12 @@ class FlashInferAttnBackend(AttentionBackend):
             else:
                 prefill_wrapper_paged = self.prefill_wrapper_paged[1]
 
-        use_ragged, extend_no_prefix, total_num_tokens, decode_wrapper = (
-            self.forward_metadata
-        )
+        (
+            use_ragged,
+            extend_no_prefix,
+            total_num_tokens,
+            decode_wrapper,
+        ) = self.forward_metadata
 
         if not use_ragged:
             if k is not None:
@@ -293,9 +296,12 @@ class FlashInferAttnBackend(AttentionBackend):
         return o.view(-1, layer.tp_q_head_num * layer.head_dim)
 
     def forward_decode(self, q, k, v, layer: nn.Module, forward_batch: ForwardBatch):
-        use_ragged, extend_no_prefix, total_num_tokens, decode_wrapper = (
-            self.forward_metadata
-        )
+        (
+            use_ragged,
+            extend_no_prefix,
+            total_num_tokens,
+            decode_wrapper,
+        ) = self.forward_metadata
 
         if isinstance(decode_wrapper, list):
             if layer.sliding_window_size != -1:

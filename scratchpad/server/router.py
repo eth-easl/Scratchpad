@@ -10,6 +10,7 @@ app = FastAPI()
 
 client = httpx.AsyncClient(base_url="http://localhost:7800/")
 
+
 async def _reverse_proxy(request: Request):
     url = httpx.URL(path=request.url.path, query=request.url.query.encode("utf-8"))
     rp_req = client.build_request(

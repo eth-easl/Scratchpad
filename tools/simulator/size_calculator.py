@@ -2,6 +2,7 @@ import humanize
 from transformers import AutoConfig
 from tools.simulator.utils import get_linear_layers_from_config
 
+
 def calculate_size(args):
     print(args)
     model = AutoConfig.from_pretrained(args.model)

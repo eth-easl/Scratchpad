@@ -11,6 +11,6 @@ format:
 container:
 	bash docker/build_image.sh $(version)
 html-docs:
-	sphinx-build -M html docs/sources docs/build 
+	sphinx-build -M html docs/sources docs/build
 cli-docs:
-	typer scratchpad.cli.sp utils docs --title "CLI Reference" --name "scratchpad" --output docs/sources/cli.md 
+	typer scratchpad.cli.sp utils docs --title "CLI Reference" --name "scratchpad" --output docs/sources/cli.md

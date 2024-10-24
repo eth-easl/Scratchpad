@@ -309,13 +309,15 @@ class VocabParallelEmbedding(torch.nn.Module):
         layout outlined in the class docstring, based on the given tp_rank and
         tp_size."""
         num_added_embeddings_padded = vocab_size_padded - org_vocab_size_padded
-        padded_org_vocab_start_index, padded_org_vocab_end_index = (
-            vocab_range_from_global_vocab_size(org_vocab_size_padded, tp_rank, tp_size)
-        )
-        padded_added_vocab_start_index, padded_added_vocab_end_index = (
-            vocab_range_from_global_vocab_size(
-                num_added_embeddings_padded, tp_rank, tp_size, offset=org_vocab_size
-            )
+        (
+            padded_org_vocab_start_index,
+            padded_org_vocab_end_index,
+        ) = vocab_range_from_global_vocab_size(org_vocab_size_padded, tp_rank, tp_size)
+        (
+            padded_added_vocab_start_index,
+            padded_added_vocab_end_index,
+        ) = vocab_range_from_global_vocab_size(
+            num_added_embeddings_padded, tp_rank, tp_size, offset=org_vocab_size
         )
         # remove padding
         org_vocab_start_index = min(padded_org_vocab_start_index, org_vocab_size)
