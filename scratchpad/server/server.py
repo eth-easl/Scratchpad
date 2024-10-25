@@ -26,10 +26,12 @@ from scratchpad.server.openai_api.handler import (
     v1_retrieve_file_content,
 )
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
+from scratchpad.server.controller import mount_metrics
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
 app = FastAPI()
+mount_metrics(app)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 app.add_middleware(
     CORSMiddleware,

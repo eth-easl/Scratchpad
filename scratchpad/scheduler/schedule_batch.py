@@ -419,7 +419,12 @@ class ScheduleBatch:
                 out_cache_loc = self.token_to_kv_pool.alloc(num_tokens)
 
             if out_cache_loc is None:
-                logger.error("Prefill out of memory. Try to lower your batch size.")
+                phase_str = "Prefill" if self.forward_mode.is_extend() else "Decode"
+                logger.error(
+                    f"{phase_str} out of memory. Try to lower your batch size.\n"
+                    f"Try to allocate {num_tokens} tokens.\n"
+                    f"Avaliable tokens: {self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()}\n"
+                )
                 if self.tree_cache is not None:
                     self.tree_cache.pretty_print()
                 exit(1)
@@ -451,9 +456,9 @@ class ScheduleBatch:
                     :pre_len
                 ] = req.prefix_indices
 
-            self.req_to_token_pool.req_to_token[req.req_pool_idx][pre_len:seq_len] = (
-                out_cache_loc[pt : pt + req.extend_input_len]
-            )
+            self.req_to_token_pool.req_to_token[req.req_pool_idx][
+                pre_len:seq_len
+            ] = out_cache_loc[pt : pt + req.extend_input_len]
 
             # Compute the relative logprob_start_len in an extend batch
             if req.logprob_start_len >= pre_len:
@@ -735,9 +740,9 @@ class ScheduleBatch:
 
     def get_model_worker_batch(self):
         if self.forward_mode.is_decode():
-            extend_seq_lens = extend_prefix_lens = extend_logprob_start_lens = (
-                image_inputs
-            ) = None
+            extend_seq_lens = (
+                extend_prefix_lens
+            ) = extend_logprob_start_lens = image_inputs = None
         else:
             extend_seq_lens = self.extend_lens
             extend_prefix_lens = self.prefix_lens
