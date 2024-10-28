@@ -30,6 +30,7 @@ from scratchpad.scheduler.schedule_batch import (
     Req,
     ScheduleBatch,
 )
+from scratchpad.scheduler.stats import Stats
 from scratchpad.scheduler.policy_scheduler import PrefillAdder, SchedulePolicy
 from ..managers.tp_worker import TpModelWorker
 from scratchpad.memory.chunk_cache import ChunkCache
@@ -73,6 +74,7 @@ class Scheduler:
         self.lora_paths = server_args.lora_paths
         self.max_loras_per_batch = server_args.max_loras_per_batch
         self.stats_logger = loggers
+
         # Init inter-process communication
         context = zmq.Context(2)
 
@@ -176,6 +178,7 @@ class Scheduler:
         self.stream_interval = server_args.stream_interval
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
+        self.last_log_time = time.time()
 
         # Init chunked prefill
         self.chunked_prefill_size = server_args.chunked_prefill_size
@@ -307,6 +310,7 @@ class Scheduler:
             self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
         )
         throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
+        self.log_stats(throughput)
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
         logger.info(
@@ -318,8 +322,11 @@ class Scheduler:
             f"#queue-req: {len(self.waiting_queue)}"
         )
 
-    def log_stats(self):
-        pass
+    def log_stats(self, throughput):
+        self.last_log_time = time.time()
+        stats = Stats(time.time(), throughput)
+        for logger in self.stats_logger:
+            logger.log(stats)
 
     def check_memory(self):
         available_size = (

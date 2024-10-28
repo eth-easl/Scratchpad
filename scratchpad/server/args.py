@@ -8,7 +8,7 @@ class ServerArgs:
     host: str = "0.0.0.0"
     port: int = 3000
     debug: bool = False
-
+    server_id: str = "default"
     model_path: str = ""
     served_model_name: str = "auto"
     trust_remote_code: bool = True

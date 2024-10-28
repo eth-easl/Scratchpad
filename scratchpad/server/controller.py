@@ -15,7 +15,6 @@ def mount_metrics(app: FastAPI):
         )
         registry = CollectorRegistry()
         multiprocess.MultiProcessCollector(registry)
-
         # Add prometheus asgi middleware to route /metrics requests
         metrics_route = Mount("/metrics", make_asgi_app(registry=registry))
     else:

@@ -152,7 +152,7 @@ def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     args.model_path = model_name
     args.translate_auto()
-    loggers = [PrometheusStatLogger(1, {"name": "server"}, 4096)]
+    loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []

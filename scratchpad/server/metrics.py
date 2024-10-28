@@ -278,75 +278,79 @@ class PrometheusStatLogger(StatLoggerBase):
         gauge.labels(**data).set(1)
 
     def _log_prometheus(self, stats: Stats) -> None:
+        self._log_gauge(
+            self.metrics.gauge_avg_generation_throughput, stats.generation_throughput
+        )
         # System state data
-        self._log_gauge(self.metrics.gauge_scheduler_running, stats.num_running_sys)
-        self._log_gauge(self.metrics.gauge_scheduler_swapped, stats.num_swapped_sys)
-        self._log_gauge(self.metrics.gauge_scheduler_waiting, stats.num_waiting_sys)
-        self._log_gauge(self.metrics.gauge_gpu_cache_usage, stats.gpu_cache_usage_sys)
-        self._log_gauge(self.metrics.gauge_cpu_cache_usage, stats.cpu_cache_usage_sys)
-        self._log_gauge(
-            self.metrics.gauge_cpu_prefix_cache_hit_rate,
-            stats.cpu_prefix_cache_hit_rate,
-        )
-        self._log_gauge(
-            self.metrics.gauge_gpu_prefix_cache_hit_rate,
-            stats.gpu_prefix_cache_hit_rate,
-        )
+        # self._log_gauge(self.metrics.gauge_scheduler_running, stats.num_running_sys)
+        # self._log_gauge(self.metrics.gauge_scheduler_swapped, stats.num_swapped_sys)
+        # self._log_gauge(self.metrics.gauge_scheduler_waiting, stats.num_waiting_sys)
+        # self._log_gauge(self.metrics.gauge_gpu_cache_usage, stats.gpu_cache_usage_sys)
+        # self._log_gauge(self.metrics.gauge_cpu_cache_usage, stats.cpu_cache_usage_sys)
+        # self._log_gauge(
+        #     self.metrics.gauge_cpu_prefix_cache_hit_rate,
+        #     stats.cpu_prefix_cache_hit_rate,
+        # )
+        # self._log_gauge(
+        #     self.metrics.gauge_gpu_prefix_cache_hit_rate,
+        #     stats.gpu_prefix_cache_hit_rate,
+        # )
         # Including max-lora in metric, in future this property of lora
         # config maybe extended to be dynamic.
-        lora_info = {
-            self.metrics.labelname_running_lora_adapters: ",".join(
-                stats.running_lora_adapters
-            ),
-            self.metrics.labelname_waiting_lora_adapters: ",".join(
-                stats.waiting_lora_adapters
-            ),
-            self.metrics.labelname_max_lora: stats.max_lora,
-        }
-        self._log_gauge_string(self.metrics.gauge_lora_info, lora_info)
-        # Iteration level data
-        self._log_counter(
-            self.metrics.counter_num_preemption, stats.num_preemption_iter
-        )
-        self._log_counter(
-            self.metrics.counter_prompt_tokens, stats.num_prompt_tokens_iter
-        )
-        self._log_counter(
-            self.metrics.counter_generation_tokens, stats.num_generation_tokens_iter
-        )
-        self._log_histogram(
-            self.metrics.histogram_time_to_first_token, stats.time_to_first_tokens_iter
-        )
-        self._log_histogram(
-            self.metrics.histogram_time_per_output_token,
-            stats.time_per_output_tokens_iter,
-        )
+        # lora_info = {
+        #     self.metrics.labelname_running_lora_adapters: ",".join(
+        #         stats.running_lora_adapters
+        #     ),
+        #     self.metrics.labelname_waiting_lora_adapters: ",".join(
+        #         stats.waiting_lora_adapters
+        #     ),
+        #     self.metrics.labelname_max_lora: stats.max_lora,
+        # }
+        # self._log_gauge_string(self.metrics.gauge_lora_info, lora_info)
+        # # Iteration level data
+        # self._log_counter(
+        #     self.metrics.counter_num_preemption, stats.num_preemption_iter
+        # )
+        # self._log_counter(
+        #     self.metrics.counter_prompt_tokens, stats.num_prompt_tokens_iter
+        # )
+        # self._log_counter(
+        #     self.metrics.counter_generation_tokens, stats.num_generation_tokens_iter
+        # )
+        # self._log_histogram(
+        #     self.metrics.histogram_time_to_first_token, stats.time_to_first_tokens_iter
+        # )
+        # self._log_histogram(
+        #     self.metrics.histogram_time_per_output_token,
+        #     stats.time_per_output_tokens_iter,
+        # )
 
         # Request level data
         # Latency
-        self._log_histogram(
-            self.metrics.histogram_e2e_time_request, stats.time_e2e_requests
-        )
-        # Metadata
-        finished_reason_counter = CollectionsCounter(stats.finished_reason_requests)
-        self._log_counter_labels(
-            self.metrics.counter_request_success,
-            finished_reason_counter,
-            Metrics.labelname_finish_reason,
-        )
-        self._log_histogram(
-            self.metrics.histogram_num_prompt_tokens_request,
-            stats.num_prompt_tokens_requests,
-        )
-        self._log_histogram(
-            self.metrics.histogram_num_generation_tokens_request,
-            stats.num_generation_tokens_requests,
-        )
-        self._log_histogram(self.metrics.histogram_n_request, stats.n_requests)
+        # self._log_histogram(
+        #     self.metrics.histogram_e2e_time_request, stats.time_e2e_requests
+        # )
+        # # Metadata
+        # finished_reason_counter = CollectionsCounter(stats.finished_reason_requests)
+        # self._log_counter_labels(
+        #     self.metrics.counter_request_success,
+        #     finished_reason_counter,
+        #     Metrics.labelname_finish_reason,
+        # )
+        # self._log_histogram(
+        #     self.metrics.histogram_num_prompt_tokens_request,
+        #     stats.num_prompt_tokens_requests,
+        # )
+        # self._log_histogram(
+        #     self.metrics.histogram_num_generation_tokens_request,
+        #     stats.num_generation_tokens_requests,
+        # )
+        # self._log_histogram(self.metrics.histogram_n_request, stats.n_requests)
 
     def _log_prometheus_interval(
         self, prompt_throughput: float, generation_throughput: float
     ) -> None:
+
         # Logs metrics to prometheus that are computed every logging_interval.
         # Support legacy gauge metrics that make throughput calculations on
         # the vLLM side. Moving forward, we should use counters like
@@ -367,33 +371,33 @@ class PrometheusStatLogger(StatLoggerBase):
         self._log_prometheus(stats)
 
         # Save tracked stats for token counters.
-        self.num_prompt_tokens.append(stats.num_prompt_tokens_iter)
-        self.num_generation_tokens.append(stats.num_generation_tokens_iter)
+        # self.num_prompt_tokens.append(stats.num_prompt_tokens_iter)
+        # self.num_generation_tokens.append(stats.num_generation_tokens_iter)
 
-        # Update spec decode metrics
-        self.maybe_update_spec_decode_metrics(stats)
+        # # Update spec decode metrics
+        # self.maybe_update_spec_decode_metrics(stats)
 
-        # Log locally every local_interval seconds.
-        if local_interval_elapsed(stats.now, self.last_local_log, self.local_interval):
-            # Compute summary metrics for tracked stats (and log them
-            # to promethus if applicable).
-            prompt_throughput = get_throughput(
-                self.num_prompt_tokens, now=stats.now, last_log=self.last_local_log
-            )
-            generation_throughput = get_throughput(
-                self.num_generation_tokens, now=stats.now, last_log=self.last_local_log
-            )
+        # # Log locally every local_interval seconds.
+        # if local_interval_elapsed(stats.now, self.last_local_log, self.local_interval):
+        #     # Compute summary metrics for tracked stats (and log them
+        #     # to promethus if applicable).
+        #     prompt_throughput = get_throughput(
+        #         self.num_prompt_tokens, now=stats.now, last_log=self.last_local_log
+        #     )
+        #     generation_throughput = get_throughput(
+        #         self.num_generation_tokens, now=stats.now, last_log=self.last_local_log
+        #     )
 
-            self._log_prometheus_interval(
-                prompt_throughput=prompt_throughput,
-                generation_throughput=generation_throughput,
-            )
+        #     self._log_prometheus_interval(
+        #         prompt_throughput=prompt_throughput,
+        #         generation_throughput=generation_throughput,
+        #     )
 
-            # Reset tracked stats for next interval.
-            self.num_prompt_tokens = []
-            self.num_generation_tokens = []
-            self.last_local_log = stats.now
-            self.spec_decode_metrics = None
+        #     # Reset tracked stats for next interval.
+        #     self.num_prompt_tokens = []
+        #     self.num_generation_tokens = []
+        #     self.last_local_log = stats.now
+        #     self.spec_decode_metrics = None
 
     def info(self, type: str, obj: SupportsMetricsInfo) -> None:
         # Info type metrics are syntactic sugar for a gauge permanently set to 1
