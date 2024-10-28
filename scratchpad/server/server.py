@@ -12,6 +12,7 @@ from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 from scratchpad.scheduler.scheduler import run_scheduler_process
+from scratchpad.server.metrics import PrometheusStatLogger
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -151,7 +152,7 @@ def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     args.model_path = model_name
     args.translate_auto()
-
+    loggers = [PrometheusStatLogger(1, {"name": "server"}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []
@@ -160,12 +161,13 @@ def launch_server(model_name, args: "ServerArgs"):
         tp_size_per_node * args.node_rank,
         tp_size_per_node * (args.node_rank + 1),
     )
+
     for tp_rank in tp_rank_range:
         reader, writer = mp.Pipe(duplex=False)
         gpu_id = tp_rank % tp_size_per_node
         proc = mp.Process(
             target=run_scheduler_process,
-            args=(args, gpu_id, tp_rank, writer),
+            args=(args, gpu_id, tp_rank, writer, loggers),
         )
         proc.start()
         scheduler_procs.append(proc)

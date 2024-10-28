@@ -63,6 +63,8 @@ class ServerArgs:
     # toppings config
     lora_paths: Optional[str] = None
     max_loras_per_batch: int = 1
+    # logging stats
+    enable_stats_logging: bool = True
 
     # debugging
     attention_backend: Optional[str] = None

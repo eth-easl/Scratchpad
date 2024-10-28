@@ -2,7 +2,8 @@ import numpy as np
 from typing import List, Dict, Union
 import prometheus_client
 from typing import Counter as CollectionsCounter
-from scratchpad.server.metric_types import StatLoggerBase, Stats, SupportsMetricsInfo
+from scratchpad.server.metric_types import StatLoggerBase, SupportsMetricsInfo
+from scratchpad.scheduler.stats import Stats
 
 
 def build_1_2_5_buckets(max_value: int) -> List[int]:
@@ -91,7 +92,6 @@ class Metrics:
             labelnames=labelnames,
             multiprocess_mode="sum",
         )
-
         # Iteration stats
         self.counter_num_preemption = self._counter_cls(
             name="scratchpad:num_preemptions_total",
@@ -388,28 +388,6 @@ class PrometheusStatLogger(StatLoggerBase):
                 prompt_throughput=prompt_throughput,
                 generation_throughput=generation_throughput,
             )
-
-            if self.spec_decode_metrics is not None:
-                self._log_gauge(
-                    self.metrics.gauge_spec_decode_draft_acceptance_rate,
-                    self.spec_decode_metrics.draft_acceptance_rate,
-                )
-                self._log_gauge(
-                    self.metrics.gauge_spec_decode_efficiency,
-                    self.spec_decode_metrics.system_efficiency,
-                )
-                self._log_counter(
-                    self.metrics.counter_spec_decode_num_accepted_tokens,
-                    self.spec_decode_metrics.accepted_tokens,
-                )
-                self._log_counter(
-                    self.metrics.counter_spec_decode_num_draft_tokens,
-                    self.spec_decode_metrics.draft_tokens,
-                )
-                self._log_counter(
-                    self.metrics.counter_spec_decode_num_emitted_tokens,
-                    self.spec_decode_metrics.emitted_tokens,
-                )
 
             # Reset tracked stats for next interval.
             self.num_prompt_tokens = []

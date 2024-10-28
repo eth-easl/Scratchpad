@@ -1,45 +1,10 @@
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Protocol
+from typing import Dict, List, Protocol, TYPE_CHECKING
 
-
-@dataclass
-class Stats:
-    """Created by LLMEngine for use by StatLogger."""
-
-    now: float
-
-    # System stats (should have _sys suffix)
-    #   Scheduler State
-    num_running_sys: int
-    num_waiting_sys: int
-    num_swapped_sys: int
-    #   KV Cache Usage in %
-    gpu_cache_usage_sys: float
-    cpu_cache_usage_sys: float
-    #   Prefix caching block hit rate
-    cpu_prefix_cache_hit_rate: float
-    gpu_prefix_cache_hit_rate: float
-
-    # Iteration stats (should have _iter suffix)
-    num_prompt_tokens_iter: int
-    num_generation_tokens_iter: int
-    time_to_first_tokens_iter: List[float]
-    time_per_output_tokens_iter: List[float]
-    num_preemption_iter: int
-
-    # Request stats (should have _requests suffix)
-    #   Latency
-    time_e2e_requests: List[float]
-    #   Metadata
-    num_prompt_tokens_requests: List[int]
-    num_generation_tokens_requests: List[int]
-    n_requests: List[int]
-    finished_reason_requests: List[str]
-    waiting_lora_adapters: List[str]
-    running_lora_adapters: List[str]
-    max_lora: str
+if TYPE_CHECKING:
+    from scratchpad.scheduler.stats import Stats
 
 
 class SupportsMetricsInfo(Protocol):
@@ -58,14 +23,14 @@ class StatLoggerBase(ABC):
         self.local_interval = local_interval
 
     @abstractmethod
-    def log(self, stats: Stats) -> None:
+    def log(self, stats: "Stats") -> None:
         raise NotImplementedError
 
     @abstractmethod
     def info(self, type: str, obj: SupportsMetricsInfo) -> None:
         raise NotImplementedError
 
-    def maybe_update_spec_decode_metrics(self, stats: Stats):
+    def maybe_update_spec_decode_metrics(self, stats: "Stats"):
         """Save spec decode metrics (since they are unlikely
         to be emitted at same time as log interval)."""
         if stats.spec_decode_metrics is not None:

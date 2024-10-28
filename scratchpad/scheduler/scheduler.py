@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import time
 import warnings
-from typing import List, Optional, Union
+from typing import List, Optional, Union, TYPE_CHECKING
 
 import torch
 import zmq
@@ -47,6 +47,9 @@ from scratchpad.utils import (
     logger,
 )
 
+if TYPE_CHECKING:
+    from scratchpad.server.metric_types import StatLoggerBase
+
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SP_IS_IN_CI", "false") == "true"
 
@@ -59,6 +62,7 @@ class Scheduler:
         server_args: ServerArgs,
         gpu_id: int,
         tp_rank: int,
+        loggers: List["StatLoggerBase"],
     ):
         # Parse args
         self.server_args = server_args
@@ -68,7 +72,7 @@ class Scheduler:
         self.disable_regex_jump_forward = server_args.disable_regex_jump_forward
         self.lora_paths = server_args.lora_paths
         self.max_loras_per_batch = server_args.max_loras_per_batch
-
+        self.stats_logger = loggers
         # Init inter-process communication
         context = zmq.Context(2)
 
@@ -313,6 +317,9 @@ class Scheduler:
             f"gen throughput (token/s): {throughput:.2f}, "
             f"#queue-req: {len(self.waiting_queue)}"
         )
+
+    def log_stats(self):
+        pass
 
     def check_memory(self):
         available_size = (
@@ -953,9 +960,10 @@ def run_scheduler_process(
     gpu_id: int,
     tp_rank: int,
     pipe_writer: multiprocessing.connection.Connection,
+    loggers: List["StatLoggerBase"],
 ):
     try:
-        scheduler = Scheduler(server_args, gpu_id, tp_rank)
+        scheduler = Scheduler(server_args, gpu_id, tp_rank, loggers)
         pipe_writer.send("ready")
         scheduler.event_loop()
     except Exception:
