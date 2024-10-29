@@ -3,7 +3,6 @@ from scratchpad.utils import envs, current_platform
 
 
 class CustomOp(nn.Module):
-
     def __init__(self, *args, **kwargs):
         super().__init__()
         self._forward_method = self.dispatch_forward()

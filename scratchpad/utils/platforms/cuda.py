@@ -26,7 +26,6 @@ if pynvml.__file__.endswith("__init__.py"):
 
 
 def with_nvml_context(fn: Callable[_P, _R]) -> Callable[_P, _R]:
-
     @wraps(fn)
     def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         pynvml.nvmlInit()

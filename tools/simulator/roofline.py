@@ -10,7 +10,6 @@ import humanize
 
 
 class RooflineSimulator:
-
     def __init__(
         self,
         model_name: str,

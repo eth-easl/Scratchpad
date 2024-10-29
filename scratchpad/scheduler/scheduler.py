@@ -3,7 +3,7 @@ import multiprocessing
 import os
 import time
 import warnings
-from typing import List, Optional, Union
+from typing import List, Optional, Union, TYPE_CHECKING
 
 import torch
 import zmq
@@ -30,6 +30,7 @@ from scratchpad.scheduler.schedule_batch import (
     Req,
     ScheduleBatch,
 )
+from scratchpad.scheduler.stats import Stats
 from scratchpad.scheduler.policy_scheduler import PrefillAdder, SchedulePolicy
 from ..managers.tp_worker import TpModelWorker
 from scratchpad.memory.chunk_cache import ChunkCache
@@ -47,6 +48,9 @@ from scratchpad.utils import (
     logger,
 )
 
+if TYPE_CHECKING:
+    from scratchpad.server.metric_types import StatLoggerBase
+
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SP_IS_IN_CI", "false") == "true"
 
@@ -59,6 +63,7 @@ class Scheduler:
         server_args: ServerArgs,
         gpu_id: int,
         tp_rank: int,
+        loggers: List["StatLoggerBase"],
     ):
         # Parse args
         self.server_args = server_args
@@ -68,6 +73,7 @@ class Scheduler:
         self.disable_regex_jump_forward = server_args.disable_regex_jump_forward
         self.lora_paths = server_args.lora_paths
         self.max_loras_per_batch = server_args.max_loras_per_batch
+        self.stats_logger = loggers
 
         # Init inter-process communication
         context = zmq.Context(2)
@@ -172,6 +178,7 @@ class Scheduler:
         self.stream_interval = server_args.stream_interval
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
+        self.last_log_time = time.time()
 
         # Init chunked prefill
         self.chunked_prefill_size = server_args.chunked_prefill_size
@@ -303,6 +310,7 @@ class Scheduler:
             self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
         )
         throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
+        self.log_stats(throughput)
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
         logger.info(
@@ -313,6 +321,12 @@ class Scheduler:
             f"gen throughput (token/s): {throughput:.2f}, "
             f"#queue-req: {len(self.waiting_queue)}"
         )
+
+    def log_stats(self, throughput):
+        self.last_log_time = time.time()
+        stats = Stats(time.time(), throughput)
+        for logger in self.stats_logger:
+            logger.log(stats)
 
     def check_memory(self):
         available_size = (
@@ -912,7 +926,7 @@ class Scheduler:
             logger.info("Cache flushed successfully!")
             if_success = True
         else:
-            logging.warning(
+            logger.warning(
                 f"Cache not flushed because there are pending requests. "
                 f"#queue-req: {len(self.waiting_queue)}, "
                 f"#running-req: {0 if self.running_batch is None else len(self.running_batch.reqs)}"
@@ -953,9 +967,10 @@ def run_scheduler_process(
     gpu_id: int,
     tp_rank: int,
     pipe_writer: multiprocessing.connection.Connection,
+    loggers: List["StatLoggerBase"],
 ):
     try:
-        scheduler = Scheduler(server_args, gpu_id, tp_rank)
+        scheduler = Scheduler(server_args, gpu_id, tp_rank, loggers)
         pipe_writer.send("ready")
         scheduler.event_loop()
     except Exception:

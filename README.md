@@ -1,4 +1,3 @@
 # Scratchpad
 
 > Adaptive LLM Inference
-

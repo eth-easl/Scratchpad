@@ -18,7 +18,6 @@ from scratchpad.utils import logger
 
 
 class PyNcclCommunicator:
-
     def __init__(
         self,
         group: ProcessGroup,

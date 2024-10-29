@@ -16,6 +16,7 @@ messages = [
 # output = engine.generate("Who is Alan Turing?")
 output = engine.generate_chat(messages)
 print(output)
+engine.shutdown()
 ```
 
 ## Using Docker
@@ -29,4 +30,10 @@ docker run --runtime nvidia --gpus all \
     --ipc=host \
     ghcr.io/xiaozheyao/scratchpad:0.1.0dev \
     sp serve meta-llama/Llama-3.2-1B-Instruct --host 0.0.0.0 --port 8080
+```
+
+## Monitoring
+
+```
+docker compose -f docker/monitor.yaml up -d
 ```

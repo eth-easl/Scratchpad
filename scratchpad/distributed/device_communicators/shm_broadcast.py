@@ -18,7 +18,6 @@ SP_RINGBUFFER_WARNING_INTERVAL = envs.SP_RINGBUFFER_WARNING_INTERVAL
 
 
 class ShmRingBuffer:
-
     def __init__(
         self,
         n_reader: int,
@@ -158,7 +157,6 @@ class Handle:
 
 
 class MessageQueue:
-
     def __init__(
         self,
         n_reader,  # number of all readers

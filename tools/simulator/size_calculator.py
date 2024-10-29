@@ -24,6 +24,9 @@ def calculate_size(args):
     other_params = embedding_size + lm_head_size
     print(f"Embedding size: {humanize.intword(other_params)}")
     print(
+        f"Linear Only Size (FFN + ATTN): {humanize.intword(total_linear_params)}, Physical size: {humanize.naturalsize(total_linear_params * args.bpw // 8)}"
+    )
+    print(
         f"Total size: {humanize.intword(total_linear_params + other_params)}, Physical size: {humanize.naturalsize((total_linear_params + other_params) * args.bpw // 8)}"
     )
 

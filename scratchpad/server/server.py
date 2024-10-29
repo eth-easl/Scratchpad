@@ -12,6 +12,7 @@ from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 from scratchpad.scheduler.scheduler import run_scheduler_process
+from scratchpad.server.metrics import PrometheusStatLogger
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -26,10 +27,13 @@ from scratchpad.server.openai_api.handler import (
     v1_retrieve_file_content,
 )
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
+from scratchpad.server.controller import mount_metrics
+from scratchpad.server.middlewares import add_api_key_middleware
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
 app = FastAPI()
+mount_metrics(app)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 app.add_middleware(
     CORSMiddleware,
@@ -149,7 +153,10 @@ def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     args.model_path = model_name
     args.translate_auto()
+    if args.api_key:
+        add_api_key_middleware(app, args.api_key)
 
+    loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []
@@ -158,12 +165,13 @@ def launch_server(model_name, args: "ServerArgs"):
         tp_size_per_node * args.node_rank,
         tp_size_per_node * (args.node_rank + 1),
     )
+
     for tp_rank in tp_rank_range:
         reader, writer = mp.Pipe(duplex=False)
         gpu_id = tp_rank % tp_size_per_node
         proc = mp.Process(
             target=run_scheduler_process,
-            args=(args, gpu_id, tp_rank, writer),
+            args=(args, gpu_id, tp_rank, writer, loggers),
         )
         proc.start()
         scheduler_procs.append(proc)
@@ -184,4 +192,5 @@ def launch_server(model_name, args: "ServerArgs"):
     tokenizer_manager = TokenizerManager(args)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
+
     uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")

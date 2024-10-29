@@ -124,7 +124,6 @@ class BaseTokenToKVPool(ABC):
 
 
 class MHATokenToKVPool(BaseTokenToKVPool):
-
     def __init__(
         self,
         size: int,
@@ -182,7 +181,6 @@ class MHATokenToKVPool(BaseTokenToKVPool):
 
 
 class MLATokenToKVPool(BaseTokenToKVPool):
-
     def __init__(
         self,
         size: int,

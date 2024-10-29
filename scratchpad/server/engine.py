@@ -3,7 +3,8 @@ from typing import List, Union, Optional, Dict
 import multiprocessing as mp
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from scratchpad.scheduler.scheduler import run_scheduler_process
-
+import gc
+import torch
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 
@@ -14,6 +15,8 @@ class AsyncLLMEngine:
         args.translate_auto()
         self.args = args
         self.tokenizer_manager = TokenizerManager(args)
+        self.processes: List[mp.Process] = []
+        self.loop = asyncio.get_event_loop()
         self._launch()
 
     def _launch(self):
@@ -48,6 +51,7 @@ class AsyncLLMEngine:
 
         for i in range(len(scheduler_pipe_readers)):
             scheduler_pipe_readers[i].recv()
+        self.processes = scheduler_procs + [detoken_proc]
 
     async def generate_request(self, obj: GenerateReqInput):
         try:
@@ -73,9 +77,8 @@ class AsyncLLMEngine:
             top_logprobs_num=top_logprobs_num,
             lora_path=lora_path,
         )
-
-        # make it synchronous
-        return asyncio.run(self.generate_request(obj))
+        task = self.loop.create_task(self.generate_request(obj))
+        return self.loop.run_until_complete(task)
 
     def generate_chat(
         self,
@@ -99,3 +102,13 @@ class AsyncLLMEngine:
             top_logprobs_num=top_logprobs_num,
             lora_path=lora_path,
         )
+
+    def shutdown(self):
+        for proc in self.processes:
+            proc.terminate()
+        for proc in self.processes:
+            proc.join()
+        self.tokenizer_manager.shutdown()
+        gc.collect()
+        torch.cuda.empty_cache()
+        del self

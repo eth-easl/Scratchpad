@@ -22,3 +22,16 @@ dependencies = {file = ["meta/requirements.txt"]}
 optional-dependencies.extra = { file = ["meta/requirements-extra.txt"] }
 optional-dependencies.dev = { file = ["meta/requirements-dev.txt"] }
 optional-dependencies.benchmark = { file = ["meta/requirements-benchmark.txt"] }
+
+[tool.pytest.ini_options]
+testpaths = "tests"  # directory containing your tests
+norecursedirs = [
+    ".vscode",
+    "__pycache__"
+]
+filterwarnings = [
+    "ignore::DeprecationWarning"
+]
+markers = [
+    "slow: lower-importance tests that take an excessive amount of time",
+]

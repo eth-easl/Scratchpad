@@ -8,8 +8,9 @@ class ServerArgs:
     host: str = "0.0.0.0"
     port: int = 3000
     debug: bool = False
-
+    server_id: str = "default"
     model_path: str = ""
+    api_key: Optional[str] = None
     served_model_name: str = "auto"
     trust_remote_code: bool = True
     json_model_override_args: str = "{}"
@@ -63,6 +64,8 @@ class ServerArgs:
     # toppings config
     lora_paths: Optional[str] = None
     max_loras_per_batch: int = 1
+    # logging stats
+    enable_stats_logging: bool = True
 
     # debugging
     attention_backend: Optional[str] = None
