@@ -86,17 +86,16 @@ class LlamaCompressedMLP(nn.Module):
             intermediate_size,
             hidden_size,
         )
-        if hidden_act != "silu":
-            raise ValueError(
-                f"Unsupported activation: {hidden_act}. "
-                "Only silu is supported for now."
-            )
-        self.act_fn = SiluAndMul()
 
     def forward(self, x):
+        assert not x.isnan().any()
         gate_up = self.gate_up_proj(x)
-        x = self.act_fn(gate_up)
+        assert not gate_up.isnan().any()
+        d = x.shape[-1] // 2
+        x = F.silu(x[..., :d]) * x[..., d:]
+        assert not x.isnan().any()
         x = self.down_proj(x)
+        assert not x.isnan().any()
         return x
 
 class LlamaMoE(nn.Module):
@@ -130,15 +129,12 @@ class LlamaMoE(nn.Module):
             ) for i in range(num_experts)
         ])
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
-        print([n for n, _ in self.named_parameters()])
-
 
     def forward(self, x):
         
         base_y = self.base_mlp(x)
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
-        print(x.shape)
         batch_size, sequence_length, hidden_dim = x.shape
         x = x.view(-1, hidden_dim)
         router_logits = self.gate(x)
@@ -148,32 +144,43 @@ class LlamaMoE(nn.Module):
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
         routing_weights = routing_weights.to(x.dtype)
-
+        assert not routing_weights.isnan().any(), "routing weights have nan"
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
         )
+        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0).contiguous()
 
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-
-        print(expert_mask)
-        print("for loop")
         for expert_idx in range(self.num_experts):
-            print(f"expert {expert_idx}")
             expert_layer = self.mlp[expert_idx]
-            print(expert_mask[expert_idx])
-            idx, top_x = torch.where(expert_mask[expert_idx])
-            print("after where")
+            current_mask = expert_mask
+            current_mask = current_mask[expert_idx]
+            idx, top_x = torch.where(current_mask)
             current_state = x[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
-            print(current_hidden_states.shape)
-            print(current_hidden_states.nelement())
+            assert not torch.isnan(current_state).any(), "current input state has nan"
+            current_hidden_states = expert_layer(current_state) 
+            assert not torch.isnan(current_hidden_states).any(), "current hidden state has nan"
+            current_hidden_states *= routing_weights[top_x, idx, None]
             if current_hidden_states.nelement() != 0:
-                print(current_hidden_states)
-                print(expert_idx)
                 final_hidden_states.index_add_(0, top_x, current_hidden_states.to(x.dtype))
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         final_hidden_states = final_hidden_states.view(original_shape)
-        return final_hidden_states + base_y
+
+        final_hidden_states = final_hidden_states.contiguous()
+        base_y = base_y.contiguous()
+        
+        # For debugging
+        # assert final_hidden_states.is_contiguous(), "final_hidden_states is not contiguous"
+        # assert base_y.is_contiguous(), "base_y is not contiguous"
+        # assert final_hidden_states.device == base_y.device, "Tensors are on different devices"
+        # assert final_hidden_states.dtype == base_y.dtype, "Tensors have different dtypes"
+        # assert not torch.isnan(final_hidden_states).any(), "NaN found in final_hidden_states"
+        # assert not torch.isnan(base_y).any(), "NaN found in base_y"
+        # assert not torch.isinf(final_hidden_states).any(), "Inf found in final_hidden_states"
+        # assert not torch.isinf(base_y).any(), "Inf found in base_y"
+        # assert final_hidden_states.shape == base_y.shape, "Tensors have different shapes"
+        # torch.cuda.synchronize()
+        result = final_hidden_states + base_y
+        return result
 
 class LlamaAttention(nn.Module):
     def __init__(
@@ -467,18 +474,14 @@ class LlamaMoEForCausalLM(nn.Module):
         ]
         params_dict = dict(self.named_parameters())
 
-        print("PARAMETERS")
-        for name, _ in self.named_parameters():
-            print(name)
-            
-        print("Weight names")
         name_transformations = [
             ("down_proj.0", "down_proj"),
             ("gate_up_proj.0", "gate_up_proj"),
             ("mlp.EXPERT_ID", "base_mlp")
         ]
         for name, loaded_weight in weights:
-            print(name)
+            # print(name)
+            assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
                 continue
@@ -511,11 +514,9 @@ class LlamaMoEForCausalLM(nn.Module):
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
-                print(name)
                 for transformation in name_transformations:
                     if transformation[0] in name:
                         name = name.replace(transformation[0], transformation[1])
-                print(name)
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
