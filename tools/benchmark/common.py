@@ -4,13 +4,15 @@ import os
 import asyncio
 import numpy as np
 import sys
+import aiohttp
 import time
 import traceback
 from dataclasses import dataclass, field
 from typing import List, Optional, Union, Tuple, AsyncGenerator
 from tqdm.asyncio import tqdm
-import aiohttp
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
+from transformers import AutoTokenizer
+from tqdm import tqdm
 
 AIOHTTP_TIMEOUT = aiohttp.ClientTimeout(total=6 * 60 * 60)
 
@@ -141,10 +143,34 @@ async def get_request(
         await asyncio.sleep(interval)
 
 
-def construct_dataset(dataset_id: str):
+def construct_dataset(
+    endpoint: str, dataset_id: str, tokenizer_id: str, size: int = -1
+) -> List[RequestFuncInput]:
     dataset_name, dataset_split = dataset_id.split(":")
-    print(f"Constructing dataset {dataset_name} {dataset_split}")
+    print(f"Constructing dataset {dataset_name}, split: {dataset_split}")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
     dataset = load_dataset(dataset_name, dataset_split)
-    for example in dataset["train"]:
-        print(example)
-        break
+    if not isinstance(dataset, DatasetDict):
+        raise ValueError(
+            f"Dataset {dataset_id} not supported, got type {type(dataset)}"
+        )
+    dataset = dataset["train"]
+    if size != -1:
+        dataset = dataset.select(range(size))
+    requests: List[RequestFuncInput] = []
+    for req in tqdm(dataset):
+        conversations = req["conversations"]
+        len_convs = len(conversations) // 2
+        for i in range(len_convs):
+            prompt = conversations[2 * i]["content"]
+            response = conversations[2 * i + 1]["content"]
+            req = RequestFuncInput(
+                prompt=prompt,
+                api_url=endpoint,
+                prompt_len=len(tokenizer(prompt)["input_ids"]),
+                output_len=len(tokenizer(response)["input_ids"]),
+                model=tokenizer_id,
+                ignore_eos=True,
+            )
+            requests.append(req)
+    return requests

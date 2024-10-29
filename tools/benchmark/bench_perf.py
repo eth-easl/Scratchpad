@@ -1,10 +1,12 @@
 import requests
-from tools.benchmark.common import construct_dataset
+from tools.benchmark.common import construct_dataset, RequestFuncInput
 
 
 def benchmark(args):
     print(args)
-    construct_dataset(args.dataset)
+    requests = construct_dataset(
+        args.endpoint, args.dataset, args.tokenizer, args.num_prompts
+    )
 
 
 if __name__ == "__main__":
@@ -12,6 +14,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", type=str, default="http://localhost:8080/")
+    parser.add_argument("--tokenizer", type=str, default="meta-llama/Llama-3.2-1B")
     parser.add_argument(
         "--request-rate",
         type=float,
