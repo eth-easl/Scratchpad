@@ -10,6 +10,7 @@ class ServerArgs:
     debug: bool = False
     server_id: str = "default"
     model_path: str = ""
+    api_key: Optional[str] = None
     served_model_name: str = "auto"
     trust_remote_code: bool = True
     json_model_override_args: str = "{}"

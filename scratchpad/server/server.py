@@ -28,6 +28,7 @@ from scratchpad.server.openai_api.handler import (
 )
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
 from scratchpad.server.controller import mount_metrics
+from scratchpad.server.middlewares import add_api_key_middleware
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
@@ -152,6 +153,9 @@ def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     args.model_path = model_name
     args.translate_auto()
+    if args.api_key:
+        add_api_key_middleware(app, args.api_key)
+
     loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
@@ -188,4 +192,5 @@ def launch_server(model_name, args: "ServerArgs"):
     tokenizer_manager = TokenizerManager(args)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
+
     uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")
