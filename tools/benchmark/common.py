@@ -175,11 +175,10 @@ async def get_request(
 
 
 def construct_dataset(
-    endpoint: str, dataset_id: str, tokenizer_id: str, size: int = -1
+    endpoint: str, dataset_id: str, tokenizer: PreTrainedTokenizerBase, size: int = -1
 ) -> List[RequestFuncInput]:
     dataset_name, dataset_split = dataset_id.split(":")
     print(f"Constructing dataset {dataset_name}, split: {dataset_split}")
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
     dataset = load_dataset(dataset_name, dataset_split)
     if not isinstance(dataset, DatasetDict):
         raise ValueError(
@@ -200,7 +199,7 @@ def construct_dataset(
                 api_url=endpoint + "v1/completions",
                 prompt_len=len(tokenizer(prompt)["input_ids"]),
                 output_len=len(tokenizer(response)["input_ids"]),
-                model=tokenizer_id,
+                model="",
                 ignore_eos=True,
             )
             requests.append(req)
@@ -214,7 +213,7 @@ def calculate_metrics(
     tokenizer: PreTrainedTokenizerBase,
     selected_percentile_metrics: List[str],
     selected_percentiles: List[float],
-    gootput_config_dict: Dict[str, float],
+    goodput_config_dict: Dict[str, float],
 ) -> Tuple[BenchmarkMetrics, List[int]]:
     actual_output_lens: List[int] = []
     total_input = 0
@@ -235,7 +234,7 @@ def calculate_metrics(
                 tokenizer(outputs[i].generated_text, add_special_tokens=False).input_ids
             )
             actual_output_lens.append(output_len)
-            total_input += input_requests[i][1]
+            total_input += input_requests[i].prompt_len
             tpot = 0
             if output_len > 1:
                 tpot = (outputs[i].latency - outputs[i].ttft) / (output_len - 1)
@@ -249,24 +248,24 @@ def calculate_metrics(
         else:
             actual_output_lens.append(0)
 
-    if gootput_config_dict:
+    if goodput_config_dict:
         valid_metrics = []
         slo_values = []
 
-        if "ttft" in gootput_config_dict:
+        if "ttft" in goodput_config_dict:
             valid_metrics.append(ttfts)
             slo_values.append(
-                gootput_config_dict["ttft"] / MILLISECONDS_TO_SECONDS_CONVERSION
+                goodput_config_dict["ttft"] / MILLISECONDS_TO_SECONDS_CONVERSION
             )
-        if "tpot" in gootput_config_dict:
+        if "tpot" in goodput_config_dict:
             valid_metrics.append(all_tpots)
             slo_values.append(
-                gootput_config_dict["tpot"] / MILLISECONDS_TO_SECONDS_CONVERSION
+                goodput_config_dict["tpot"] / MILLISECONDS_TO_SECONDS_CONVERSION
             )
-        if "e2el" in gootput_config_dict:
+        if "e2el" in goodput_config_dict:
             valid_metrics.append(e2els)
             slo_values.append(
-                gootput_config_dict["e2el"] / MILLISECONDS_TO_SECONDS_CONVERSION
+                goodput_config_dict["e2el"] / MILLISECONDS_TO_SECONDS_CONVERSION
             )
 
         for req_metric in zip(*valid_metrics):
