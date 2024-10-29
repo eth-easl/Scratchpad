@@ -4,13 +4,12 @@ import multiprocessing as mp
 import threading
 import uvloop
 import uvicorn
-from fastapi import FastAPI, Request, File, Form, UploadFile
 from http import HTTPStatus
+from dataclasses import asdict
+from fastapi import FastAPI, Request, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
-from .args import ServerArgs
-from .protocol import GenerateReqInput
 from scratchpad.scheduler.scheduler import run_scheduler_process
 from scratchpad.server.metrics import PrometheusStatLogger
 from scratchpad.server.openai_api.handler import (
@@ -26,9 +25,11 @@ from scratchpad.server.openai_api.handler import (
     v1_retrieve_file,
     v1_retrieve_file_content,
 )
-from scratchpad.server.openai_api.protocol import ModelCard, ModelList
 from scratchpad.server.controller import mount_metrics
 from scratchpad.server.middlewares import add_api_key_middleware
+from scratchpad.server.openai_api.protocol import ModelCard, ModelList
+from .args import ServerArgs
+from .protocol import GenerateReqInput
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
@@ -43,6 +44,12 @@ app.add_middleware(
     allow_credentials=True,
 )
 tokenizer_manager = None
+server_args = None
+
+
+@app.get("/system_info")
+async def system_info():
+    return JSONResponse(status_code=200, content={"system_info": asdict(server_args)})
 
 
 @app.get("/health")
@@ -151,6 +158,9 @@ async def retrieve_file_content(file_id: str):
 
 def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
+    global server_args
+
+    server_args = args
     args.model_path = model_name
     args.translate_auto()
     if args.api_key:

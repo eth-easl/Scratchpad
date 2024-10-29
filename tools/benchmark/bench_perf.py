@@ -1,4 +1,6 @@
 import time
+import argparse
+from argparse import Namespace
 import asyncio
 import requests
 import numpy as np
@@ -9,14 +11,15 @@ from tools.benchmark.common import (
     construct_dataset,
     get_request,
     async_request_openai_completions,
+    async_request_sp_sysinfo,
     RequestFuncOutput,
     RequestFuncInput,
     calculate_metrics,
 )
-from tools.benchmark.report import print_benchmark
+from tools.benchmark.report import print_benchmark, write_benchmark
 
 
-def check_goodput_args(args):
+def check_goodput_args(args: Namespace):
     # Check and parse goodput arguments
     gootput_config_dict = {}
     VALID_NAMES = ["ttft", "tpot", "e2el"]
@@ -55,15 +58,14 @@ def parse_goodput(slo_pairs):
 
 
 async def run_benchmark(
+    args: Namespace,
     input_requests: List[RequestFuncInput],
-    request_rate: float,
     request_func: Callable,
     tokenizer: PreTrainedTokenizerBase,
-    selected_percentile_metrics: List[str],
-    selected_percentiles: List[str],
     goodput_config_dict: Dict[str, float],
     max_concurrency: Optional[int] = None,
 ):
+    system_info = await async_request_sp_sysinfo(args.endpoint)
     pbar = tqdm(total=len(input_requests))
     tasks: List[asyncio.Task] = []
     semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
@@ -75,7 +77,7 @@ async def run_benchmark(
             return await request_func(request_func_input=request_func_input, pbar=pbar)
 
     benchmark_start_time = time.perf_counter()
-    async for request in get_request(input_requests, request_rate):
+    async for request in get_request(input_requests, args.request_rate):
         tasks.append(
             asyncio.create_task(
                 limited_request_func(request_func_input=request, pbar=pbar)
@@ -91,11 +93,20 @@ async def run_benchmark(
         outputs=outputs,
         dur_s=benchmark_duration,
         tokenizer=tokenizer,
-        selected_percentiles=selected_percentiles,
-        selected_percentile_metrics=selected_percentile_metrics,
+        selected_percentile_metrics=args.percentile_metrics.split(","),
+        selected_percentiles=[float(p) for p in args.metric_percentiles.split(",")],
         goodput_config_dict=goodput_config_dict,
     )
     print_benchmark(metrics)
+    if args.output:
+        output_file = write_benchmark(
+            metrics,
+            args.output,
+            system_info,
+            args,
+            outputs,
+        )
+        print(f"Results written to {output_file}")
     return metrics
 
 
@@ -113,19 +124,16 @@ def benchmark(args):
     gootput_config_dict = check_goodput_args(args)
     asyncio.run(
         run_benchmark(
+            args,
             requests,
-            args.request_rate,
             request_func,
             tokenizer,
-            args.percentile_metrics.split(","),
-            selected_percentiles=[float(p) for p in args.metric_percentiles.split(",")],
             goodput_config_dict=gootput_config_dict,
         )
     )
 
 
 if __name__ == "__main__":
-    import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", type=str, default="http://localhost:8080/")
@@ -151,6 +159,12 @@ if __name__ == "__main__":
         type=str,
         default="xiaozheyao/MegaChat:sharegpt",
         help="Dataset to use for prompts.",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=".local/benchmark_output",
+        help="Output file to save the benchmark results.",
     )
     parser.add_argument(
         "--percentile-metrics",

@@ -279,6 +279,7 @@ def calculate_metrics(
             "on the benchmark arguments.",
             stacklevel=2,
         )
+
     metrics = BenchmarkMetrics(
         completed=completed,
         total_input=total_input,
@@ -315,3 +316,26 @@ def calculate_metrics(
     )
 
     return metrics, actual_output_lens
+
+
+async def async_request_sp_sysinfo(
+    endpoint: str,
+) -> RequestFuncOutput:
+    endpoint = endpoint + "system_info"
+    assert endpoint.endswith(
+        ("system_info")
+    ), "Scratchpad System Info API URL must end with 'system_info'."
+
+    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+        try:
+            async with session.get(
+                url=endpoint,
+            ) as response:
+                if response.status != 200:
+                    raise ValueError(
+                        f"Scratchpad System Info API failed with status code {response.status}"
+                    )
+                output = await response.json()
+        except Exception as e:
+            raise ValueError(f"Scratchpad System Info API failed with error: {str(e)}")
+    return output
