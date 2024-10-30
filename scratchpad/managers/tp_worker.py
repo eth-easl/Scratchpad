@@ -133,4 +133,4 @@ class TpModelWorker:
                 f"Memory pool is not a HeterogeneousMHATokenToKVPool, not possible to expand memory pool, got {type(self.model_runner.token_to_kv_pool)}"
             )
             return
-        self.model_runner.token_to_kv_pool.expand(increments, self.model_runner.gpu_id)
+        self.model_runner.expand_kv_pool(increments)

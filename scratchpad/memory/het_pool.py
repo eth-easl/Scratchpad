@@ -107,3 +107,4 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
         logger.info(
             f"expand token kv pool to {self.size + increments}, avail mem={get_available_gpu_memory(gpu_id):.2f} GB"
         )
+        self.size += increments

@@ -528,6 +528,16 @@ class ModelRunner:
 
         return logits
 
+    def expand_kv_pool(self, increments):
+        if self.server_args.use_heterogeneous_pool and isinstance(
+            self.token_to_kv_pool, HeterogeneousMHATokenToKVPool
+        ):
+            try:
+                self.token_to_kv_pool.expand(increments, self.gpu_id)
+                self.max_total_num_tokens += increments
+            except Exception as e:
+                pass
+
 
 @lru_cache()
 def import_model_classes():
