@@ -1,10 +1,10 @@
 import asyncio
 import json
-import multiprocessing as mp
 import threading
 import uvloop
 import uvicorn
 from http import HTTPStatus
+import multiprocessing as mp
 from dataclasses import asdict
 from fastapi import FastAPI, Request, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from scratchpad.scheduler.scheduler import run_scheduler_process
 from scratchpad.server.metrics import PrometheusStatLogger
+
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -25,9 +26,14 @@ from scratchpad.server.openai_api.handler import (
     v1_retrieve_file,
     v1_retrieve_file_content,
 )
-from scratchpad.server.controller import mount_metrics
+from scratchpad.server.controller import (
+    mount_metrics,
+    start_controller,
+    mount_controller,
+)
 from scratchpad.server.middlewares import add_api_key_middleware
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
+
 from .args import ServerArgs
 from .protocol import GenerateReqInput
 
@@ -197,6 +203,9 @@ def launch_server(model_name, args: "ServerArgs"):
         args=(args,),
     )
     detoken_proc.start()
+    if args.enable_system_controller:
+        start_controller(args)
+    mount_controller(app)
 
     # Launch tokenizer process
     tokenizer_manager = TokenizerManager(args)

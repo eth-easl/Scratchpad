@@ -29,6 +29,9 @@ from scratchpad.memory.pool import (
     MLATokenToKVPool,
     ReqToTokenPool,
 )
+from scratchpad.memory.het_pool import (
+    HeterogeneousMHATokenToKVPool,
+)
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.server.args import ServerArgs
@@ -393,6 +396,15 @@ class ModelRunner:
                 dtype=self.kv_cache_dtype,
                 kv_lora_rank=self.model_config.kv_lora_rank,
                 qk_rope_head_dim=self.model_config.qk_rope_head_dim,
+                layer_num=self.model_config.num_hidden_layers,
+            )
+        elif self.server_args.use_heterogeneous_pool:
+            self.token_to_kv_pool = HeterogeneousMHATokenToKVPool(
+                self.max_total_num_tokens,
+                cpu_size=1024,
+                dtype=self.kv_cache_dtype,
+                head_num=self.model_config.get_num_kv_heads(self.tp_size),
+                head_dim=self.model_config.head_dim,
                 layer_num=self.model_config.num_hidden_layers,
             )
         else:

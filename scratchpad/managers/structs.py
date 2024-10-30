@@ -144,6 +144,17 @@ class GenerateReqInput:
 
 
 @dataclass
+class MemoryPoolControlReqInput:
+    delta: int
+    is_expand: bool = False
+    is_shrink: bool = False
+
+    def __post_init__(self):
+        if self.is_expand and self.is_shrink:
+            raise ValueError("is_expand and is_shrink cannot be True at the same time.")
+
+
+@dataclass
 class TokenizedGenerateReqInput:
     # The request id
     rid: str

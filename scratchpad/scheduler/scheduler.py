@@ -22,6 +22,7 @@ from ..managers.structs import (
     TokenizedRewardReqInput,
     UpdateWeightReqInput,
     UpdateWeightReqOutput,
+    MemoryPoolControlReqInput,
 )
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -88,6 +89,11 @@ class Scheduler:
             self.send_to_detokenizer.connect(
                 f"tcp://127.0.0.1:{server_args.detokenizer_port}"
             )
+            if self.server_args.enable_system_controller:
+                self.recv_from_controller = context.socket(zmq.PULL)
+                self.recv_from_controller.bind(
+                    f"tcp://127.0.0.1:{server_args.controller_port}"
+                )
         else:
             self.recv_from_tokenizer = self.send_to_detokenizer = None
 
@@ -236,14 +242,18 @@ class Scheduler:
 
     def recv_requests_from_zmq(self):
         recv_reqs = []
-
         while True:
             try:
                 recv_req = self.recv_from_tokenizer.recv_pyobj(zmq.NOBLOCK)
+                print(f"Received MemoryPoolControlReqInput: {recv_req}")
             except zmq.ZMQError:
                 break
             recv_reqs.append(recv_req)
-
+            try:
+                recv_req = self.recv_from_controller.recv_pyobj(zmq.NOBLOCK)
+            except zmq.ZMQError:
+                break
+            recv_reqs.append(recv_req)
         return recv_reqs
 
     def process_requests(self, recv_reqs: List):
@@ -263,6 +273,8 @@ class Scheduler:
             elif isinstance(recv_req, UpdateWeightReqInput):
                 success, message = self.update_weights(recv_req)
                 self.out_pyobjs.append(UpdateWeightReqOutput(success, message))
+            elif isinstance(recv_req, MemoryPoolControlReqInput):
+                self.tp_worker.expand_memory_pool(recv_req.delta)
             else:
                 raise ValueError(f"Invalid request: {recv_req}")
 
