@@ -7,6 +7,7 @@ from scratchpad.utils import logger
 
 _GENERATION_MODELS = {
     "LlamaForCausalLM": ("llama", "LlamaForCausalLM"),
+    "LlamaMoEForCausalLM": ("llama_moe", "LlamaMoEForCausalLM")
 }
 
 _EMBEDDING_MODELS = {
