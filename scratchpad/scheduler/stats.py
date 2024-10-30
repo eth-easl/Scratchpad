@@ -8,3 +8,7 @@ class Stats:
 
     now: float
     generation_throughput: float
+    running_requests: int
+    queued_requests: int
+    token_usage: float
+    used_token_pool: int

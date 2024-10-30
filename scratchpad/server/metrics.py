@@ -50,177 +50,24 @@ class Metrics:
             labelnames=labelnames,
             multiprocess_mode="sum",
         )
-        self.gauge_lora_info = self._gauge_cls(
-            name="scratchpad:lora_requests_info",
-            documentation="Running stats on lora requests.",
-            labelnames=[
-                self.labelname_running_lora_adapters,
-                self.labelname_max_lora,
-                self.labelname_waiting_lora_adapters,
-            ],
-            multiprocess_mode="livemostrecent",
-        )
-        self.gauge_scheduler_swapped = self._gauge_cls(
-            name="scratchpad:num_requests_swapped",
-            documentation="Number of requests swapped to CPU.",
+        self.gauge_mempool_usage = self._gauge_cls(
+            name="scratchpad:mempool_usage",
+            documentation="Memory pool usage.",
             labelnames=labelnames,
-            multiprocess_mode="sum",
+            multiprocess_mode="mostrecent",
         )
-        #   KV Cache Usage in %
-        self.gauge_gpu_cache_usage = self._gauge_cls(
-            name="scratchpad:gpu_cache_usage_perc",
-            documentation="GPU KV-cache usage. 1 means 100 percent usage.",
+        self.gauge_mempool_usage_pct = self._gauge_cls(
+            name="scratchpad:mempool_usage_percent",
+            documentation="Memory pool usage (pct).",
             labelnames=labelnames,
-            multiprocess_mode="sum",
+            multiprocess_mode="mostrecent",
         )
-        self.gauge_cpu_cache_usage = self._gauge_cls(
-            name="scratchpad:cpu_cache_usage_perc",
-            documentation="CPU KV-cache usage. 1 means 100 percent usage.",
-            labelnames=labelnames,
-            multiprocess_mode="sum",
-        )
-        #   Prefix caching block hit rate
-        self.gauge_cpu_prefix_cache_hit_rate = self._gauge_cls(
-            name="scratchpad:cpu_prefix_cache_hit_rate",
-            documentation="CPU prefix cache block hit rate.",
-            labelnames=labelnames,
-            multiprocess_mode="sum",
-        )
-        self.gauge_gpu_prefix_cache_hit_rate = self._gauge_cls(
-            name="scratchpad:gpu_prefix_cache_hit_rate",
-            documentation="GPU prefix cache block hit rate.",
-            labelnames=labelnames,
-            multiprocess_mode="sum",
-        )
-        # Iteration stats
-        self.counter_num_preemption = self._counter_cls(
-            name="scratchpad:num_preemptions_total",
-            documentation="Cumulative number of preemption from the engine.",
-            labelnames=labelnames,
-        )
-        self.counter_prompt_tokens = self._counter_cls(
-            name="scratchpad:prompt_tokens_total",
-            documentation="Number of prefill tokens processed.",
-            labelnames=labelnames,
-        )
-        self.counter_generation_tokens = self._counter_cls(
-            name="scratchpad:generation_tokens_total",
-            documentation="Number of generation tokens processed.",
-            labelnames=labelnames,
-        )
-        self.histogram_time_to_first_token = self._histogram_cls(
-            name="scratchpad:time_to_first_token_seconds",
-            documentation="Histogram of time to first token in seconds.",
-            labelnames=labelnames,
-            buckets=[
-                0.001,
-                0.005,
-                0.01,
-                0.02,
-                0.04,
-                0.06,
-                0.08,
-                0.1,
-                0.25,
-                0.5,
-                0.75,
-                1.0,
-                2.5,
-                5.0,
-                7.5,
-                10.0,
-            ],
-        )
-        self.histogram_time_per_output_token = self._histogram_cls(
-            name="scratchpad:time_per_output_token_seconds",
-            documentation="Histogram of time per output token in seconds.",
-            labelnames=labelnames,
-            buckets=[
-                0.01,
-                0.025,
-                0.05,
-                0.075,
-                0.1,
-                0.15,
-                0.2,
-                0.3,
-                0.4,
-                0.5,
-                0.75,
-                1.0,
-                2.5,
-            ],
-        )
-        # Request stats
-        #   Latency
-        self.histogram_e2e_time_request = self._histogram_cls(
-            name="scratchpad:e2e_request_latency_seconds",
-            documentation="Histogram of end to end request latency in seconds.",
-            labelnames=labelnames,
-            buckets=[1.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0],
-        )
-        #   Metadata
-        self.histogram_num_prompt_tokens_request = self._histogram_cls(
-            name="scratchpad:request_prompt_tokens",
-            documentation="Number of prefill tokens processed.",
-            labelnames=labelnames,
-            buckets=build_1_2_5_buckets(max_model_len),
-        )
-        self.histogram_num_generation_tokens_request = self._histogram_cls(
-            name="scratchpad:request_generation_tokens",
-            documentation="Number of generation tokens processed.",
-            labelnames=labelnames,
-            buckets=build_1_2_5_buckets(max_model_len),
-        )
-        self.histogram_n_request = self._histogram_cls(
-            name="scratchpad:request_params_n",
-            documentation="Histogram of the n request parameter.",
-            labelnames=labelnames,
-            buckets=[1, 2, 5, 10, 20],
-        )
-        self.counter_request_success = self._counter_cls(
-            name="scratchpad:request_success_total",
-            documentation="Count of successfully processed requests.",
-            labelnames=labelnames + [Metrics.labelname_finish_reason],
-        )
-
-        # Speculatie decoding stats
-        self.gauge_spec_decode_draft_acceptance_rate = self._gauge_cls(
-            name="scratchpad:spec_decode_draft_acceptance_rate",
-            documentation="Speulative token acceptance rate.",
-            labelnames=labelnames,
-            multiprocess_mode="sum",
-        )
-        self.gauge_spec_decode_efficiency = self._gauge_cls(
-            name="scratchpad:spec_decode_efficiency",
-            documentation="Speculative decoding system efficiency.",
-            labelnames=labelnames,
-            multiprocess_mode="sum",
-        )
-        self.counter_spec_decode_num_accepted_tokens = self._counter_cls(
-            name="scratchpad:spec_decode_num_accepted_tokens_total",
-            documentation="Number of accepted tokens.",
-            labelnames=labelnames,
-        )
-        self.counter_spec_decode_num_draft_tokens = self._counter_cls(
-            name="scratchpad:spec_decode_num_draft_tokens_total",
-            documentation="Number of draft tokens.",
-            labelnames=labelnames,
-        )
-        self.counter_spec_decode_num_emitted_tokens = self._counter_cls(
-            name="scratchpad:spec_decode_num_emitted_tokens_total",
-            documentation="Number of emitted tokens.",
-            labelnames=labelnames,
-        )
-
-        # Deprecated in favor of scratchpad:prompt_tokens_total
         self.gauge_avg_prompt_throughput = self._gauge_cls(
             name="scratchpad:avg_prompt_throughput_toks_per_s",
             documentation="Average prefill throughput in tokens/s.",
             labelnames=labelnames,
             multiprocess_mode="sum",
         )
-        # Deprecated in favor of scratchpad:generation_tokens_total
         self.gauge_avg_generation_throughput = self._gauge_cls(
             name="scratchpad:avg_generation_throughput_toks_per_s",
             documentation="Average generation throughput in tokens/s.",
@@ -281,71 +128,22 @@ class PrometheusStatLogger(StatLoggerBase):
         self._log_gauge(
             self.metrics.gauge_avg_generation_throughput, stats.generation_throughput
         )
-        # System state data
-        # self._log_gauge(self.metrics.gauge_scheduler_running, stats.num_running_sys)
-        # self._log_gauge(self.metrics.gauge_scheduler_swapped, stats.num_swapped_sys)
-        # self._log_gauge(self.metrics.gauge_scheduler_waiting, stats.num_waiting_sys)
-        # self._log_gauge(self.metrics.gauge_gpu_cache_usage, stats.gpu_cache_usage_sys)
-        # self._log_gauge(self.metrics.gauge_cpu_cache_usage, stats.cpu_cache_usage_sys)
-        # self._log_gauge(
-        #     self.metrics.gauge_cpu_prefix_cache_hit_rate,
-        #     stats.cpu_prefix_cache_hit_rate,
-        # )
-        # self._log_gauge(
-        #     self.metrics.gauge_gpu_prefix_cache_hit_rate,
-        #     stats.gpu_prefix_cache_hit_rate,
-        # )
-        # Including max-lora in metric, in future this property of lora
-        # config maybe extended to be dynamic.
-        # lora_info = {
-        #     self.metrics.labelname_running_lora_adapters: ",".join(
-        #         stats.running_lora_adapters
-        #     ),
-        #     self.metrics.labelname_waiting_lora_adapters: ",".join(
-        #         stats.waiting_lora_adapters
-        #     ),
-        #     self.metrics.labelname_max_lora: stats.max_lora,
-        # }
-        # self._log_gauge_string(self.metrics.gauge_lora_info, lora_info)
-        # # Iteration level data
-        # self._log_counter(
-        #     self.metrics.counter_num_preemption, stats.num_preemption_iter
-        # )
-        # self._log_counter(
-        #     self.metrics.counter_prompt_tokens, stats.num_prompt_tokens_iter
-        # )
-        # self._log_counter(
-        #     self.metrics.counter_generation_tokens, stats.num_generation_tokens_iter
-        # )
-        # self._log_histogram(
-        #     self.metrics.histogram_time_to_first_token, stats.time_to_first_tokens_iter
-        # )
-        # self._log_histogram(
-        #     self.metrics.histogram_time_per_output_token,
-        #     stats.time_per_output_tokens_iter,
-        # )
-
-        # Request level data
-        # Latency
-        # self._log_histogram(
-        #     self.metrics.histogram_e2e_time_request, stats.time_e2e_requests
-        # )
-        # # Metadata
-        # finished_reason_counter = CollectionsCounter(stats.finished_reason_requests)
-        # self._log_counter_labels(
-        #     self.metrics.counter_request_success,
-        #     finished_reason_counter,
-        #     Metrics.labelname_finish_reason,
-        # )
-        # self._log_histogram(
-        #     self.metrics.histogram_num_prompt_tokens_request,
-        #     stats.num_prompt_tokens_requests,
-        # )
-        # self._log_histogram(
-        #     self.metrics.histogram_num_generation_tokens_request,
-        #     stats.num_generation_tokens_requests,
-        # )
-        # self._log_histogram(self.metrics.histogram_n_request, stats.n_requests)
+        self._log_gauge(
+            self.metrics.gauge_scheduler_running,
+            stats.running_requests,
+        )
+        self._log_gauge(
+            self.metrics.gauge_scheduler_waiting,
+            stats.queued_requests,
+        )
+        self._log_gauge(
+            self.metrics.gauge_mempool_usage_pct,
+            stats.token_usage,
+        )
+        self._log_gauge(
+            self.metrics.gauge_mempool_usage_pct,
+            stats.used_token_pool,
+        )
 
     def _log_prometheus_interval(
         self, prompt_throughput: float, generation_throughput: float
@@ -369,35 +167,6 @@ class PrometheusStatLogger(StatLoggerBase):
         """Logs to prometheus and tracked stats every iteration."""
         # Log to prometheus.
         self._log_prometheus(stats)
-
-        # Save tracked stats for token counters.
-        # self.num_prompt_tokens.append(stats.num_prompt_tokens_iter)
-        # self.num_generation_tokens.append(stats.num_generation_tokens_iter)
-
-        # # Update spec decode metrics
-        # self.maybe_update_spec_decode_metrics(stats)
-
-        # # Log locally every local_interval seconds.
-        # if local_interval_elapsed(stats.now, self.last_local_log, self.local_interval):
-        #     # Compute summary metrics for tracked stats (and log them
-        #     # to promethus if applicable).
-        #     prompt_throughput = get_throughput(
-        #         self.num_prompt_tokens, now=stats.now, last_log=self.last_local_log
-        #     )
-        #     generation_throughput = get_throughput(
-        #         self.num_generation_tokens, now=stats.now, last_log=self.last_local_log
-        #     )
-
-        #     self._log_prometheus_interval(
-        #         prompt_throughput=prompt_throughput,
-        #         generation_throughput=generation_throughput,
-        #     )
-
-        #     # Reset tracked stats for next interval.
-        #     self.num_prompt_tokens = []
-        #     self.num_generation_tokens = []
-        #     self.last_local_log = stats.now
-        #     self.spec_decode_metrics = None
 
     def info(self, type: str, obj: SupportsMetricsInfo) -> None:
         # Info type metrics are syntactic sugar for a gauge permanently set to 1

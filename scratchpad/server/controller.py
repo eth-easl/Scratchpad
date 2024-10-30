@@ -40,7 +40,9 @@ def mount_metrics(app: FastAPI):
 
 
 async def increase_memory_pool_size(request):
-    controller.control_memory_pool(MemoryPoolControlReqInput(is_expand=True, delta=50))
+    controller.control_memory_pool(
+        MemoryPoolControlReqInput(is_expand=True, delta=1000)
+    )
     return JSONResponse(content={"message": "Memory pool size increased by 50"})
 
 

@@ -105,6 +105,6 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
             self.k_buffer[i] = torch.cat([self.k_buffer[i], new_k_buffer[i]], dim=0)
             self.v_buffer[i] = torch.cat([self.v_buffer[i], new_v_buffer[i]], dim=0)
         logger.info(
-            f"expand token kv pool to {self.size + increments}, avail mem={get_available_gpu_memory(gpu_id):.2f} GB"
+            f"Expand token kv pool to {self.size + increments}, avail mem={get_available_gpu_memory(gpu_id):.2f} GB"
         )
         self.size += increments

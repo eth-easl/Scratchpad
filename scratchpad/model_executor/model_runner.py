@@ -534,9 +534,13 @@ class ModelRunner:
         ):
             try:
                 self.token_to_kv_pool.expand(increments, self.gpu_id)
+                self.reconfigure_post_mempool_adjuts()
                 self.max_total_num_tokens += increments
             except Exception as e:
                 pass
+
+    def reconfigure_post_mempool_adjuts(self):
+        pass
 
 
 @lru_cache()
