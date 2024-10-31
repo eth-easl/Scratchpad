@@ -138,10 +138,10 @@ class PrometheusStatLogger(StatLoggerBase):
         )
         self._log_gauge(
             self.metrics.gauge_mempool_usage_pct,
-            stats.token_usage,
+            100 * stats.token_usage,
         )
         self._log_gauge(
-            self.metrics.gauge_mempool_usage_pct,
+            self.metrics.gauge_mempool_usage,
             stats.used_token_pool,
         )
 
