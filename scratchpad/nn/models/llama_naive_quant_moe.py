@@ -88,14 +88,14 @@ class LlamaCompressedMLP(nn.Module):
         )
 
     def forward(self, x):
-        assert not x.isnan().any()
-        gate_up = self.gate_up_proj(x)
-        assert not gate_up.isnan().any()
+        # assert not x.isnan().any()
+        x = self.gate_up_proj(x)
+        # assert not gate_up.isnan().any()
         d = x.shape[-1] // 2
         x = F.silu(x[..., :d]) * x[..., d:]
-        assert not x.isnan().any()
+        # assert not x.isnan().any()
         x = self.down_proj(x)
-        assert not x.isnan().any()
+        # assert not x.isnan().any()
         return x
 
 class LlamaMoE(nn.Module):
@@ -148,7 +148,7 @@ class LlamaMoE(nn.Module):
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
         routing_weights = routing_weights.to(x.dtype)
-        assert not routing_weights.isnan().any(), "routing weights have nan"
+        # assert not routing_weights.isnan().any(), "routing weights have nan"
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
         )
@@ -160,11 +160,11 @@ class LlamaMoE(nn.Module):
             current_mask = current_mask[expert_idx]
             idx, top_x = torch.where(current_mask)
             current_state = x[None, top_x].reshape(-1, hidden_dim)
-            assert not torch.isnan(current_state).any(), "current input state has nan"
+            # assert not torch.isnan(current_state).any(), "current input state has nan"
             current_hidden_states = expert_layer(current_state) 
-            assert not torch.isnan(current_hidden_states).any(), "current hidden state has nan"
-            current_hidden_states *= routing_weights[top_x, idx, None]
+            # assert not torch.isnan(current_hidden_states).any(), "current hidden state has nan"
             if current_hidden_states.nelement() != 0:
+                current_hidden_states *= routing_weights[top_x, idx, None]
                 final_hidden_states.index_add_(0, top_x, current_hidden_states.to(x.dtype))
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         final_hidden_states = final_hidden_states.view(original_shape)
@@ -394,7 +394,7 @@ class LlamaModel(nn.Module):
         return hidden_states
 
 
-class LlamaNaiveMoEForCausalLM(nn.Module):
+class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
@@ -537,4 +537,4 @@ class LlamaNaiveMoEForCausalLM(nn.Module):
 
 
 
-EntryClass = [LlamaNaiveMoEForCausalLM]
+EntryClass = [LlamaNaiveQuantisedMoEForCausalLM]

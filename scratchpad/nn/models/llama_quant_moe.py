@@ -26,6 +26,8 @@ from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
 from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import ForwardBatch
+from triteia.python.nn.linear import sparse_low_precision_linear
+from triteia.python.ops.matmul.sbmm import sbmm_4bit_2_4_native, sbmm_4bit_2_4_multilaunch, sbmm_4bit_2_4_forloop
 
 class LlamaMLP(nn.Module):
     def __init__(
@@ -59,11 +61,78 @@ class LlamaMLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
-        x, _ = self.gate_up_proj(x)
-        x = self.act_fn(x)
+        gate_up, _ = self.gate_up_proj(x)
+        x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
         return x
 
+class LLamaSBmm(nn.Module):
+    def __init__(self, num_experts, infeatures, outfeatures, sbmm_type="naive", groupsize=-1):
+        super().__init__()
+        if groupsize == -1:
+            groupsize = infeatures
+        self.infeatures = infeatures
+        self.outfeatures = outfeatures
+        self.groupsize = groupsize
+        self.qweight = nn.Parameter(torch.empty((num_experts, self.infeatures // 32, self.outfeatures * 16 // 8), dtype=torch.int32), False)
+        self.meta = nn.Parameter(torch.empty((num_experts, self.outfeatures, self.infeatures // 16), dtype=torch.int16), False)
+        self.scales = nn.Parameter(torch.empty((num_experts, self.infeatures // groupsize, self.outfeatures), dtype=torch.float16), False)
+        self.workspace = nn.Parameter(torch.zeros(num_experts, self.outfeatures // 128 * 16, dtype=torch.int32), False)
+        if sbmm_type == "naive":
+            self.sbmm_func = sbmm_4bit_2_4_native
+        elif sbmm_type == "multilaunch":
+            self.sbmm_func = sbmm_4bit_2_4_multilaunch
+        elif sbmm_type == "forloop":
+            self.sbmm_func = sbmm_4bit_2_4_forloop
+        else:
+            raise NotImplementedError
+
+    def forward(self, x, indices):
+        return self.sbmm_func(
+            qweights=self.qweight.data,
+            xs=x,
+            metas=self.meta.data,
+            ss=self.scales.data,
+            indices=indices)
+
+
+class LlamaCompressedMLP(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_act: str,
+        num_experts: int,
+        sbmm_type: str,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.intermediate_size = intermediate_size
+        self.hidden_size = hidden_size
+        self.gate_up_proj = LLamaSBmm(
+            num_experts=num_experts,
+            infeatures=hidden_size,
+            outfeatures=intermediate_size * 2,
+            sbmm_type=sbmm_type,
+        )
+        self.down_proj = LLamaSBmm(
+            num_experts=num_experts,
+            infeatures=intermediate_size,
+            outfeatures=hidden_size,
+            sbmm_type=sbmm_type,
+        )
+
+    def forward(self, x, indices):
+        # assert not x.isnan().any()
+        x = self.gate_up_proj(x, indices)
+        # assert not gate_up.isnan().any()
+        d = x.shape[-1] // 2
+        x = F.silu(x[..., :d]) * x[..., d:]
+        # assert not x.isnan().any()
+        x = self.down_proj(x, indices)
+        # assert not x.isnan().any()
+        return x
 
 class LlamaMoE(nn.Module):
     def __init__(
@@ -73,58 +142,75 @@ class LlamaMoE(nn.Module):
         hidden_act: str,
         num_experts: int,
         experts_per_token: int,
+        sbmm_type: str,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
         super().__init__()
         self.experts_per_token = experts_per_token
         self.num_experts = num_experts
-        self.mlp = nn.ModuleList([
-            LlamaMLP(
+        self.base_mlp = LlamaMLP(
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            hidden_act=hidden_act,
+            quant_config=quant_config,
+            prefix=f"{prefix}.mlp.EXPERT_ID",
+        )
+
+        self.mlp = LlamaCompressedMLP(
+                num_experts=num_experts,
                 hidden_size=hidden_size,
                 intermediate_size=intermediate_size,
                 hidden_act=hidden_act,
                 quant_config=quant_config,
-                prefix=f"{prefix}.mlp.{i}"
-            ) for i in range(num_experts)
-        ])
+                sbmm_type=sbmm_type,
+                prefix=f"{prefix}.mlp."
+            )
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
 
     def forward(self, x):
+        base_y = self.base_mlp(x)
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
         batch_size, sequence_length, hidden_dim = x.shape
+
         x = x.view(-1, hidden_dim)
         router_logits = self.gate(x)
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(routing_weights, self.experts_per_token, dim=-1)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(x.dtype)
+        routing_weights = routing_weights.to(x.dtype).T
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
         )
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0).contiguous()
-
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.mlp[expert_idx]
-            current_mask = expert_mask[expert_idx]
-            idx, top_x = torch.where(current_mask)
-            current_state = x[None, top_x].reshape(-1, hidden_dim)
-            if current_state.nelement() != 0:
-                current_hidden_states = expert_layer(current_state)
-                current_hidden_states *= routing_weights[top_x, idx, None]
-                final_hidden_states.index_add_(0, top_x, current_hidden_states.to(final_hidden_states.dtype))
+        sort_selected_experts, argsort_selected_experts = torch.sort(selected_experts.T, dim=-1)
+        for k in range(self.experts_per_token):
+            current_selected_experts = sort_selected_experts[k]
+            current_routing_weights = routing_weights[k].view(-1, 1)
+            current_argsort_selected_experts = argsort_selected_experts[k]
+            sort_x = x[current_argsort_selected_experts]
+            current_hidden_states = self.mlp(sort_x, current_selected_experts)[current_argsort_selected_experts] * current_routing_weights
+            final_hidden_states += current_hidden_states
+            
         final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
         final_hidden_states = final_hidden_states.view(original_shape)
+
+        final_hidden_states = final_hidden_states.contiguous()
+        base_y = base_y.contiguous()
+        
         # For debugging
         # assert final_hidden_states.is_contiguous(), "final_hidden_states is not contiguous"
-        # print(final_hidden_states.device)
-        # print(final_hidden_states.shape)
-        # print(final_hidden_states.dtype)
-        # print(final_hidden_states)
+        # assert base_y.is_contiguous(), "base_y is not contiguous"
+        # assert final_hidden_states.device == base_y.device, "Tensors are on different devices"
+        # assert final_hidden_states.dtype == base_y.dtype, "Tensors have different dtypes"
         # assert not torch.isnan(final_hidden_states).any(), "NaN found in final_hidden_states"
+        # assert not torch.isnan(base_y).any(), "NaN found in base_y"
         # assert not torch.isinf(final_hidden_states).any(), "Inf found in final_hidden_states"
-        return final_hidden_states
+        # assert not torch.isinf(base_y).any(), "Inf found in base_y"
+        # assert final_hidden_states.shape == base_y.shape, "Tensors have different shapes"
+        # torch.cuda.synchronize()
+        result = final_hidden_states + base_y
+        return result
 
 class LlamaAttention(nn.Module):
     def __init__(
@@ -254,6 +340,7 @@ class LlamaDecoderLayer(nn.Module):
             quant_config=quant_config,
             num_experts=config.num_experts,
             experts_per_token=config.experts_per_token,
+            sbmm_type=config.sbmm_type,
             prefix=f"{prefix}.moe",
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -334,7 +421,7 @@ class LlamaModel(nn.Module):
         return hidden_states
 
 
-class LlamaMoEForCausalLM(nn.Module):
+class LlamaQuantisedMoEForCausalLM(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
@@ -418,9 +505,13 @@ class LlamaMoEForCausalLM(nn.Module):
         ]
         params_dict = dict(self.named_parameters())
 
+        name_transformations = [
+            ("down_proj.0", "down_proj"),
+            ("gate_up_proj.0", "gate_up_proj"),
+            ("mlp.EXPERT_ID", "base_mlp")
+        ]
         for name, loaded_weight in weights:
-            # print(name)
-            # assert not loaded_weight.isnan().any()
+            assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
                 continue
@@ -434,19 +525,28 @@ class LlamaMoEForCausalLM(nn.Module):
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
                     continue
-                print(name, name.replace(weight_name, param_name), shard_id)
                 name = name.replace(weight_name, param_name)
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                for transformation in name_transformations:
+                    if transformation[0] in name:
+                        name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
+                if name == "lm_head.0.weight":
+                    continue
+                if name == "model.embed_tokens.0.weight":
+                    continue
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                for transformation in name_transformations:
+                    if transformation[0] in name:
+                        name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
@@ -463,4 +563,4 @@ class LlamaMoEForCausalLM(nn.Module):
 
 
 
-EntryClass = [LlamaMoEForCausalLM]
+EntryClass = [LlamaQuantisedMoEForCausalLM]
