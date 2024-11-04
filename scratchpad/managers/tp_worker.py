@@ -1,4 +1,6 @@
 import json
+
+from attr import s
 from scratchpad.utils import (
     broadcast_pyobj,
     is_multimodal_model,
@@ -11,6 +13,7 @@ from scratchpad.server.args import ServerArgs
 from scratchpad.model_executor.model_runner import ModelRunner
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.scheduler.schedule_batch import ModelWorkerBatch
+from scratchpad.memory.het_pool import HeterogeneousMHATokenToKVPool
 from scratchpad.model_executor.forward_info import ForwardBatch
 from .structs import UpdateWeightReqInput
 
@@ -27,7 +30,7 @@ class TpModelWorker:
     ):
         # Parse args
         self.tp_rank = tp_rank
-
+        self.server_args = server_args
         # Init model and tokenizer
         self.model_config = ModelConfig(
             server_args.model_path,
@@ -111,3 +114,23 @@ class TpModelWorker:
             recv_req.model_path, recv_req.load_format
         )
         return success, message
+
+    def expand_memory_pool(self, increments: int):
+        """
+        Expand memory pool by `increments`.
+        This is a no-op if the memory pool is not a `HeterogeneousMHATokenToKVPool`
+        or `server_args.use_heterogeneous_pool is False`
+        """
+        if not self.server_args.use_heterogeneous_pool:
+            logger.warning(
+                "Not using heterogeneous pool, not possible to expand memory pool"
+            )
+            return
+        if not isinstance(
+            self.model_runner.token_to_kv_pool, HeterogeneousMHATokenToKVPool
+        ):
+            logger.warning(
+                f"Memory pool is not a HeterogeneousMHATokenToKVPool, not possible to expand memory pool, got {type(self.model_runner.token_to_kv_pool)}"
+            )
+            return
+        self.model_runner.expand_kv_pool(increments)

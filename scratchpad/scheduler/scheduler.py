@@ -22,6 +22,7 @@ from ..managers.structs import (
     TokenizedRewardReqInput,
     UpdateWeightReqInput,
     UpdateWeightReqOutput,
+    MemoryPoolControlReqInput,
 )
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -236,14 +237,12 @@ class Scheduler:
 
     def recv_requests_from_zmq(self):
         recv_reqs = []
-
         while True:
             try:
                 recv_req = self.recv_from_tokenizer.recv_pyobj(zmq.NOBLOCK)
             except zmq.ZMQError:
                 break
             recv_reqs.append(recv_req)
-
         return recv_reqs
 
     def process_requests(self, recv_reqs: List):
@@ -263,6 +262,8 @@ class Scheduler:
             elif isinstance(recv_req, UpdateWeightReqInput):
                 success, message = self.update_weights(recv_req)
                 self.out_pyobjs.append(UpdateWeightReqOutput(success, message))
+            elif isinstance(recv_req, MemoryPoolControlReqInput):
+                self.tp_worker.expand_memory_pool(recv_req.delta)
             else:
                 raise ValueError(f"Invalid request: {recv_req}")
 
@@ -310,21 +311,27 @@ class Scheduler:
             self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
         )
         throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
-        self.log_stats(throughput)
+        stats = Stats(
+            time.time(),
+            generation_throughput=throughput,
+            running_requests=len(self.running_batch.reqs),
+            queued_requests=len(self.waiting_queue),
+            token_usage=num_used / self.max_total_num_tokens,
+            used_token_pool=num_used,
+        )
+        self.log_stats(stats)
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
-        logger.info(
-            f"Decode batch. "
-            f"#running-req: {len(self.running_batch.reqs)}, "
-            f"#token: {num_used}, "
-            f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
-            f"gen throughput (token/s): {throughput:.2f}, "
-            f"#queue-req: {len(self.waiting_queue)}"
-        )
+        # logger.info(
+        #     f"Decode batch. "
+        #     f"#running-req: {len(self.running_batch.reqs)}, "
+        #     f"#token: {num_used}, "
+        #     f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
+        #     f"gen throughput (token/s): {throughput:.2f}, "
+        #     f"#queue-req: {len(self.waiting_queue)}"
+        # )
 
-    def log_stats(self, throughput):
-        self.last_log_time = time.time()
-        stats = Stats(time.time(), throughput)
+    def log_stats(self, stats):
         for logger in self.stats_logger:
             logger.log(stats)
 

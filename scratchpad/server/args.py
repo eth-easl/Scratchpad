@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional, List, Union
 from scratchpad.utils import Singleton
+from scratchpad.utils import logger
 
 
 @dataclass
@@ -89,6 +90,11 @@ class ServerArgs:
     log_requests: bool = False
     show_time_cost: bool = False
 
+    # experimental
+    enable_system_controller: bool = False
+    use_heterogeneous_pool: bool = False
+    controller_port: int = 30005
+
     def translate_auto(self):
         if self.served_model_name == "auto":
             self.served_model_name = self.model_path
@@ -108,6 +114,12 @@ class ServerArgs:
             if hasattr(self, k):
                 setattr(self, k, v)
         self.translate_auto()
+
+    def check_experimental(self):
+        if self.use_heterogeneous_pool:
+            logger.warning(
+                "--use_heterogeneous_pool is an experimental feature. Use with caution."
+            )
 
 
 global_args = ServerArgs()

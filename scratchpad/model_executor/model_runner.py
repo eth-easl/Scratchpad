@@ -29,6 +29,9 @@ from scratchpad.memory.pool import (
     MLATokenToKVPool,
     ReqToTokenPool,
 )
+from scratchpad.memory.het_pool import (
+    HeterogeneousMHATokenToKVPool,
+)
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.server.args import ServerArgs
@@ -395,6 +398,15 @@ class ModelRunner:
                 qk_rope_head_dim=self.model_config.qk_rope_head_dim,
                 layer_num=self.model_config.num_hidden_layers,
             )
+        elif self.server_args.use_heterogeneous_pool:
+            self.token_to_kv_pool = HeterogeneousMHATokenToKVPool(
+                self.max_total_num_tokens,
+                cpu_size=1024,
+                dtype=self.kv_cache_dtype,
+                head_num=self.model_config.get_num_kv_heads(self.tp_size),
+                head_dim=self.model_config.head_dim,
+                layer_num=self.model_config.num_hidden_layers,
+            )
         else:
             self.token_to_kv_pool = MHATokenToKVPool(
                 self.max_total_num_tokens,
@@ -515,6 +527,20 @@ class ModelRunner:
             logits = logits.masked_fill(sampling_info.vocab_mask, float("-inf"))
 
         return logits
+
+    def expand_kv_pool(self, increments):
+        if self.server_args.use_heterogeneous_pool and isinstance(
+            self.token_to_kv_pool, HeterogeneousMHATokenToKVPool
+        ):
+            try:
+                self.token_to_kv_pool.expand(increments, self.gpu_id)
+                self.reconfigure_post_mempool_adjuts()
+                self.max_total_num_tokens += increments
+            except Exception as e:
+                pass
+
+    def reconfigure_post_mempool_adjuts(self):
+        pass
 
 
 @lru_cache()
