@@ -136,7 +136,6 @@ class Scheduler:
                     tokenizer_mode=server_args.tokenizer_mode,
                     trust_remote_code=server_args.trust_remote_code,
                 )
-
         # Launch a tensor parallel worker
         # if self.enable_overlap:
         #     TpWorkerClass = TpModelWorkerClient
