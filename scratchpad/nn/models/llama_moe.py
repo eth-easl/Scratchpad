@@ -94,37 +94,25 @@ class LlamaMoE(nn.Module):
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
         batch_size, sequence_length, hidden_dim = x.shape
-        x = x.view(-1, hidden_dim)
         router_logits = self.gate(x)
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.experts_per_token, dim=-1)
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(x.dtype)
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
+        weights, selected_experts = torch.topk(router_logits, self.experts_per_token)
+        weights = F.softmax(weights, dim=2, dtype=torch.float).to(x.dtype)
+        results = torch.zeros(
+            (batch_size, sequence_length, hidden_dim),
+            device=x.device,
+            dtype=x.dtype,
         )
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0).contiguous()
-
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.mlp[expert_idx]
-            current_mask = expert_mask[expert_idx]
-            idx, top_x = torch.where(current_mask)
-            current_state = x[None, top_x].reshape(-1, hidden_dim)
-            if current_state.nelement() != 0:
-                current_hidden_states = expert_layer(current_state)
-                current_hidden_states *= routing_weights[top_x, idx, None]
-                final_hidden_states.index_add_(0, top_x, current_hidden_states.to(final_hidden_states.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        final_hidden_states = final_hidden_states.view(original_shape)
-        # For debugging
-        # assert final_hidden_states.is_contiguous(), "final_hidden_states is not contiguous"
-        # print(final_hidden_states.device)
-        # print(final_hidden_states.shape)
-        # print(final_hidden_states.dtype)
-        # print(final_hidden_states)
-        # assert not torch.isnan(final_hidden_states).any(), "NaN found in final_hidden_states"
-        # assert not torch.isinf(final_hidden_states).any(), "Inf found in final_hidden_states"
-        return final_hidden_states
+        selected_experts = selected_experts.to(dtype=torch.int32)
+        for ix, expert in enumerate(self.mlp):
+            ix = torch.tensor(ix, device=selected_experts.device)
+            mask = selected_experts == ix
+            batch_idx, tok_idx, expert_idx = torch.where(mask)
+            if batch_idx.numel() != 0 and tok_idx.numel() != 0:
+                results[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
+                    batch_idx, tok_idx, expert_idx
+                ].unsqueeze(-1)
+        results = results.view(original_shape)
+        return results
 
 class LlamaAttention(nn.Module):
     def __init__(
@@ -434,7 +422,7 @@ class LlamaMoEForCausalLM(nn.Module):
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
                     continue
-                print(name, name.replace(weight_name, param_name), shard_id)
+                # print(name, name.replace(weight_name, param_name), shard_id)
                 name = name.replace(weight_name, param_name)
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:

@@ -132,59 +132,29 @@ class LlamaMoE(nn.Module):
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
 
     def forward(self, x):
-        
         base_y = self.base_mlp(x)
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
-        # print("-----")
         batch_size, sequence_length, hidden_dim = x.shape
-        # print(x.shape)
-        x = x.view(-1, hidden_dim)
-        # print(x.shape)
         router_logits = self.gate(x)
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.experts_per_token, dim=-1)
-        # print(routing_weights.shape)
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(x.dtype)
-        # assert not routing_weights.isnan().any(), "routing weights have nan"
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
+        weights, selected_experts = torch.topk(router_logits, self.experts_per_token)
+        weights = F.softmax(weights, dim=2, dtype=torch.float).to(x.dtype)
+        results = torch.zeros(
+            (batch_size, sequence_length, hidden_dim),
+            device=x.device,
+            dtype=x.dtype,
         )
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0).contiguous()
-
-        for expert_idx in range(self.num_experts):
-            expert_layer = self.mlp[expert_idx]
-            current_mask = expert_mask
-            current_mask = current_mask[expert_idx]
-            idx, top_x = torch.where(current_mask)
-            current_state = x[None, top_x].reshape(-1, hidden_dim)
-            # assert not torch.isnan(current_state).any(), "current input state has nan"
-            current_hidden_states = expert_layer(current_state) 
-            # assert not torch.isnan(current_hidden_states).any(), "current hidden state has nan"
-            if current_hidden_states.nelement() != 0:
-                current_hidden_states *= routing_weights[top_x, idx, None]
-                final_hidden_states.index_add_(0, top_x, current_hidden_states.to(x.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
-        final_hidden_states = final_hidden_states.view(original_shape)
-
-        final_hidden_states = final_hidden_states.contiguous()
-        base_y = base_y.contiguous()
-        
-        # For debugging
-        # assert final_hidden_states.is_contiguous(), "final_hidden_states is not contiguous"
-        # assert base_y.is_contiguous(), "base_y is not contiguous"
-        # assert final_hidden_states.device == base_y.device, "Tensors are on different devices"
-        # assert final_hidden_states.dtype == base_y.dtype, "Tensors have different dtypes"
-        # assert not torch.isnan(final_hidden_states).any(), "NaN found in final_hidden_states"
-        # assert not torch.isnan(base_y).any(), "NaN found in base_y"
-        # assert not torch.isinf(final_hidden_states).any(), "Inf found in final_hidden_states"
-        # assert not torch.isinf(base_y).any(), "Inf found in base_y"
-        # assert final_hidden_states.shape == base_y.shape, "Tensors have different shapes"
-        # torch.cuda.synchronize()
-        result = final_hidden_states + base_y
-        return result
+        selected_experts = selected_experts.to(dtype=torch.int32)
+        for ix, expert in enumerate(self.mlp):
+            ix = torch.tensor(ix, device=selected_experts.device)
+            mask = selected_experts == ix
+            batch_idx, tok_idx, expert_idx = torch.where(mask)
+            if batch_idx.numel() != 0 and tok_idx.numel() != 0:
+                results[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
+                    batch_idx, tok_idx, expert_idx
+                ].unsqueeze(-1)
+        results = results.view(original_shape)
+        return results + base_y
 
 class LlamaAttention(nn.Module):
     def __init__(
@@ -484,7 +454,6 @@ class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
             ("mlp.EXPERT_ID", "base_mlp")
         ]
         for name, loaded_weight in weights:
-            print(name)
             assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
