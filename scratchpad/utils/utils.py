@@ -1,4 +1,6 @@
 import os
+import zmq
+import zmq.asyncio
 import torch
 from functools import lru_cache
 from typing import Optional, Dict, List, Any
@@ -64,26 +66,27 @@ def find_printable_text(text: str):
         return text[: text.rfind(" ") + 1]
 
 
-def get_available_gpu_memory(gpu_id, distributed=False):
+def get_available_gpu_memory(device, gpu_id, distributed=False):
     """
     Get available memory for cuda:gpu_id device.
     When distributed is True, the available memory is the minimum available memory of all GPUs.
     """
-    num_gpus = torch.cuda.device_count()
-    assert gpu_id < num_gpus
+    if device == "cuda":
+        num_gpus = torch.cuda.device_count()
+        assert gpu_id < num_gpus
 
-    if torch.cuda.current_device() != gpu_id:
-        print(
-            f"WARNING: current device is not {gpu_id}, but {torch.cuda.current_device()}, ",
-            "which may cause useless memory allocation for torch CUDA context.",
-        )
+        if torch.cuda.current_device() != gpu_id:
+            print(
+                f"WARNING: current device is not {gpu_id}, but {torch.cuda.current_device()}, ",
+                "which may cause useless memory allocation for torch CUDA context.",
+            )
 
-    torch.cuda.empty_cache()
-    free_gpu_memory, _ = torch.cuda.mem_get_info(gpu_id)
+        torch.cuda.empty_cache()
+        free_gpu_memory, _ = torch.cuda.mem_get_info(gpu_id)
 
     if distributed:
         tensor = torch.tensor(free_gpu_memory, dtype=torch.float32).to(
-            torch.device("cuda", gpu_id)
+            torch.device(device, gpu_id)
         )
         torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.MIN)
         free_gpu_memory = tensor.item()
@@ -382,3 +385,27 @@ def broadcast_pyobj(
 def enable_show_time_cost():
     global show_time_cost
     show_time_cost = True
+
+
+def get_zmq_socket(context: zmq.Context, socket_type: zmq.SocketType, endpoint: str):
+    mem = psutil.virtual_memory()
+    total_mem = mem.total / 1024**3
+    available_mem = mem.available / 1024**3
+    if total_mem > 32 and available_mem > 16:
+        buf_size = int(0.5 * 1024**3)
+    else:
+        buf_size = -1
+
+    socket = context.socket(socket_type)
+    if socket_type == zmq.PUSH:
+        socket.setsockopt(zmq.SNDHWM, 0)
+        socket.setsockopt(zmq.SNDBUF, buf_size)
+        socket.connect(f"ipc://{endpoint}")
+    elif socket_type == zmq.PULL:
+        socket.setsockopt(zmq.RCVHWM, 0)
+        socket.setsockopt(zmq.RCVBUF, buf_size)
+        socket.bind(f"ipc://{endpoint}")
+    else:
+        raise ValueError(f"Unsupported socket type: {socket_type}")
+
+    return socket

@@ -235,8 +235,6 @@ class MessageQueue:
             remote_subscribe_port=remote_subscribe_port,
         )
 
-        logger.info(f"vLLM message queue communication handle: {self.handle}")
-
     def export_handle(self) -> Handle:
         return self.handle
 

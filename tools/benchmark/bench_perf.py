@@ -115,17 +115,27 @@ def benchmark(args):
     if args.model == "":
         args.model = args.tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    requests = construct_dataset(
+    bench_requests = construct_dataset(
         args.endpoint, args.dataset, tokenizer, args.num_prompts
     )
-    for req in requests:
+    for req in bench_requests:
         req.model = args.model
     request_func = async_request_openai_completions
     gootput_config_dict = check_goodput_args(args)
+    # check if server is ready
+    server_ready = False
+    if args.wait_until_ready:
+        while not server_ready:
+            try:
+                requests.get(args.endpoint)
+                server_ready = True
+            except Exception as e:
+                print("Server is not ready. Please start the server first.")
+                time.sleep(5)
     asyncio.run(
         run_benchmark(
             args,
-            requests,
+            bench_requests,
             request_func,
             tokenizer,
             goodput_config_dict=gootput_config_dict,
@@ -195,6 +205,12 @@ if __name__ == "__main__":
         '"ttft", "tpot", "e2el". For more context on the definition of '
         "goodput, refer to DistServe paper: https://arxiv.org/pdf/2401.09670 "
         "and the blog: https://hao-ai-lab.github.io/blogs/distserve",
+    )
+    parser.add_argument(
+        "--wait-until-ready",
+        action="store_true",
+        help="Wait until the server is ready before starting the benchmark.",
+        default=True,
     )
     args = parser.parse_args()
     benchmark(args)

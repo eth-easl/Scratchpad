@@ -34,7 +34,9 @@ class ModelRegistry:
     @functools.lru_cache(maxsize=128)
     def _get_model(model_arch: str):
         module_name, model_cls_name = _MODELS[model_arch]
-        module = importlib.import_module(f"vllm.model_executor.models.{module_name}")
+        module = importlib.import_module(
+            f"scratchpad.model_executor.models.{module_name}"
+        )
         return getattr(module, model_cls_name, None)
 
     @staticmethod

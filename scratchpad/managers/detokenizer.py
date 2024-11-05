@@ -20,6 +20,7 @@ from scratchpad.utils import (
     get_exception_traceback,
     logger,
     kill_parent_process,
+    get_zmq_socket,
 )
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -45,11 +46,12 @@ class DetokenizerManager:
     ):
         # Init inter-process communication
         context = zmq.Context(2)
-        self.recv_from_scheduler = context.socket(zmq.PULL)
-        self.recv_from_scheduler.bind(f"tcp://127.0.0.1:{server_args.detokenizer_port}")
-
-        self.send_to_tokenizer = context.socket(zmq.PUSH)
-        self.send_to_tokenizer.connect(f"tcp://127.0.0.1:{server_args.tokenizer_port}")
+        self.recv_from_scheduler = get_zmq_socket(
+            context, zmq.PULL, server_args.detokenizer_ipc_name
+        )
+        self.send_to_tokenizer = get_zmq_socket(
+            context, zmq.PUSH, server_args.tokenizer_ipc_name
+        )
 
         if server_args.skip_tokenizer_init:
             self.tokenizer = None

@@ -70,6 +70,7 @@ class Conversation:
     sep2: str = None
     # Stop criteria (the default one is EOS token)
     stop_str: Union[str, List[str]] = None
+    image_token: str = "<|image|>"
     image_data: Optional[List[str]] = None
     modalities: Optional[List[str]] = None
 
@@ -333,6 +334,7 @@ class Conversation:
             sep_style=self.sep_style,
             sep=self.sep,
             sep2=self.sep2,
+            image_token=self.image_token,
             stop_str=self.stop_str,
         )
 
@@ -381,8 +383,8 @@ def generate_chat_conv(
         stop_str=conv.stop_str,
         image_data=[],
         modalities=[],
+        image_token=conv.image_token,
     )
-
     if isinstance(request.messages, str):
         raise ValueError("The messages should be a list of dict.")
     for message in request.messages:
@@ -412,9 +414,13 @@ def generate_chat_conv(
                         num_image_url += 1
                         conv.modalities.append(content.modalities)
                 if num_image_url > 1:
-                    image_token = "<image>"
+                    image_token = conv.image_token
                 else:
-                    image_token = "<image>\n"
+                    image_token = (
+                        conv.image_token + "\n"
+                        if conv.name != "qwen2-vl"
+                        else conv.image_token
+                    )
                 for content in message.content:
                     if content.type == "text":
                         if num_image_url > 16:
@@ -519,5 +525,18 @@ register_conv_template(
         roles=("<|im_start|>user", "<|im_start|>assistant"),
         sep="\n",
         stop_str=["<|im_end|>", "<|action_end|>"],
+    )
+)
+
+register_conv_template(
+    Conversation(
+        name="llama_3_vision",
+        system_message="You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.",
+        system_template="<|start_header_id|>system<|end_header_id|>\n\n{system_message}<|eot_id|>",
+        roles=("user", "assistant"),
+        sep_style=SeparatorStyle.LLAMA3,
+        sep="",
+        stop_str=["<|end_of_text|>", "<|eot_id|>"],
+        image_token="<|image|>",
     )
 )

@@ -3,11 +3,9 @@ import base64
 import math
 import re
 from io import BytesIO
-import os
-import requests
+
 import numpy as np
 from PIL import Image
-from typing import Union
 
 
 def select_best_resolution(original_size, possible_resolutions):
@@ -310,109 +308,3 @@ def process_images(images, image_processor, model_cfg):
     if all(x.shape == new_images[0].shape for x in new_images):
         new_images = np.stack(new_images, axis=0)
     return new_images
-
-
-def decode_video_base64(video_base64):
-    from PIL import Image
-
-    # Decode the base64 string
-    video_bytes = base64.b64decode(video_base64)
-
-    # Placeholder for the start indices of each PNG image
-    img_starts = []
-
-    frame_format = "PNG"  # str(os.getenv('FRAME_FORMAT', "JPEG"))
-
-    assert frame_format in [
-        "PNG",
-        "JPEG",
-    ], "FRAME_FORMAT must be either 'PNG' or 'JPEG'"
-
-    if frame_format == "PNG":
-        # Find each PNG start signature to isolate images
-        i = 0
-        while i < len(video_bytes) - 7:  # Adjusted for the length of the PNG signature
-            # Check if we found the start of a PNG file
-            if (
-                video_bytes[i] == 0x89
-                and video_bytes[i + 1] == 0x50
-                and video_bytes[i + 2] == 0x4E
-                and video_bytes[i + 3] == 0x47
-                and video_bytes[i + 4] == 0x0D
-                and video_bytes[i + 5] == 0x0A
-                and video_bytes[i + 6] == 0x1A
-                and video_bytes[i + 7] == 0x0A
-            ):
-                img_starts.append(i)
-                i += 8  # Skip the PNG signature
-            else:
-                i += 1
-    else:
-        # Find each JPEG start (0xFFD8) to isolate images
-        i = 0
-        while (
-            i < len(video_bytes) - 1
-        ):  # Adjusted for the length of the JPEG SOI signature
-            # Check if we found the start of a JPEG file
-            if video_bytes[i] == 0xFF and video_bytes[i + 1] == 0xD8:
-                img_starts.append(i)
-                # Move to the next byte to continue searching for the next image start
-                i += 2
-            else:
-                i += 1
-
-    frames = []
-    for start_idx in img_starts:
-        # Assuming each image is back-to-back, the end of one image is the start of another
-        # The last image goes until the end of the byte string
-        end_idx = (
-            img_starts[img_starts.index(start_idx) + 1]
-            if img_starts.index(start_idx) + 1 < len(img_starts)
-            else len(video_bytes)
-        )
-        img_bytes = video_bytes[start_idx:end_idx]
-
-        # Convert bytes to a PIL Image
-        img = Image.open(BytesIO(img_bytes))
-
-        # Convert PIL Image to a NumPy array
-        frame = np.array(img)
-
-        # Append the frame to the list of frames
-        frames.append(frame)
-
-    # Ensure there's at least one frame to avoid errors with np.stack
-    if frames:
-        return np.stack(frames, axis=0), img.size
-    else:
-        return np.array([]), (
-            0,
-            0,
-        )  # Return an empty array and size tuple if no frames were found
-
-
-def load_image(image_file: Union[str, bytes]):
-    from PIL import Image
-
-    image = image_size = None
-
-    if isinstance(image_file, bytes):
-        image = Image.open(BytesIO(image_file))
-    elif image_file.startswith("http://") or image_file.startswith("https://"):
-        timeout = int(os.getenv("REQUEST_TIMEOUT", "60"))
-        response = requests.get(image_file, timeout=timeout)
-        image = Image.open(BytesIO(response.content))
-    elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif")):
-        image = Image.open(image_file)
-    elif image_file.startswith("data:"):
-        image_file = image_file.split(",")[1]
-        image = Image.open(BytesIO(base64.b64decode(image_file)))
-    elif image_file.startswith("video:"):
-        image_file = image_file.replace("video:", "")
-        image, image_size = decode_video_base64(image_file)
-    elif isinstance(image_file, str):
-        image = Image.open(BytesIO(base64.b64decode(image_file)))
-    else:
-        raise ValueError(f"Invalid image: {image}")
-
-    return image, image_size

@@ -904,6 +904,7 @@ def v1_chat_generate_request(
 
         image_data_list.append(image_data)
         modalities_list.extend(modalities)
+
     if len(all_requests) == 1:
         input_ids = input_ids[0]
         if isinstance(input_ids, str):
@@ -1208,7 +1209,6 @@ async def v1_chat_completions(tokenizer_manager, raw_request: Request):
         return create_error_response(str(e))
     if not isinstance(ret, list):
         ret = [ret]
-
     response = v1_chat_generate_response(request, ret)
 
     return response
