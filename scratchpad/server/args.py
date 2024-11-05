@@ -27,7 +27,7 @@ class ServerArgs:
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
     stream_interval: int = 1
-    watchdog_timeout: float = 30
+    watchdog_timeout: float = 10
     decode_log_interval: int = 10
     # memory and scheduling
     chunked_prefill_size: int = 8192
