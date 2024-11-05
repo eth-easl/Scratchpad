@@ -208,17 +208,12 @@ class FlashInferAttnBackend(AttentionBackend):
         prefill_wrapper_paged = self.prefill_wrappers_paged[
             self._get_wrapper_idx(layer)
         ]
-        # (debug)
-        print(
-            f"forward metadata: {self.forward_metadata}, forward mode: is decode? {forward_batch.forward_mode.is_decode()}"
-        )
         use_ragged, extend_no_prefix = self.forward_metadata
         cache_loc = (
             forward_batch.out_cache_loc
             if not layer.is_cross_attention
             else forward_batch.encoder_out_cache_loc
         )
-
         if not use_ragged:
             if k is not None:
                 assert v is not None
