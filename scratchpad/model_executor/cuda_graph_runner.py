@@ -88,6 +88,7 @@ class CudaGraphRunner:
         self.graph_memory_pool = None
         self.use_torch_compile = model_runner.server_args.enable_torch_compile
         self.disable_padding = model_runner.server_args.disable_cuda_graph_padding
+        self.is_encoder_decoder = self.model_runner.model_config.is_encoder_decoder
 
         # Batch sizes to capture
         if self.model_runner.server_args.disable_cuda_graph_padding:
@@ -127,6 +128,13 @@ class CudaGraphRunner:
             )
             self.out_cache_loc = torch.zeros((self.max_bs,), dtype=torch.int32)
             self.mrope_positions = torch.zeros((3, self.max_bs), dtype=torch.int32)
+            if self.is_encoder_decoder:
+                # NOTE: encoder_lens can influence the full_text_row_masked_out_mask tensor when doing mixed batch
+                self.encoder_lens = torch.full(
+                    (self.max_bs,), self.encoder_len_fill_value, dtype=torch.int32
+                )
+            else:
+                self.encoder_lens = None
         # Capture
         try:
             self.capture()
@@ -139,11 +147,22 @@ class CudaGraphRunner:
                 "3. disable torch compile by not using --enable-torch-compile\n"
             )
 
-    def can_run(self, batch_size: int):
-        if self.disable_padding:
-            return batch_size in self.graphs
-        else:
-            return batch_size <= self.max_bs
+    def can_run(self, forward_batch: ForwardBatch):
+        is_bs_supported = (
+            forward_batch.batch_size in self.graphs
+            if self.disable_padding
+            else forward_batch.batch_size <= self.max_bs
+        )
+
+        # NOTE: cuda graph cannot handle mixed batch (encoder_len = 0)
+        # If mixed batch cannot be supported, then encoder_lens can be removed in cuda graph
+        # because the full_text_row_masked_out_mask tensor will always be ones
+        is_encoder_lens_supported = (
+            torch.all(forward_batch.encoder_lens > 0)
+            if self.is_encoder_decoder
+            else True
+        )
+        return is_bs_supported and is_encoder_lens_supported
 
     def capture(self):
         with graph_capture() as graph_capture_context:
@@ -242,7 +261,11 @@ class CudaGraphRunner:
 
         # Attention backend
         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
-            bs, self.req_pool_indices, self.seq_lens
+            bs,
+            self.req_pool_indices,
+            self.seq_lens,
+            forward_batch.seq_lens_sum + (bs - raw_bs),
+            self.encoder_lens,
         )
 
         # Replay

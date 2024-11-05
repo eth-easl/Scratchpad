@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Union
 from scratchpad.utils import Singleton
@@ -25,6 +26,8 @@ class ServerArgs:
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
     stream_interval: int = 1
+    watchdog_timeout: float = 600
+    decode_log_interval: int = 10
     # memory and scheduling
     chunked_prefill_size: int = 8192
     max_prefill_tokens: int = 16384
@@ -53,7 +56,6 @@ class ServerArgs:
     detokenizer_port: int = 30003
     ## note(xiaozhe): this is actually a list of ints, but can be provided as a comma-separated string
     nccl_ports: str = "30004"
-    #
     init_new_token_ratio: float = 0.7
     base_min_new_token_ratio: float = 0.1
     new_token_ratio_decay: float = 0.001
@@ -96,11 +98,14 @@ class ServerArgs:
     log_requests: bool = False
     show_time_cost: bool = False
     disable_penalizer: bool = False
+    num_continuous_decode_steps: int = 1
     # experimental
     enable_system_controller: bool = False
     use_heterogeneous_pool: bool = False
     controller_port: int = 30005
     enable_overlap_schedule: bool = False
+    enable_double_sparsity: bool = False
+    disable_nan_detection: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":
@@ -123,6 +128,11 @@ class ServerArgs:
             self.tokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
         if self.detokenizer_ipc_name == "auto":
             self.detokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+        try:
+            self.json_model_override_args = json.loads(self.json_model_override_args)
+        except:
+            logger.warning("Failed to parse json_model_override_args")
+            self.json_model_override_args = {}
 
     def update(self, args):
         for k, v in args.items():

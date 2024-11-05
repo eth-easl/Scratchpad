@@ -115,13 +115,22 @@ def benchmark(args):
     if args.model == "":
         args.model = args.tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    requests = construct_dataset(
+    bench_requests = construct_dataset(
         args.endpoint, args.dataset, tokenizer, args.num_prompts
     )
-    for req in requests:
+    for req in bench_requests:
         req.model = args.model
     request_func = async_request_openai_completions
     gootput_config_dict = check_goodput_args(args)
+    # check if server is ready
+    server_ready = False
+    while not server_ready:
+        try:
+            requests.get(args.endpoint)
+            server_ready = True
+        except Exception as e:
+            print("Server is not ready. Please start the server first.")
+            time.sleep(5)
     asyncio.run(
         run_benchmark(
             args,

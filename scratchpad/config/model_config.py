@@ -1,6 +1,6 @@
 from enum import IntEnum, auto
 from typing import Optional
-
+from typing import List
 from transformers import PretrainedConfig
 
 from scratchpad.utils import get_config, get_context_length
@@ -11,6 +11,40 @@ class AttentionArch(IntEnum):
     MHA = auto()
 
 
+def is_generation_model(model_architectures: List[str], is_embedding: bool = False):
+    # We have two ways to determine whether a model is a generative model.
+    # 1. Check the model architectue
+    # 2. check the `is_embedding` server args
+
+    if (
+        "LlamaEmbeddingModel" in model_architectures
+        or "MistralModel" in model_architectures
+        or "LlamaForSequenceClassification" in model_architectures
+        or "LlamaForSequenceClassificationWithNormal_Weights" in model_architectures
+    ):
+        return False
+    else:
+        return not is_embedding
+
+
+def is_multimodal_model(model_architectures: List[str]):
+    if (
+        "LlavaLlamaForCausalLM" in model_architectures
+        or "LlavaQwenForCausalLM" in model_architectures
+        or "LlavaMistralForCausalLM" in model_architectures
+        or "LlavaVidForCausalLM" in model_architectures
+        or "MllamaForConditionalGeneration" in model_architectures
+        or "Qwen2VLForConditionalGeneration" in model_architectures
+    ):
+        return True
+    else:
+        return False
+
+
+def is_encoder_decoder_model(model_architectures: List[str]):
+    return "MllamaForConditionalGeneration" in model_architectures
+
+
 class ModelConfig:
     def __init__(
         self,
@@ -19,6 +53,7 @@ class ModelConfig:
         revision: Optional[str] = None,
         context_length: Optional[int] = None,
         model_override_args: Optional[dict] = None,
+        is_embedding: Optional[bool] = None,
     ) -> None:
         self.path = path
         self.trust_remote_code = trust_remote_code
@@ -31,6 +66,11 @@ class ModelConfig:
             model_override_args=model_override_args,
         )
         self.hf_text_config = get_hf_text_config(self.hf_config)
+        self.is_generation = is_generation_model(
+            self.hf_config.architectures, is_embedding
+        )
+        self.is_multimodal = is_multimodal_model(self.hf_config.architectures)
+        self.is_encoder_decoder = is_encoder_decoder_model(self.hf_config.architectures)
         if context_length is not None:
             self.context_len = context_length
         else:

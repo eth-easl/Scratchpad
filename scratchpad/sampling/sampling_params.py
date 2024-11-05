@@ -9,7 +9,7 @@ class SamplingParams:
         max_new_tokens: int = 128,
         min_new_tokens: int = 0,
         stop: Optional[Union[str, List[str]]] = None,
-        stop_token_ids: Optional[List[int]] = [],
+        stop_token_ids: Optional[List[int]] = None,
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = -1,
@@ -23,6 +23,7 @@ class SamplingParams:
         regex: Optional[str] = None,
         n: int = 1,
         json_schema: Optional[str] = None,
+        no_stop_trim: bool = False,
     ) -> None:
         self.temperature = temperature
         self.top_p = top_p
@@ -32,7 +33,10 @@ class SamplingParams:
         self.presence_penalty = presence_penalty
         self.repetition_penalty = repetition_penalty
         self.stop_strs = stop
-        self.stop_token_ids = {*stop_token_ids}
+        if stop_token_ids:
+            self.stop_token_ids = set(stop_token_ids)
+        else:
+            self.stop_token_ids = None
         self.max_new_tokens = max_new_tokens
         self.min_new_tokens = min_new_tokens
         self.ignore_eos = ignore_eos
@@ -41,6 +45,7 @@ class SamplingParams:
         self.regex = regex
         self.n = n
         self.json_schema = json_schema
+        self.no_stop_trim = no_stop_trim
 
         # Process some special cases
         if self.temperature < _SAMPLING_EPS:
@@ -98,10 +103,7 @@ class SamplingParams:
         # Process stop strings
         if self.stop_strs is None:
             self.stop_strs = []
-            if self.stop_token_ids is None:
-                self.stop_str_max_len = 0
-            else:
-                self.stop_str_max_len = 1
+            self.stop_str_max_len = 0
         else:
             if isinstance(self.stop_strs, str):
                 self.stop_strs = [self.stop_strs]

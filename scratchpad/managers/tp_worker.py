@@ -39,7 +39,7 @@ class TpModelWorker:
             server_args.model_path,
             server_args.trust_remote_code,
             context_length=server_args.context_length,
-            model_override_args=json.loads(server_args.json_model_override_args),
+            model_override_args=server_args.json_model_override_args,
         )
         self.model_runner = ModelRunner(
             model_config=self.model_config,

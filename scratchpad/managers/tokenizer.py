@@ -40,6 +40,7 @@ from scratchpad.utils import (
     is_multimodal_model,
     load_image,
     get_exception_traceback,
+    get_zmq_socket,
 )
 from .image_processor import get_dummy_image_processor, get_image_processor
 
@@ -66,11 +67,12 @@ class TokenizerManager:
 
         # Init inter-process communication
         context = zmq.asyncio.Context(2)
-        self.recv_from_detokenizer = context.socket(zmq.PULL)
-        self.recv_from_detokenizer.bind(f"tcp://127.0.0.1:{server_args.tokenizer_port}")
-
-        self.send_to_scheduler = context.socket(zmq.PUSH)
-        self.send_to_scheduler.connect(f"tcp://127.0.0.1:{server_args.scheduler_port}")
+        self.recv_from_detokenizer = get_zmq_socket(
+            context, zmq.PULL, server_args.tokenizer_ipc_name
+        )
+        self.send_to_scheduler = get_zmq_socket(
+            context, zmq.PUSH, server_args.scheduler_input_ipc_name
+        )
 
         # Read model args
         self.model_path = server_args.model_path
@@ -78,7 +80,7 @@ class TokenizerManager:
         self.hf_config = get_config(
             self.model_path,
             trust_remote_code=server_args.trust_remote_code,
-            model_override_args=json.loads(server_args.json_model_override_args),
+            model_override_args=server_args.json_model_override_args,
         )
         self.is_generation = is_generation_model(
             self.hf_config.architectures, self.server_args.is_embedding

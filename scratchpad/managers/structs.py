@@ -248,14 +248,13 @@ class BatchTokenIDOut:
     decoded_texts: List[str]
     decode_ids: List[int]
     read_offsets: List[int]
+    # Only used when `--skip-tokenizer-init`
+    output_ids: Optional[List[int]]
     skip_special_tokens: List[bool]
     spaces_between_special_tokens: List[bool]
     meta_info: List[Dict]
     finished_reason: List[BaseFinishReason]
-
-    def __post_init__(self):
-        # deepcopy meta_info to avoid modification in place
-        self.meta_info = copy.deepcopy(self.meta_info)
+    no_stop_trim: List[bool]
 
 
 @dataclass
@@ -356,3 +355,13 @@ class RewardReqInput:
                 self.sampling_params = [{}] * self.batch_size
             for i in range(self.batch_size):
                 self.sampling_params[i]["max_new_tokens"] = 1
+
+
+@dataclass
+class GetMemPoolSizeReq:
+    pass
+
+
+@dataclass
+class GetMemPoolSizeReqOutput:
+    size: int
