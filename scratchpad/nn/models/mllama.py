@@ -200,7 +200,7 @@ class MllamaVisionSdpaAttention(nn.Module):
 
 
 class MllamaVisionMLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, quant_config: Optional[QuantizationConfig] = None):
         super().__init__()
         self.config = config
         self.activation_fn = get_act_fn(config.hidden_act)
@@ -208,13 +208,13 @@ class MllamaVisionMLP(nn.Module):
             config.hidden_size,
             config.intermediate_size,
             bias=True,
-            quant_config=None,
+            quant_config=quant_config,
         )
         self.fc2 = RowParallelLinear(
             config.intermediate_size,
             config.hidden_size,
             bias=True,
-            quant_config=None,
+            quant_config=quant_config,
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -511,7 +511,7 @@ class MllamaTextCrossAttention(nn.Module):
         self,
         config: Optional[config_mllama.MllamaTextConfig] = None,
         layer_id: Optional[int] = None,
-        quant_config=None,
+        quant_config: Optional[QuantizationConfig] = None,
     ):
         super().__init__()
         self.config = config
@@ -1008,4 +1008,4 @@ class MllamaForConditionalGeneration(nn.Module):
                 weight_loader(param, loaded_weight)
 
 
-EntryClass = [MllamaForConditionalGeneration]
+EntryClass = MllamaForConditionalGeneration
