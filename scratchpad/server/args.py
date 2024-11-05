@@ -13,6 +13,7 @@ class ServerArgs:
     debug: bool = False
     server_id: str = "default"
     device: str = "cuda"
+    chat_template: Optional[str] = None
     model_path: str = ""
     api_key: Optional[str] = None
     served_model_name: str = "auto"
@@ -26,7 +27,7 @@ class ServerArgs:
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
     stream_interval: int = 1
-    watchdog_timeout: float = 600
+    watchdog_timeout: float = 30
     decode_log_interval: int = 10
     # memory and scheduling
     chunked_prefill_size: int = 8192

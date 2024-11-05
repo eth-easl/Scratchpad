@@ -7,7 +7,8 @@ from typing import List, Optional, Union
 
 import numpy as np
 import transformers
-
+import requests
+from PIL import Image
 from scratchpad.utils import (
     get_processor,
     expand2square,
@@ -203,7 +204,6 @@ class MllamaImageProcessor(BaseImageProcessor):
             )
         else:
             image_inputs = self._processor(images, input_text, return_tensors="pt")
-
         return image_inputs
 
     async def process_images_async(

@@ -209,7 +209,8 @@ def launch_server(model_name, args: "ServerArgs"):
 
     # Launch tokenizer process
     tokenizer_manager = TokenizerManager(args)
+    if server_args.chat_template:
+        load_chat_template_for_openai_api(tokenizer_manager, server_args.chat_template)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
-
     uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")

@@ -271,14 +271,14 @@ class CudaGraphRunner:
         index = bisect.bisect_left(self.capture_bs, raw_bs)
         bs = self.capture_bs[index]
         if bs != raw_bs:
-            self.seq_lens.fill_(self.seq_len_fill_value)
+            self.seq_lens.fill_(1)
             self.out_cache_loc.zero_()
 
         # Common inputs
-        self.input_ids[:raw_bs] = forward_batch.input_ids
-        self.req_pool_indices[:raw_bs] = forward_batch.req_pool_indices
-        self.seq_lens[:raw_bs] = forward_batch.seq_lens
-        self.out_cache_loc[:raw_bs] = forward_batch.out_cache_loc
+        self.input_ids[:raw_bs].copy_(forward_batch.input_ids)
+        self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
+        self.seq_lens[:raw_bs].copy_(forward_batch.seq_lens)
+        self.out_cache_loc[:raw_bs].copy_(forward_batch.out_cache_loc)
         if self.is_encoder_decoder:
             self.encoder_lens[:raw_bs].copy_(forward_batch.encoder_lens)
         if forward_batch.mrope_positions is not None:
@@ -295,23 +295,16 @@ class CudaGraphRunner:
 
         # Replay
         self.graphs[bs].replay()
-        logits_output = self.output_buffers[bs]
-
-        # Unpad
-        if bs != raw_bs:
-            logits_output = LogitsProcessorOutput(
-                next_token_logits=logits_output.next_token_logits[:raw_bs],
-                next_token_logprobs=None,
-                normalized_prompt_logprobs=None,
-                input_token_logprobs=None,
-                input_top_logprobs=None,
-                output_top_logprobs=None,
-            )
+        next_token_logits = self.output_buffers[bs][:raw_bs]
 
         # Extract logprobs
         if forward_batch.return_logprob:
-            logits_output.next_token_logprobs = torch.nn.functional.log_softmax(
-                logits_output.next_token_logits, dim=-1
+            next_token_logprobs = torch.nn.functional.log_softmax(
+                next_token_logits, dim=-1
+            )
+            logits_output = LogitsProcessorOutput(
+                next_token_logits=next_token_logits,
+                next_token_logprobs=next_token_logprobs,
             )
             return_top_logprob = any(x > 0 for x in forward_batch.top_logprobs_nums)
             if return_top_logprob:
@@ -320,7 +313,11 @@ class CudaGraphRunner:
                     top_logprobs_nums=forward_batch.top_logprobs_nums,
                 )
                 logits_output.output_top_logprobs = LogitsProcessor.get_top_logprobs(
-                    logits_output.next_token_logprobs, logits_metadata
+                    next_token_logprobs, logits_metadata
                 )[1]
+        else:
+            logits_output = LogitsProcessorOutput(
+                next_token_logits=next_token_logits,
+            )
 
         return logits_output
