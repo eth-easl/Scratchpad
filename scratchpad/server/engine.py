@@ -3,6 +3,7 @@ from typing import List, Union, Optional, Dict
 import multiprocessing as mp
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from scratchpad.scheduler.scheduler import run_scheduler_process
+from scratchpad.server.metrics import PrometheusStatLogger
 import gc
 import torch
 from .args import ServerArgs
@@ -27,12 +28,13 @@ class AsyncLLMEngine:
             tp_size_per_node * self.args.node_rank,
             tp_size_per_node * (self.args.node_rank + 1),
         )
+        # loggers = [PrometheusStatLogger(1, {"server_id": self.args.server_id}, 4096)]
         for tp_rank in tp_rank_range:
             reader, writer = mp.Pipe(duplex=False)
             gpu_id = tp_rank % tp_size_per_node
             proc = mp.Process(
                 target=run_scheduler_process,
-                args=(self.args, gpu_id, tp_rank, writer),
+                args=(self.args, gpu_id, tp_rank, writer, []),
             )
             proc.start()
             scheduler_procs.append(proc)

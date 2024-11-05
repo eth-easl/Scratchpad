@@ -26,6 +26,7 @@ from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
 from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import ForwardBatch
+from triteia.python.nn.linear import sparse_low_precision_linear
 from .llama import LlamaAttention
 
 
@@ -61,9 +62,42 @@ class LlamaMLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
-        x, _ = self.gate_up_proj(x)
-        x = self.act_fn(x)
+        gate_up, _ = self.gate_up_proj(x)
+        x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
+        return x
+
+
+class LlamaCompressedMLP(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        hidden_act: str,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ) -> None:
+        super().__init__()
+        self.intermediate_size = intermediate_size
+        self.hidden_size = hidden_size
+        self.gate_up_proj = sparse_low_precision_linear(
+            hidden_size,
+            intermediate_size * 2,
+        )
+        self.down_proj = sparse_low_precision_linear(
+            intermediate_size,
+            hidden_size,
+        )
+
+    def forward(self, x):
+        # assert not x.isnan().any()
+        x = self.gate_up_proj(x)
+        # assert not gate_up.isnan().any()
+        d = x.shape[-1] // 2
+        x = F.silu(x[..., :d]) * x[..., d:]
+        # assert not x.isnan().any()
+        x = self.down_proj(x)
+        # assert not x.isnan().any()
         return x
 
 
@@ -81,9 +115,17 @@ class LlamaMoE(nn.Module):
         super().__init__()
         self.experts_per_token = experts_per_token
         self.num_experts = num_experts
+        self.base_mlp = LlamaMLP(
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            hidden_act=hidden_act,
+            quant_config=quant_config,
+            prefix=f"{prefix}.mlp.EXPERT_ID",
+        )
+
         self.mlp = nn.ModuleList(
             [
-                LlamaMLP(
+                LlamaCompressedMLP(
                     hidden_size=hidden_size,
                     intermediate_size=intermediate_size,
                     hidden_act=hidden_act,
@@ -96,6 +138,7 @@ class LlamaMoE(nn.Module):
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
 
     def forward(self, x):
+        base_y = self.base_mlp(x)
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
         batch_size, sequence_length, hidden_dim = x.shape
@@ -117,7 +160,7 @@ class LlamaMoE(nn.Module):
                     batch_idx, tok_idx, expert_idx
                 ].unsqueeze(-1)
         results = results.view(original_shape)
-        return results
+        return results + base_y
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -240,7 +283,7 @@ class LlamaModel(nn.Module):
         return hidden_states
 
 
-class LlamaMoEForCausalLM(nn.Module):
+class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
@@ -324,9 +367,13 @@ class LlamaMoEForCausalLM(nn.Module):
         ]
         params_dict = dict(self.named_parameters())
 
+        name_transformations = [
+            ("down_proj.0", "down_proj"),
+            ("gate_up_proj.0", "gate_up_proj"),
+            ("mlp.EXPERT_ID", "base_mlp"),
+        ]
         for name, loaded_weight in weights:
-            # print(name)
-            # assert not loaded_weight.isnan().any()
+            assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
                 continue
@@ -340,19 +387,28 @@ class LlamaMoEForCausalLM(nn.Module):
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
                     continue
-                # print(name, name.replace(weight_name, param_name), shard_id)
                 name = name.replace(weight_name, param_name)
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                for transformation in name_transformations:
+                    if transformation[0] in name:
+                        name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
+                if name == "lm_head.0.weight":
+                    continue
+                if name == "model.embed_tokens.0.weight":
+                    continue
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                for transformation in name_transformations:
+                    if transformation[0] in name:
+                        name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
@@ -368,4 +424,4 @@ class LlamaMoEForCausalLM(nn.Module):
         apply_torchao_config_(self, params_dict, set(["proj.weight"]))
 
 
-EntryClass = LlamaMoEForCausalLM
+EntryClass = [LlamaNaiveQuantisedMoEForCausalLM]
