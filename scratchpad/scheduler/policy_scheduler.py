@@ -3,7 +3,7 @@ import random
 from collections import defaultdict
 from contextlib import contextmanager
 from typing import Dict, List, Optional
-
+from enum import Enum, auto
 from .schedule_batch import Req, ScheduleBatch
 from scratchpad.memory.base_prefix_cache import BasePrefixCache
 from scratchpad.memory.radix_cache import TreeNode
@@ -85,6 +85,12 @@ class SchedulePolicy:
         for child in childs:
             self.get_dfs_priority(child, node_to_priority, last_node_to_reqs, q)
         q.extend(last_node_to_reqs[cur_node])
+
+
+class AddReqResult(Enum):
+    CONTINUE = auto()  # Continue to add requests
+    NO_TOKEN = auto()  # No token left
+    OTHER = auto()  # Other reasons to stop adding requests
 
 
 class PrefillAdder:

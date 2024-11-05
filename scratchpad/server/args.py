@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Union
 from scratchpad.utils import Singleton
 from scratchpad.utils import logger
+import tempfile
 
 
 @dataclass
@@ -10,6 +11,7 @@ class ServerArgs:
     port: int = 3000
     debug: bool = False
     server_id: str = "default"
+    device: str = "cuda"
     model_path: str = ""
     api_key: Optional[str] = None
     served_model_name: str = "auto"
@@ -41,7 +43,11 @@ class ServerArgs:
     nnodes: int = 1
     node_rank: int = 0
     load_balance_method: str = "round_robin"
-    # internal ports
+    # internal ports and and names
+    scheduler_input_ipc_name: str = "auto"
+    tokenizer_ipc_name: str = "auto"
+    detokenizer_ipc_name: str = "auto"
+
     tokenizer_port: int = 30001
     scheduler_port: int = 30002
     detokenizer_port: int = 30003
@@ -89,11 +95,12 @@ class ServerArgs:
     triton_attention_reduce_in_fp32: bool = False
     log_requests: bool = False
     show_time_cost: bool = False
-
+    disable_penalizer: bool = False
     # experimental
     enable_system_controller: bool = False
     use_heterogeneous_pool: bool = False
     controller_port: int = 30005
+    enable_overlap_schedule: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":
@@ -108,6 +115,14 @@ class ServerArgs:
             self.sampling_backend = "flashinfer"
         if self.random_seed is None:
             self.random_seed = 0  # default seed
+        if self.scheduler_input_ipc_name == "auto":
+            self.scheduler_input_ipc_name = tempfile.NamedTemporaryFile(
+                delete=False
+            ).name
+        if self.tokenizer_ipc_name == "auto":
+            self.tokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+        if self.detokenizer_ipc_name == "auto":
+            self.detokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
 
     def update(self, args):
         for k, v in args.items():

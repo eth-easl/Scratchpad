@@ -1,18 +1,37 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, TYPE_CHECKING
 import torch
 from scratchpad.utils import logger
+
+if TYPE_CHECKING:
+    from scratchpad.nn.attention.radix_attention import RadixAttention
 
 
 class ReqToTokenPool:
     """A memory pool that maps a request to its token locations."""
 
-    def __init__(self, size: int, max_context_len: int, device: str):
+    def __init__(self, size: int, max_context_len: int, device: str, use_records: bool):
         self.size = size
-        self.free_slots = list(range(size))
-        self.req_to_token = torch.empty(
+        self.max_context_len = max_context_len
+        self.device = device
+        self.req_to_token = torch.zeros(
             (size, max_context_len), dtype=torch.int32, device=device
         )
+        self.free_slots = list(range(size))
+        self.write_records = []
+        self.use_records = use_records
+
+        if self.use_records:
+            self.write = self.write_with_records
+        else:
+            self.write = self.write_without_records
+
+    def write(self, indices, values):
+        # Keep the signature for type checking. It will be assigned during runtime.
+        raise NotImplementedError()
+
+    def available_size(self):
+        return len(self.free_slots)
 
     def alloc(self, need_size: int) -> List[int]:
         if need_size > len(self.free_slots):
@@ -31,6 +50,23 @@ class ReqToTokenPool:
 
     def clear(self):
         self.free_slots = list(range(self.size))
+        self.write_records = []
+
+    def write_without_records(self, indices, values):
+        self.req_to_token[indices] = values
+
+    def write_with_records(self, indices, values):
+        self.req_to_token[indices] = values
+        self.write_records.append((indices, values))
+
+    def get_write_records(self):
+        ret = self.write_records
+        self.write_records = []
+        return ret
+
+    def apply_write_records(self, write_records: List[Tuple]):
+        for indices, values in write_records:
+            self.req_to_token[indices] = values
 
 
 class BaseTokenToKVPool(ABC):
@@ -115,7 +151,7 @@ class BaseTokenToKVPool(ABC):
     @abstractmethod
     def set_kv_buffer(
         self,
-        layer_id: int,
+        layer: "RadixAttention",
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
@@ -163,11 +199,12 @@ class MHATokenToKVPool(BaseTokenToKVPool):
 
     def set_kv_buffer(
         self,
-        layer_id: int,
+        layer: "RadixAttention",
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
+        layer_id = layer.layer_id
         if cache_k.dtype != self.dtype:
             cache_k = cache_k.to(self.dtype)
         if cache_v.dtype != self.dtype:
@@ -216,11 +253,12 @@ class MLATokenToKVPool(BaseTokenToKVPool):
 
     def set_kv_buffer(
         self,
-        layer_id: int,
+        layer: "RadixAttention",
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
+        layer_id = layer.layer_id
         if cache_k.dtype != self.dtype:
             cache_k = cache_k.to(self.dtype)
         if self.store_dtype != self.dtype:

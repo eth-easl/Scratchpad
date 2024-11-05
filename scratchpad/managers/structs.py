@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 from scratchpad.scheduler.schedule_batch import BaseFinishReason
 from scratchpad.sampling.sampling_params import SamplingParams
+from enum import Enum
 
 
 @dataclass
@@ -279,6 +280,11 @@ class BatchEmbeddingOut:
     meta_info: List[Dict]
     # The finish reason
     finished_reason: List[BaseFinishReason]
+
+
+class ProfileReq(Enum):
+    START_PROFILE = 1
+    STOP_PROFILE = 2
 
 
 @dataclass

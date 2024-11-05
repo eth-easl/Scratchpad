@@ -126,7 +126,7 @@ class CudaGraphRunner:
                 (self.max_bs,), self.seq_len_fill_value, dtype=torch.int32
             )
             self.out_cache_loc = torch.zeros((self.max_bs,), dtype=torch.int32)
-
+            self.mrope_positions = torch.zeros((3, self.max_bs), dtype=torch.int32)
         # Capture
         try:
             self.capture()
@@ -171,6 +171,9 @@ class CudaGraphRunner:
         seq_lens = self.seq_lens[:bs]
         out_cache_loc = self.out_cache_loc[:bs]
 
+        seq_lens_sum = seq_lens.sum().item()
+        mrope_positions = self.mrope_positions[:, :bs]
+
         # Attention backend
         self.model_runner.attn_backend.init_forward_metadata_capture_cuda_graph(
             bs, req_pool_indices, seq_lens
@@ -188,9 +191,11 @@ class CudaGraphRunner:
                 token_to_kv_pool=self.model_runner.token_to_kv_pool,
                 attn_backend=self.model_runner.attn_backend,
                 out_cache_loc=out_cache_loc,
+                seq_lens_sum=seq_lens_sum,
                 return_logprob=False,
                 top_logprobs_nums=[0] * bs,
                 positions=torch.clamp((seq_lens - 1), min=0).to(torch.int64),
+                mrope_positions=mrope_positions,
             )
             return forward(input_ids, forward_batch.positions, forward_batch)
 
@@ -231,6 +236,9 @@ class CudaGraphRunner:
         self.req_pool_indices[:raw_bs] = forward_batch.req_pool_indices
         self.seq_lens[:raw_bs] = forward_batch.seq_lens
         self.out_cache_loc[:raw_bs] = forward_batch.out_cache_loc
+
+        if forward_batch.mrope_positions is not None:
+            self.mrope_positions[:, :raw_bs].copy_(forward_batch.mrope_positions)
 
         # Attention backend
         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(

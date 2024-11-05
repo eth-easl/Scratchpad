@@ -20,7 +20,7 @@ from .model_loader import get_model
 from scratchpad.nn.models import ModelRegistry
 
 from scratchpad.config.model_config import AttentionArch, ModelConfig
-from scratchpad.nn.attention.backend import FlashInferAttnBackend, TritonAttnBackend
+from scratchpad.nn.attention import FlashInferAttnBackend, TritonAttnBackend
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from scratchpad.nn.layers.sampler import Sampler
 from scratchpad.scheduler.schedule_batch import global_args
@@ -62,10 +62,12 @@ class ModelRunner:
         self.model_config = model_config
         self.mem_fraction_static = mem_fraction_static
         self.gpu_id = gpu_id
+        self.device = "cuda"
         self.tp_rank = tp_rank
         self.tp_size = tp_size
         self.nccl_port = nccl_port
         self.server_args = server_args
+        self.device = server_args.device
         self.is_multimodal_model = is_multimodal_model(
             self.model_config.hf_config.architectures
         )
@@ -383,9 +385,11 @@ class ModelRunner:
                 ),
                 4096,
             )
-
         self.req_to_token_pool = ReqToTokenPool(
-            max_num_reqs + 1, self.model_config.context_len + 4, device="cuda"
+            max_num_reqs + 1,
+            self.model_config.context_len + 4,
+            device="cuda",
+            use_records=False,
         )
         if (
             self.model_config.attention_arch == AttentionArch.MLA
@@ -438,6 +442,10 @@ class ModelRunner:
                 "Window attention is not supported in the triton attention backend. "
                 "Please use `--attention-backend flashinfer`."
             )
+            assert not self.model_config.is_encoder_decoder, (
+                "Cross attention is not supported in the triton attention backend. "
+                "Please use `--attention-backend flashinfer`."
+            )
             self.attn_backend = TritonAttnBackend(self)
         else:
             raise ValueError(
@@ -461,9 +469,7 @@ class ModelRunner:
         self.cuda_graph_runner = CudaGraphRunner(self)
 
     def forward_decode(self, forward_batch: ForwardBatch):
-        if self.cuda_graph_runner and self.cuda_graph_runner.can_run(
-            forward_batch.batch_size
-        ):
+        if self.cuda_graph_runner and self.cuda_graph_runner.can_run(forward_batch):
             return self.cuda_graph_runner.replay(forward_batch)
 
         return self.model.forward(
