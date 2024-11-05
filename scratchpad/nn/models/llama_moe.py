@@ -28,6 +28,9 @@ from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import ForwardBatch
 from triteia.python.nn.linear import sparse_low_precision_linear
 
+from .llama import LlamaAttention
+
+
 class LlamaMLP(nn.Module):
     def __init__(
         self,
@@ -98,6 +101,7 @@ class LlamaCompressedMLP(nn.Module):
         assert not x.isnan().any()
         return x
 
+
 class LlamaMoE(nn.Module):
     def __init__(
         self,
@@ -119,19 +123,21 @@ class LlamaMoE(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.mlp.EXPERT_ID",
         )
-        self.mlp = nn.ModuleList([
-            LlamaCompressedMLP(
-                hidden_size=hidden_size,
-                intermediate_size=intermediate_size,
-                hidden_act=hidden_act,
-                quant_config=quant_config,
-                prefix=f"{prefix}.mlp.{i}"
-            ) for i in range(num_experts)
-        ])
+        self.mlp = nn.ModuleList(
+            [
+                LlamaCompressedMLP(
+                    hidden_size=hidden_size,
+                    intermediate_size=intermediate_size,
+                    hidden_act=hidden_act,
+                    quant_config=quant_config,
+                    prefix=f"{prefix}.mlp.{i}",
+                )
+                for i in range(num_experts)
+            ]
+        )
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
 
     def forward(self, x):
-        
         base_y = self.base_mlp(x)
         original_shape = x.shape
         x = x.view(1, *x.shape) if x.dim() == 2 else x
@@ -140,7 +146,9 @@ class LlamaMoE(nn.Module):
         router_logits = self.gate(x)
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.experts_per_token, dim=-1)
+        routing_weights, selected_experts = torch.topk(
+            routing_weights, self.experts_per_token, dim=-1
+        )
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
         routing_weights = routing_weights.to(x.dtype)
@@ -148,7 +156,11 @@ class LlamaMoE(nn.Module):
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim), dtype=x.dtype, device=x.device
         )
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0).contiguous()
+        expert_mask = (
+            torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts)
+            .permute(2, 1, 0)
+            .contiguous()
+        )
 
         for expert_idx in range(self.num_experts):
             expert_layer = self.mlp[expert_idx]
@@ -157,17 +169,23 @@ class LlamaMoE(nn.Module):
             idx, top_x = torch.where(current_mask)
             current_state = x[None, top_x].reshape(-1, hidden_dim)
             assert not torch.isnan(current_state).any(), "current input state has nan"
-            current_hidden_states = expert_layer(current_state) 
-            assert not torch.isnan(current_hidden_states).any(), "current hidden state has nan"
+            current_hidden_states = expert_layer(current_state)
+            assert not torch.isnan(
+                current_hidden_states
+            ).any(), "current hidden state has nan"
             current_hidden_states *= routing_weights[top_x, idx, None]
             if current_hidden_states.nelement() != 0:
-                final_hidden_states.index_add_(0, top_x, current_hidden_states.to(x.dtype))
-        final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
+                final_hidden_states.index_add_(
+                    0, top_x, current_hidden_states.to(x.dtype)
+                )
+        final_hidden_states = final_hidden_states.reshape(
+            batch_size, sequence_length, hidden_dim
+        )
         final_hidden_states = final_hidden_states.view(original_shape)
 
         final_hidden_states = final_hidden_states.contiguous()
         base_y = base_y.contiguous()
-        
+
         # For debugging
         # assert final_hidden_states.is_contiguous(), "final_hidden_states is not contiguous"
         # assert base_y.is_contiguous(), "base_y is not contiguous"
@@ -181,93 +199,6 @@ class LlamaMoE(nn.Module):
         # torch.cuda.synchronize()
         result = final_hidden_states + base_y
         return result
-
-class LlamaAttention(nn.Module):
-    def __init__(
-        self,
-        config: LlamaConfig,
-        hidden_size: int,
-        num_heads: int,
-        num_kv_heads: int,
-        layer_id: int = 0,
-        rope_theta: float = 10000,
-        rope_scaling: Optional[Dict[str, Any]] = None,
-        rope_is_neox_style: bool = True,
-        max_position_embeddings: int = 8192,
-        quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = "",
-    ) -> None:
-        super().__init__()
-        self.hidden_size = hidden_size
-        tp_size = get_tensor_model_parallel_world_size()
-        self.total_num_heads = num_heads
-        assert self.total_num_heads % tp_size == 0
-        self.num_heads = self.total_num_heads // tp_size
-        self.total_num_kv_heads = num_kv_heads
-        if self.total_num_kv_heads >= tp_size:
-            # Number of KV heads is greater than TP size, so we partition
-            # the KV heads across multiple tensor parallel GPUs.
-            assert self.total_num_kv_heads % tp_size == 0
-        else:
-            # Number of KV heads is less than TP size, so we replicate
-            # the KV heads across multiple tensor parallel GPUs.
-            assert tp_size % self.total_num_kv_heads == 0
-        self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
-        # MistralConfig has an optional head_dim introduced by Mistral-Nemo
-        self.head_dim = getattr(
-            config, "head_dim", self.hidden_size // self.total_num_heads
-        )
-        self.q_size = self.num_heads * self.head_dim
-        self.kv_size = self.num_kv_heads * self.head_dim
-        self.scaling = self.head_dim**-0.5
-        self.rope_theta = rope_theta
-        self.max_position_embeddings = max_position_embeddings
-
-        self.qkv_proj = QKVParallelLinear(
-            hidden_size,
-            self.head_dim,
-            self.total_num_heads,
-            self.total_num_kv_heads,
-            bias=False,
-            quant_config=quant_config,
-            prefix=f"{prefix}.qkv_proj",
-        )
-        self.o_proj = RowParallelLinear(
-            self.total_num_heads * self.head_dim,
-            hidden_size,
-            bias=False,
-            quant_config=quant_config,
-            prefix=f"{prefix}.o_proj",
-        )
-
-        self.rotary_emb = get_rope(
-            self.head_dim,
-            rotary_dim=self.head_dim,
-            max_position=max_position_embeddings,
-            base=rope_theta,
-            rope_scaling=rope_scaling,
-            is_neox_style=rope_is_neox_style,
-        )
-        self.attn = RadixAttention(
-            self.num_heads,
-            self.head_dim,
-            self.scaling,
-            num_kv_heads=self.num_kv_heads,
-            layer_id=layer_id,
-        )
-
-    def forward(
-        self,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        input_metadata: ForwardBatch,
-    ) -> torch.Tensor:
-        qkv, _ = self.qkv_proj(hidden_states)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        q, k = self.rotary_emb(positions, q, k)
-        attn_output = self.attn(q, k, v, input_metadata)
-        output, _ = self.o_proj(attn_output)
-        return output
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -285,9 +216,9 @@ class LlamaDecoderLayer(nn.Module):
         if rope_scaling is not None and getattr(
             config, "original_max_position_embeddings", None
         ):
-            rope_scaling["original_max_position_embeddings"] = (
-                config.original_max_position_embeddings
-            )
+            rope_scaling[
+                "original_max_position_embeddings"
+            ] = config.original_max_position_embeddings
         rope_is_neox_style = getattr(config, "rope_is_neox_style", True)
         max_position_embeddings = getattr(config, "max_position_embeddings", 8192)
         self.self_attn = LlamaAttention(
@@ -321,7 +252,7 @@ class LlamaDecoderLayer(nn.Module):
         self,
         positions: torch.Tensor,
         hidden_states: torch.Tensor,
-        input_metadata: ForwardBatch,
+        forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self Attention
@@ -333,7 +264,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
-            input_metadata=input_metadata,
+            forward_batch=forward_batch,
         )
 
         # Fully Connected
@@ -477,7 +408,7 @@ class LlamaMoEForCausalLM(nn.Module):
         name_transformations = [
             ("down_proj.0", "down_proj"),
             ("gate_up_proj.0", "gate_up_proj"),
-            ("mlp.EXPERT_ID", "base_mlp")
+            ("mlp.EXPERT_ID", "base_mlp"),
         ]
         for name, loaded_weight in weights:
             # print(name)
@@ -530,7 +461,6 @@ class LlamaMoEForCausalLM(nn.Module):
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, self.model.embed_tokens.weight)
         apply_torchao_config_(self, params_dict, set(["proj.weight"]))
-
 
 
 EntryClass = [LlamaMoEForCausalLM]
