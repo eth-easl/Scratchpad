@@ -11,6 +11,7 @@ import torch
 import zmq
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
+from scratchpad.constrained.grammar import GrammarCache
 from scratchpad.constrained.fsm_cache import FSMCache
 from scratchpad.constrained.jump_forward import JumpForwardCache
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
@@ -218,18 +219,17 @@ class Scheduler:
         self.grammar_cache = None
 
         if not server_args.skip_tokenizer_init:
-            pass
-            # self.grammar_cache = GrammarCache(
-            #     server_args.tokenizer_path,
-            #     {
-            #         "tokenizer_mode": server_args.tokenizer_mode,
-            #         "trust_remote_code": server_args.trust_remote_code,
-            #     },
-            #     skip_tokenizer_init=server_args.skip_tokenizer_init,
-            #     whitespace_patterns=server_args.constrained_json_whitespace_pattern,
-            #     backend=server_args.grammar_backend,
-            #     allow_jump=not server_args.disable_regex_jump_forward,
-            # )
+            self.grammar_cache = GrammarCache(
+                server_args.tokenizer_path,
+                {
+                    "tokenizer_mode": server_args.tokenizer_mode,
+                    "trust_remote_code": server_args.trust_remote_code,
+                },
+                skip_tokenizer_init=server_args.skip_tokenizer_init,
+                whitespace_patterns=server_args.constrained_json_whitespace_pattern,
+                backend="outlines",
+                allow_jump=not server_args.disable_regex_jump_forward,
+            )
 
         # Init new token estimation
         assert (

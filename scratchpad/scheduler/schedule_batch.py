@@ -6,6 +6,7 @@ import torch
 from scratchpad.constrained import RegexGuide
 from scratchpad.constrained.jump_forward import JumpForwardMap
 from scratchpad.memory.base_prefix_cache import BasePrefixCache
+from scratchpad.constrained.grammar import Grammar
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.pool import BaseTokenToKVPool, ReqToTokenPool
 from scratchpad.model_executor.forward_info import ForwardMode
@@ -198,8 +199,7 @@ class Req:
         self.embedding = None
 
         # Constrained decoding
-        # (todo:xiaozhe):
-        self.grammar = None
+        self.grammar: Optional[Grammar] = None
 
         # The number of cached tokens, that were already cached in the KV cache
         self.cached_tokens = 0
