@@ -7,6 +7,7 @@ from . import penaltylib
 
 if TYPE_CHECKING:
     from scratchpad.scheduler.schedule_batch import ScheduleBatch
+    from scratchpad.constrained.grammar import Grammar
 
 
 @dataclasses.dataclass
@@ -28,7 +29,7 @@ class SamplingBatchInfo:
     logit_bias: torch.Tensor = None
     vocab_mask: Optional[torch.Tensor] = None
 
-    grammars = None
+    grammars: Optional[List[Optional["Grammar"]]] = None
 
     # Penalizer
     penalizer_orchestrator: Optional[penaltylib.BatchedPenalizerOrchestrator] = None

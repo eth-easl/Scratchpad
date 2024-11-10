@@ -4,6 +4,7 @@ from openai import OpenAI
 
 prompt = "What is in this image?"
 img_url = "https://images.unsplash.com/photo-1692350914621-f0ca2d206368?q=80&w=3000&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
+stream = True
 
 
 def image_url_to_base64(url):
@@ -41,5 +42,11 @@ response = client.chat.completions.create(
             ],
         }
     ],
+    stream=stream,
 )
-print(response.choices[0].message.content)
+if stream:
+    for chunk in response:
+        if len(chunk.choices) > 0 and chunk.choices[0].delta.content:
+            print(chunk.choices[0].delta.content, end="", flush=True)
+else:
+    print(response.choices[0].message.content)
