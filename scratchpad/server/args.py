@@ -107,6 +107,10 @@ class ServerArgs:
     enable_overlap_schedule: bool = False
     enable_double_sparsity: bool = False
     disable_nan_detection: bool = False
+    # Topping config
+    init_number_of_deltas: int = 1
+    init_number_of_loras: int = 1
+    max_lora_ranks: int = 64
 
     def translate_auto(self):
         if self.served_model_name == "auto":
