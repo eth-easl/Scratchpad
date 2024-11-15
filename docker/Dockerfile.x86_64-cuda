@@ -17,6 +17,6 @@ COPY . /scratchpad
 
 RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_x86_64.whl
 RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/triteia-0.1.0-cp310-cp310-linux_x86_64.whl
-RUN pip install -r requirements-extra.txt
+RUN pip install -r meta/requirements-extra.txt
 RUN pip install .
 RUN pip uninstall pynvml -y
