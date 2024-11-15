@@ -670,7 +670,7 @@ async def v1_completions(tokenizer_manager, raw_request: Request):
                 async for content in tokenizer_manager.generate_request(
                     adapted_request, raw_request
                 ):
-                    index = content["index"]
+                    index = content.get("index", 0)
 
                     stream_buffer = stream_buffers.get(index, "")
                     n_prev_token = n_prev_tokens.get(index, 0)
@@ -1067,7 +1067,7 @@ async def v1_chat_completions(tokenizer_manager, raw_request: Request):
                 async for content in tokenizer_manager.generate_request(
                     adapted_request, raw_request
                 ):
-                    index = content["index"]
+                    index = content.get("index", 0)
 
                     is_first = is_firsts.get(index, True)
                     stream_buffer = stream_buffers.get(index, "")
