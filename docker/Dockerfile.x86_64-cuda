@@ -1,12 +1,10 @@
-FROM nvcr.io/nvidia/pytorch:24.07-py3 AS base
+FROM nvcr.io/nvidia/pytorch:24.10-py3 AS base
 
 LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
 LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
 LABEL org.opencontainers.image.licenses=Apache-2.0
 LABEL org.opencontainers.image.architecture=amd64
 
-ARG CUDA_VERSION=12.4.1
-ARG PYTHON_VERSION=3.10
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt update && apt upgrade -y
