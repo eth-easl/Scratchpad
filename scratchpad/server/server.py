@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from scratchpad.scheduler.scheduler import run_scheduler_process
 from scratchpad.server.metrics import PrometheusStatLogger
-
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -35,7 +34,8 @@ from scratchpad.server.middlewares import add_api_key_middleware
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
 
 from .args import ServerArgs
-from .protocol import GenerateReqInput
+from .protocol import GenerateReqInput, RegisterToppingsReqInput
+from scratchpad.server.controller import get_controller
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
@@ -117,7 +117,9 @@ def available_models():
     served_model_names = [tokenizer_manager.served_model_name]
     model_cards = []
     for served_model_name in served_model_names:
-        model_cards.append(ModelCard(id=served_model_name, root=served_model_name))
+        model_cards.append(ModelCard(id=served_model_name, root=None))
+    for extra_model in get_controller().get_toppings():
+        model_cards.append(ModelCard(id=extra_model, root=served_model_name))
     return ModelList(data=model_cards)
 
 
@@ -165,6 +167,7 @@ async def retrieve_file_content(file_id: str):
 def launch_server(model_name, args: "ServerArgs"):
     global tokenizer_manager
     global server_args
+    global controller
 
     server_args = args
     args.model_path = model_name
@@ -203,8 +206,7 @@ def launch_server(model_name, args: "ServerArgs"):
         args=(args,),
     )
     detoken_proc.start()
-    if args.enable_system_controller:
-        start_controller(args)
+    start_controller(args)
     mount_controller(app)
 
     # Launch tokenizer process

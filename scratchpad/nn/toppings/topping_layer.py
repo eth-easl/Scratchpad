@@ -65,7 +65,7 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
         super().__init__(base_layer, config)
 
 
-class QKVParallelLinearWithTopping(ColumnParallelLinearWithTopping):
+class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
     def __init__(
         self,
         base_layer: QKVParallelLinear,

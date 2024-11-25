@@ -391,6 +391,8 @@ class Scheduler:
                 self.send_to_detokenizer.send_pyobj(
                     GetMemPoolSizeReqOutput(self.max_total_num_tokens)
                 )
+            elif isinstance(recv_req, MemoryPoolControlReqInput):
+                self.tp_worker.expand_memory_pool(recv_req.delta)
             else:
                 raise ValueError(f"Invalid request: {recv_req}")
 

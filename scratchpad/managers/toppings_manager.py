@@ -1,7 +1,7 @@
 from scratchpad.server.args import ServerArgs
 
 
-class ToppingManager:
+class ToppingsManager:
     def __init__(
         self,
         server_args: ServerArgs,

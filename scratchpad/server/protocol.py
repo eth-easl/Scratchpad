@@ -4,6 +4,16 @@ import uuid
 
 
 @dataclass
+class RegisterToppingsReqInput:
+    model_path_or_name: str
+    topping_type: str
+
+    def post_init(self):
+        if self.topping_type not in ["delta", "lora", "full"]:
+            raise ValueError(f"The type should be either 'delta', 'lora' or 'full'")
+
+
+@dataclass
 class GenerateReqInput:
     # The input prompt. It can be a single prompt or a batch of prompts.
     text: Optional[Union[List[str], str]] = None

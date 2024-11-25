@@ -7,8 +7,12 @@ from scratchpad.managers.controller import SystemController
 from scratchpad.managers.structs import MemoryPoolControlReqInput
 from scratchpad.utils import logger
 from fastapi.responses import JSONResponse
+from typing import TYPE_CHECKING
+from scratchpad.server.protocol import RegisterToppingsReqInput
 
-from .args import ServerArgs
+if TYPE_CHECKING:
+    from scratchpad.server.args import ServerArgs
+
 
 controller: SystemController = None
 
@@ -46,12 +50,25 @@ async def increase_memory_pool_size(request):
     return JSONResponse(content={"message": "Memory pool size increased by 50"})
 
 
+async def register_toppings(request: RegisterToppingsReqInput):
+    # (todo:xiaozhe): For some reason, the request is not being parsed correctly
+    #  so we parse it manually now.
+    req = await request.json()
+    controller.add_topping(req["model_path_or_name"], req["toppings_type"])
+    return JSONResponse(content={"message": "Toppings registered"})
+
+
 def mount_controller(app: FastAPI):
     app.routes.append(
         Route("/memory_pool/increase", increase_memory_pool_size, methods=["GET"])
     )
+    app.routes.append(Route("/toppings", register_toppings, methods=["POST"]))
 
 
-def start_controller(args: ServerArgs):
+def start_controller(args: "ServerArgs"):
     global controller
     controller = SystemController(args)
+
+
+def get_controller():
+    return controller
