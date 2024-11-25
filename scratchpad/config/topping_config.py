@@ -11,10 +11,10 @@ class ToppingType(Enum):
 
 
 class ToppingConfig:
-    def __init__(self, path: str, topping_type: str) -> None:
+    def __init__(self, path: str, topping_type: ToppingType) -> None:
         self.path = path
         self.hf_config = self.get_topping_config()
-        self.type: ToppingType = topping_type
+        self.type: ToppingType = ToppingType[topping_type]
 
     def get_topping_config(self):
         if not os.path.isdir(self.path):

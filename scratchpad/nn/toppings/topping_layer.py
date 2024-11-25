@@ -53,11 +53,11 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
 
     def apply_topping(self, output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         # TODO
-        return output
+        raise NotImplementedError('apply_topping method is not implemented yet')
 
     def forward(self, input_: torch.Tensor):
         # duplicate the logic in ColumnParallelLinear
-        pass
+        raise NotImplementedError('The forward method is not implemented yet.')
 
 
 class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
@@ -101,10 +101,10 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
         self.weight_indices = weight_indices
 
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        pass
+        raise NotImplementedError('apply_lora method is not implemented yet')
 
     def forward(self, input_):
-        pass
+        raise NotImplementedError('The forward method needs to be implemented.')
 
 
 def get_topping_layer(
