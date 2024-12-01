@@ -1,14 +1,7 @@
+import torch
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
-
-import torch
-import torch.nn as nn
-
-from scratchpad.server.args import ServerArgs
-from scratchpad.nn.utils import update_flashinfer_indices
-from scratchpad.server.args import global_args
-from scratchpad.model_executor.forward_info import ForwardMode, ForwardBatch
-
+from scratchpad.model_executor.forward_info import ForwardBatch
 
 if TYPE_CHECKING:
     from scratchpad.model_executor.model_runner import ModelRunner

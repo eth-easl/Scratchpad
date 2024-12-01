@@ -175,7 +175,7 @@ def launch_server(model_name, args: "ServerArgs"):
     if args.api_key:
         add_api_key_middleware(app, args.api_key)
 
-    loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
+    # loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []
@@ -190,7 +190,7 @@ def launch_server(model_name, args: "ServerArgs"):
         gpu_id = tp_rank % tp_size_per_node
         proc = mp.Process(
             target=run_scheduler_process,
-            args=(args, gpu_id, tp_rank, writer, loggers),
+            args=(args, gpu_id, tp_rank, writer, []),
         )
         proc.start()
         scheduler_procs.append(proc)

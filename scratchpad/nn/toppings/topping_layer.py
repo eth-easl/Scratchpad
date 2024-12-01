@@ -3,7 +3,6 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-import safetensors.torch
 import torch
 from torch import nn
 
@@ -11,7 +10,6 @@ from scratchpad.nn.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
-from scratchpad.model_executor.model_loader import DefaultModelLoader
 from scratchpad.nn.layers.linear import (
     ColumnParallelLinear,
     MergedColumnParallelLinear,
@@ -53,11 +51,11 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
 
     def apply_topping(self, output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         # TODO
-        raise NotImplementedError('apply_topping method is not implemented yet')
+        raise NotImplementedError("apply_topping method is not implemented yet")
 
     def forward(self, input_: torch.Tensor):
         # duplicate the logic in ColumnParallelLinear
-        raise NotImplementedError('The forward method is not implemented yet.')
+        raise NotImplementedError("The forward method is not implemented yet.")
 
 
 class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
@@ -101,10 +99,10 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
         self.weight_indices = weight_indices
 
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError('apply_lora method is not implemented yet')
+        raise NotImplementedError("apply_lora method is not implemented yet")
 
     def forward(self, input_):
-        raise NotImplementedError('The forward method needs to be implemented.')
+        raise NotImplementedError("The forward method needs to be implemented.")
 
 
 def get_topping_layer(
@@ -113,7 +111,7 @@ def get_topping_layer(
     supported_layer_types = {
         # the order matters
         VocabParallelEmbedding: VocabParallelEmbeddingWithTopping,
-        QKVParallelLinear: QKVParallelLinearWithTopping,
+        QKVParallelLinear: QKVParallelLinearWithToppings,
         MergedColumnParallelLinear: MergedColumnParallelLinearWithTopping,
         ColumnParallelLinear: ColumnParallelLinearWithTopping,
         RowParallelLinear: RowParallelLinearWithTopping,

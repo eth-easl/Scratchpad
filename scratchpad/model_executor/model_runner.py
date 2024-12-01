@@ -5,7 +5,6 @@ import importlib.resources
 import pkgutil
 from functools import lru_cache
 from typing import Optional, Tuple, Type
-
 import torch
 import torch.nn as nn
 from scratchpad.config import DeviceConfig, LoadConfig
@@ -111,6 +110,7 @@ class ModelRunner:
         )
 
         # Init componnets
+
         min_per_gpu_memory = self.init_torch_distributed()
         self.sampler = Sampler()
         self.load_model()
@@ -134,12 +134,8 @@ class ModelRunner:
         if self.device == "cuda":
             torch.cuda.set_device(self.gpu_id)
             backend = "nccl"
-        # ToDO(liangan1):Just use gloo to bypass the initilization fail
-        # Need to use xccl for xpu backend in the future
-        elif self.device == "xpu":
-            torch.xpu.set_device(self.gpu_id)
-            backend = "gloo"
-
+        else:
+            raise ValueError(f"Unsupported device: {self.device}")
         # if not self.server_args.enable_p2p_check:
         #     monkey_patch_vllm_p2p_access_check(self.gpu_id)
         if self.server_args.dist_init_addr:
@@ -323,7 +319,11 @@ class ModelRunner:
         return True, "Succeeded to update model weights."
 
     def init_toppings_manager(self):
-        self.topping_manager = ToppingsManager(self.server_args)
+        self.topping_manager = ToppingsManager(
+            self.server_args,
+            base_model=self.model,
+            base_hf_config=self.model_config.hf_config,
+        )
 
     def profile_max_num_token(self, total_gpu_memory: int):
         available_gpu_memory = get_available_gpu_memory(
