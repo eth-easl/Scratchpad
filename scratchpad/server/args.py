@@ -63,6 +63,7 @@ class ServerArgs:
     num_continue_decode_steps: int = 10
     retract_decode_steps: int = 20
     mem_fraction_static: float = 0.8
+    enable_dp_attention: bool = False
     # constrained
     constrained_json_whitespace_pattern: Optional[str] = None
     # tokenization
