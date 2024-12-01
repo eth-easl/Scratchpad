@@ -4,14 +4,17 @@ from fastapi import FastAPI
 import multiprocessing as mp
 from starlette.routing import Mount, Route
 from scratchpad.managers.controller import SystemController
-from scratchpad.managers.structs import MemoryPoolControlReqInput
+from scratchpad.managers.structs import (
+    MemoryPoolControlReqInput,
+    RegisterToppingsReqInput,
+)
 from scratchpad.utils import logger
 from fastapi.responses import JSONResponse
 from typing import TYPE_CHECKING
+from scratchpad.utils.toppings.topping_utils import parse_topping_config
 
 if TYPE_CHECKING:
     from scratchpad.server.args import ServerArgs
-    from scratchpad.managers.structs import RegisterToppingsReqInput
 
 controller: SystemController = None
 
@@ -67,7 +70,26 @@ def mount_controller(app: FastAPI):
 def start_controller(args: "ServerArgs"):
     global controller
     controller = SystemController(args)
+    controller.states.root_model = args.model_path
+    if args.init_toppings:
+        toppings = parse_topping_config(args.init_toppings)
+        for topping in toppings:
+            controller.add_topping(
+                RegisterToppingsReqInput(
+                    topping_type=topping[0],
+                    model_path_or_name=topping[1],
+                    served_name=topping[2],
+                )
+            )
 
 
 def get_controller():
     return controller
+
+
+def get_toppings():
+    return controller.get_toppings()
+
+
+def model_to_topping(model_name):
+    return controller.states.get_topping_path(model_name)

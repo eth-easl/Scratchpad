@@ -120,24 +120,6 @@ class TpModelWorker:
             self.random_seed,
         )
 
-    def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):
-        forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
-        logits_output = self.model_runner.forward(forward_batch)
-        next_token_ids = self.model_runner.sample(logits_output, model_worker_batch)
-        return logits_output, next_token_ids
-
-    def forward_batch_embedding(self, model_worker_batch: ModelWorkerBatch):
-        forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
-        logits_output = self.model_runner.forward(forward_batch)
-        embeddings = logits_output.embeddings.tolist()
-        return embeddings
-
-    def update_weights(self, recv_req: UpdateWeightReqInput):
-        success, message = self.model_runner.update_weights(
-            recv_req.model_path, recv_req.load_format
-        )
-        return success, message
-
     def expand_memory_pool(self, increments: int):
         """
         Expand memory pool by `increments`.

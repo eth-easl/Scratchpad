@@ -2,6 +2,7 @@ from scratchpad.server.args import ServerArgs
 from scratchpad.utils import logger
 from scratchpad.config.topping_config import ToppingType
 from scratchpad.model_executor.forward_info import ForwardBatch
+from scratchpad.utils.toppings.topping_utils import parse_topping_config
 
 
 class ToppingsManager:
@@ -10,10 +11,9 @@ class ToppingsManager:
         server_args: ServerArgs,
     ):
         self.available_toppings = {}
-        for topping in server_args.init_toppings.split(","):
-            t_type, t_path, t_name = topping.split(":")
-            logger.info(f"Topping: {topping}")
-            self.register_topping(t_type, t_path, t_name)
+        toppings = parse_topping_config(server_args.init_toppings)
+        for topping in toppings:
+            self.register_topping(topping[0], topping[1], topping[2])
         self.print_available_toppings()
         logger.info("Topping manager ready.")
 
@@ -57,3 +57,7 @@ class ToppingsManager:
             if self.match_target_modules(module_name):
                 modules.append((module_name, module))
         return modules
+
+    @property
+    def toppings(self):
+        return list(self.available_toppings.keys())

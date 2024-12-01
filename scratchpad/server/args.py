@@ -107,7 +107,7 @@ class ServerArgs:
     # Topping config
     enable_toppings: bool = True
     lora_paths: Optional[str] = None
-    max_loras_per_batch: int = 1
+    max_toppings_per_batch: int = 4
     init_number_of_deltas: int = 1
     init_number_of_loras: int = 1
     max_lora_ranks: int = 64

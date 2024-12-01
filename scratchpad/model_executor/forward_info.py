@@ -81,8 +81,8 @@ class ForwardBatch:
     encoder_lens_cpu: Optional[List[int]] = None
     encoder_out_cache_loc: Optional[torch.Tensor] = None
 
-    # For LoRA
-    lora_paths: Optional[List[str]] = None
+    # For Toppings
+    topping_paths: Optional[List[str]] = None
 
     # Sampling info
     sampling_info: "SamplingBatchInfo" = None
@@ -173,7 +173,7 @@ class ForwardBatch:
             seq_lens_sum=batch.seq_lens_sum,
             return_logprob=batch.return_logprob,
             top_logprobs_nums=batch.top_logprobs_nums,
-            lora_paths=batch.lora_paths,
+            topping_paths=batch.topping_paths,
             sampling_info=batch.sampling_info,
         )
 

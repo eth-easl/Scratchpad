@@ -64,6 +64,7 @@ from .protocol import (
     TopLogprob,
     UsageInfo,
 )
+from scratchpad.server.controller import model_to_topping
 from scratchpad.utils import logger
 
 chat_template_name = None
@@ -820,7 +821,7 @@ def v1_chat_generate_request(
     logprob_start_lens = []
     top_logprobs_nums = []
     modalities_list = []
-
+    topping_paths = []
     # NOTE: with openai API, the prompt's logprobs are always not computed
 
     for request in all_requests:
@@ -882,7 +883,7 @@ def v1_chat_generate_request(
         return_logprobs.append(request.logprobs)
         logprob_start_lens.append(-1)
         top_logprobs_nums.append(request.top_logprobs or 0)
-
+        topping_paths.append(model_to_topping(request.model))
         sampling_params = {
             "temperature": request.temperature,
             "max_new_tokens": request.max_tokens,
@@ -901,7 +902,6 @@ def v1_chat_generate_request(
                 request.response_format.json_schema.schema_
             )
         sampling_params_list.append(sampling_params)
-
         image_data_list.append(image_data)
         modalities_list.extend(modalities)
 
@@ -917,12 +917,12 @@ def v1_chat_generate_request(
         logprob_start_lens = logprob_start_lens[0]
         top_logprobs_nums = top_logprobs_nums[0]
         modalities_list = modalities_list[:1]
+        topping_paths = topping_paths[0]
     else:
         if isinstance(input_ids[0], str):
             prompt_kwargs = {"text": input_ids}
         else:
             prompt_kwargs = {"input_ids": input_ids}
-
     adapted_request = GenerateReqInput(
         **prompt_kwargs,
         image_data=image_data,
@@ -934,6 +934,7 @@ def v1_chat_generate_request(
         return_text_in_logprobs=True,
         rid=request_ids,
         modalities=modalities_list,
+        topping_path=topping_paths,
     )
     if len(all_requests) == 1:
         return adapted_request, all_requests[0]
@@ -1054,7 +1055,6 @@ async def v1_chat_completions(tokenizer_manager, raw_request: Request):
     request_json = await raw_request.json()
     all_requests = [ChatCompletionRequest(**request_json)]
     adapted_request, request = v1_chat_generate_request(all_requests, tokenizer_manager)
-
     if adapted_request.stream:
 
         async def generate_stream_resp():

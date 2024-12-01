@@ -33,8 +33,8 @@ class GenerateReqInput:
     stream: bool = False
     # The modalities of the image data [image, multi-images, video]
     modalities: Optional[List[str]] = None
-    # LoRA related
-    lora_path: Optional[Union[List[Optional[str]], Optional[str]]] = None
+    # Topping related
+    topping_path: Optional[Union[List[Optional[str]], Optional[str]]] = None
 
     def normalize_batch_and_arguments(self):
         if (self.text is None and self.input_ids is None) or (
@@ -152,7 +152,9 @@ class GenerateReqInput:
             return_text_in_logprobs=self.return_text_in_logprobs,
             stream=self.stream,
             modalities=self.modalities[i] if self.modalities else None,
-            lora_path=self.lora_path[i] if self.lora_path is not None else None,
+            topping_path=self.topping_path[i]
+            if self.topping_path is not None
+            else None,
         )
 
 
@@ -189,7 +191,7 @@ class TokenizedGenerateReqInput:
     stream: bool
 
     # LoRA related
-    lora_path: Optional[str] = None  # None means just use the base model
+    topping_path: Optional[str] = None  # None means just use the base model
 
 
 @dataclass

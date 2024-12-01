@@ -1,4 +1,4 @@
-import json
+from functools import cached_property
 import multiprocessing
 import threading
 import os
@@ -85,11 +85,12 @@ class Scheduler:
         self.tp_size = server_args.tp_size
         self.schedule_policy = server_args.schedule_policy
         self.disable_regex_jump_forward = server_args.disable_regex_jump_forward
-        self.lora_paths = server_args.lora_paths
-        self.max_loras_per_batch = server_args.max_loras_per_batch
+
+        self.max_toppings_per_batch = server_args.max_toppings_per_batch
         self.enable_overlap = server_args.enable_overlap_schedule
         self.skip_tokenizer_init = server_args.skip_tokenizer_init
 
+        # update this ondemand
         # Init inter-process communication
         context = zmq.Context(2)
 
@@ -407,10 +408,9 @@ class Scheduler:
             recv_req.input_text,
             recv_req.input_ids,
             recv_req.sampling_params,
-            lora_path=recv_req.lora_path,
+            topping_path=recv_req.topping_path,
         )
         req.tokenizer = self.tokenizer
-
         # Image inputs
         if recv_req.image_inputs is not None:
             req.image_inputs = ImageInputs.from_dict(
@@ -537,6 +537,7 @@ class Scheduler:
                 # Inflight request keeps its rid but will get a new req_pool_idx.
                 self.req_to_token_pool.free(self.being_chunked_req.req_pool_idx)
                 self.batch_is_full = False
+
             if not self.last_batch.is_empty():
                 if self.running_batch is None:
                     self.running_batch = self.last_batch
@@ -594,23 +595,25 @@ class Scheduler:
             self.being_chunked_req.init_next_round_input()
             self.being_chunked_req = adder.add_inflight_req(self.being_chunked_req)
 
-        if self.lora_paths:
-            lora_set = (
-                set([req.lora_path for req in self.running_batch.reqs])
+        if self.topping_paths:
+            topping_set = (
+                set([req.topping_path for req in self.running_batch.reqs])
                 if self.running_batch is not None
                 else set([])
             )
+            print(f"Topping set: {topping_set}")
 
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:
+
             if (
-                self.lora_paths
+                self.topping_paths
                 and len(
-                    lora_set
-                    | set([req.lora_path for req in adder.can_run_list])
-                    | set([req.lora_path])
+                    topping_set
+                    | set([req.topping_path for req in adder.can_run_list])
+                    | set([req.topping_path])
                 )
-                > self.max_loras_per_batch
+                > self.max_toppings_per_batch
             ):
                 self.batch_is_full = True
                 break
@@ -702,7 +705,6 @@ class Scheduler:
             self.running_batch = None
         else:
             new_batch.decoding_reqs = None
-
         return new_batch
 
     def update_running_batch(self):
@@ -786,7 +788,7 @@ class Scheduler:
             logits_output, next_token_ids, bid = result
 
             if self.enable_overlap:
-                logits_output, next_token_ids = self.tp_worker.resulve_batch_result(bid)
+                logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             else:
                 # Move next_token_ids and logprobs to cpu
                 if batch.return_logprob:
@@ -861,7 +863,7 @@ class Scheduler:
         self.num_generated_tokens += len(batch.reqs)
 
         if self.enable_overlap:
-            logits_output, next_token_ids = self.tp_worker.resulve_batch_result(bid)
+            logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             next_token_logprobs = logits_output.next_token_logprobs
         else:
             # Move next_token_ids and logprobs to cpu
@@ -1153,6 +1155,10 @@ class Scheduler:
             self.torch_profiler_trace_dir + "/" + str(time.time()) + ".trace.json.gz"
         )
         logger.info("Profiler is done")
+
+    @cached_property
+    def topping_paths(self):
+        return self.tp_worker.model_runner.topping_manager.toppings
 
 
 def run_scheduler_process(

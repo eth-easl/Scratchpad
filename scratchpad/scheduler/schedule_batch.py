@@ -125,7 +125,7 @@ class Req:
         origin_input_text: str,
         origin_input_ids: Tuple[int],
         sampling_params: SamplingParams,
-        lora_path: Optional[str] = None,
+        topping_path: Optional[str] = None,
     ):
         # Input and output info
         self.rid = rid
@@ -136,7 +136,7 @@ class Req:
         self.fill_ids = None  # fill_ids = origin_input_ids + output_ids
 
         self.sampling_params = sampling_params
-        self.lora_path = lora_path
+        self.topping_path = topping_path
 
         # Memory info
         self.req_pool_idx = None
@@ -372,7 +372,12 @@ class Req:
         return True
 
     def __repr__(self):
-        return f"rid(n={self.rid}, " f"input_ids={self.origin_input_ids}, "
+        return (
+            f"rid(n={self.rid}, "
+            f"input_ids={self.origin_input_ids}, "
+            f"output_ids={self.output_ids}), "
+            f"finished={self.finished()}, topping={self.topping_path}"
+        )
 
 
 bid = 0
@@ -937,7 +942,6 @@ class ScheduleBatch:
         bid += 1
 
         mrope_positions_delta = [req.mrope_position_delta for req in self.reqs]
-
         return ModelWorkerBatch(
             bid=bid,
             forward_mode=self.forward_mode,
@@ -958,7 +962,7 @@ class ScheduleBatch:
             encoder_lens=self.encoder_lens,
             encoder_lens_cpu=self.encoder_lens_cpu,
             encoder_out_cache_loc=self.encoder_out_cache_loc,
-            lora_paths=[req.lora_path for req in self.reqs],
+            topping_paths=[req.topping_path for req in self.reqs],
             sampling_info=self.sampling_info,
             mrope_positions_delta=mrope_positions_delta,
         )
@@ -1021,8 +1025,8 @@ class ModelWorkerBatch:
     encoder_lens_cpu: Optional[List[int]]
     encoder_out_cache_loc: Optional[torch.Tensor]
 
-    # For LoRA
-    lora_paths: Optional[List[str]]
+    # For Topping
+    topping_paths: Optional[List[str]]
 
     # Sampling info
     sampling_info: SamplingBatchInfo
