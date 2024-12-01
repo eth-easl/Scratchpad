@@ -29,6 +29,7 @@ from ..managers.structs import (
     ProfileReq,
     GetMemPoolSizeReq,
     GetMemPoolSizeReqOutput,
+    RegisterToppingsReqInput,
 )
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -392,6 +393,8 @@ class Scheduler:
                 )
             elif isinstance(recv_req, MemoryPoolControlReqInput):
                 self.tp_worker.expand_memory_pool(recv_req.delta)
+            elif isinstance(recv_req, RegisterToppingsReqInput):
+                self.tp_worker.register_toppings(recv_req)
             else:
                 raise ValueError(f"Invalid request: {recv_req}")
 

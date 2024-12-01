@@ -187,3 +187,6 @@ class TpModelWorker:
             recv_req.model_path, recv_req.load_format
         )
         return success, message
+
+    def register_topping(self, topping):
+        self.model_runner.topping_manager.register_topping(topping)

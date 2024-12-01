@@ -323,8 +323,7 @@ class ModelRunner:
         return True, "Succeeded to update model weights."
 
     def init_toppings_manager(self):
-        self.lora_manager = ToppingsManager(self.server_args)
-        logger.info("LoRA manager ready.")
+        self.topping_manager = ToppingsManager(self.server_args)
 
     def profile_max_num_token(self, total_gpu_memory: int):
         available_gpu_memory = get_available_gpu_memory(

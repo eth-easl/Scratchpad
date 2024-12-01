@@ -8,11 +8,10 @@ from scratchpad.managers.structs import MemoryPoolControlReqInput
 from scratchpad.utils import logger
 from fastapi.responses import JSONResponse
 from typing import TYPE_CHECKING
-from scratchpad.server.protocol import RegisterToppingsReqInput
 
 if TYPE_CHECKING:
     from scratchpad.server.args import ServerArgs
-
+    from scratchpad.managers.structs import RegisterToppingsReqInput
 
 controller: SystemController = None
 
@@ -50,7 +49,7 @@ async def increase_memory_pool_size(request):
     return JSONResponse(content={"message": "Memory pool size increased by 50"})
 
 
-async def register_toppings(request: RegisterToppingsReqInput):
+async def register_toppings(request: "RegisterToppingsReqInput"):
     # (todo:xiaozhe): For some reason, the request is not being parsed correctly
     #  so we parse it manually now.
     req = await request.json()

@@ -210,7 +210,7 @@ class ForwardBatch:
         ret.attn_backend = model_runner.attn_backend
 
         # Init lora information
-        if model_runner.server_args.lora_paths is not None:
-            model_runner.lora_manager.prepare_lora_batch(ret)
+        if model_runner.server_args.enable_toppings:
+            model_runner.topping_manager.prepare_topping_batch(ret)
 
         return ret

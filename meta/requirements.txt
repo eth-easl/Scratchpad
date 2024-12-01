@@ -16,3 +16,4 @@ rich
 humanize
 prometheus_client
 tqdm
+einops

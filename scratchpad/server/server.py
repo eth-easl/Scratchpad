@@ -34,7 +34,7 @@ from scratchpad.server.middlewares import add_api_key_middleware
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList
 
 from .args import ServerArgs
-from .protocol import GenerateReqInput, RegisterToppingsReqInput
+from .protocol import GenerateReqInput
 from scratchpad.server.controller import get_controller
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)

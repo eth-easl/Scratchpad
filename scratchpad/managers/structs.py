@@ -377,3 +377,16 @@ class GetMemPoolSizeReq:
 @dataclass
 class GetMemPoolSizeReqOutput:
     size: int
+
+
+@dataclass
+class RegisterToppingsReqInput:
+    model_path_or_name: str
+    topping_type: str
+    served_name: Optional[str] = None
+
+    def post_init(self):
+        if self.topping_type not in ["delta", "lora", "full"]:
+            raise ValueError(f"The type should be either 'delta', 'lora' or 'full'")
+        if not self.served_name:
+            self.served_name = self.model_path_or_name

@@ -71,9 +71,6 @@ class ServerArgs:
     enable_precache_with_tracing = True
     enable_parallel_encoding = True
 
-    # toppings config
-    lora_paths: Optional[str] = None
-    max_loras_per_batch: int = 1
     # logging stats
     enable_stats_logging: bool = True
 
@@ -108,9 +105,15 @@ class ServerArgs:
     enable_double_sparsity: bool = False
     disable_nan_detection: bool = False
     # Topping config
+    enable_toppings: bool = True
+    lora_paths: Optional[str] = None
+    max_loras_per_batch: int = 1
     init_number_of_deltas: int = 1
     init_number_of_loras: int = 1
     max_lora_ranks: int = 64
+    # comma separated list of toppings, format: type:identifier:served_name
+    init_toppings: Optional[str] = None
+    allow_toppings_registration: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":
