@@ -323,6 +323,7 @@ class ModelRunner:
             self.server_args,
             base_model=self.model,
             base_hf_config=self.model_config.hf_config,
+            load_config=self.load_config,
         )
 
     def profile_max_num_token(self, total_gpu_memory: int):

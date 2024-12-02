@@ -13,6 +13,7 @@ import numpy as np
 import psutil
 import torch.distributed as dist
 import pickle
+import torch.nn as nn
 from . import envs, logger
 
 show_time_cost = False
@@ -409,3 +410,14 @@ def get_zmq_socket(context: zmq.Context, socket_type: zmq.SocketType, endpoint: 
         raise ValueError(f"Unsupported socket type: {socket_type}")
 
     return socket
+
+
+# source: https://github.com/vllm-project/vllm/blob/93b38bea5dd03e1b140ca997dfaadef86f8f1855/vllm/lora/utils.py#L9
+def replace_submodule(
+    model: nn.Module, module_name: str, new_module: nn.Module
+) -> nn.Module:
+    """Replace a submodule in a model with a new module."""
+    parent = model.get_submodule(".".join(module_name.split(".")[:-1]))
+    target_name = module_name.split(".")[-1]
+    setattr(parent, target_name, new_module)
+    return new_module

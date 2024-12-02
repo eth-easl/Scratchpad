@@ -13,8 +13,8 @@ class ToppingType(Enum):
 class ToppingConfig:
     def __init__(self, path: str, topping_type: ToppingType) -> None:
         self.path = path
-        self.hf_config = self.get_topping_config()
         self.type: ToppingType = ToppingType[topping_type]
+        self.hf_config = self.get_topping_config()
 
     def get_topping_config(self):
         if not os.path.isdir(self.path):
@@ -26,4 +26,5 @@ class ToppingConfig:
         elif self.type == ToppingType.delta:
             config_name = "delta_config.json"
         with open(os.path.join(weights_dir, config_name), "r") as f:
-            return json.load(f)
+            config = json.load(f)
+        return config

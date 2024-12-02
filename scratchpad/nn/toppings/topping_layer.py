@@ -44,6 +44,9 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
         super().__init__(base_layer, config)
         self.weight = base_layer.weight
 
+    def forward(self, input_: torch.Tensor):
+        return self.base_layer(input_)
+
 
 class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: ColumnParallelLinear, config) -> None:
@@ -54,8 +57,7 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
         raise NotImplementedError("apply_topping method is not implemented yet")
 
     def forward(self, input_: torch.Tensor):
-        # duplicate the logic in ColumnParallelLinear
-        raise NotImplementedError("The forward method is not implemented yet.")
+        return self.base_layer(input_)
 
 
 class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
@@ -85,6 +87,9 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
     def apply_topping(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         pass
 
+    def forward(self, input_: torch.Tensor):
+        return self.base_layer(input_)
+
 
 class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: RowParallelLinear, config: Dict) -> None:
@@ -101,8 +106,8 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError("apply_lora method is not implemented yet")
 
-    def forward(self, input_):
-        raise NotImplementedError("The forward method needs to be implemented.")
+    def forward(self, input_: torch.Tensor):
+        return self.base_layer(input_)
 
 
 def get_topping_layer(
@@ -118,6 +123,6 @@ def get_topping_layer(
     }
     for src_layer_type, topping_layer_type in supported_layer_types.items():
         if isinstance(layer, src_layer_type):  # pylint: disable=unidiomatic-typecheck
-            ret = topping_layer_type(layer, segment_gemm, lora_rank, scaling)
+            ret = topping_layer_type(layer, {})
             return ret
     raise Exception(f"No corresponding Topping layer supported for {type(layer)}.")
