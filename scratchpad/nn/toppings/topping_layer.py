@@ -36,7 +36,7 @@ class BaseLayerWithTopping(nn.Module):
         return self.base_layer.forward(x)
 
     def set_topping_info(self, *args):
-        pass
+        ...
 
 
 class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
@@ -52,9 +52,9 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: ColumnParallelLinear, config) -> None:
         super().__init__(base_layer, config)
 
-    def apply_topping(self, output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        # TODO
-        raise NotImplementedError("apply_topping method is not implemented yet")
+    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
+        print("set_topping_info")
+        print(f"A_buffer: {A_buffer}")
 
     def forward(self, input_: torch.Tensor):
         return self.base_layer(input_)
@@ -63,6 +63,16 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
 class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
     def __init__(self, base_layer: MergedColumnParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
+
+    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
+        self.A_buffer = A_buffer
+        self.B_buffer = B_buffer
+        self.weight_indices = weight_indices
+        self.bs = bs
+        print(f"bs={bs}")
+
+    def forward(self, input_: torch.Tensor):
+        return self.base_layer(input_)
 
 
 class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
@@ -73,15 +83,14 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
     ) -> None:
         super().__init__(base_layer, config)
 
-    def set_lora_info(
-        self, A_buffer_qkv, B_buffer_q, B_buffer_kv, bs, seg_indptr, weight_indices
+    def set_topping_info(
+        self, A_buffer_qkv, B_buffer_q, B_buffer_kv, bs, weight_indices
     ):
         self.set_lora = True
         self.A_buffer_qkv = A_buffer_qkv
         self.B_buffer_q = B_buffer_q
         self.B_buffer_kv = B_buffer_kv
         self.bs = bs
-        self.seg_indptr = seg_indptr
         self.weight_indices = weight_indices
 
     def apply_topping(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -95,12 +104,11 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: RowParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_lora_info(self, A_buffer, B_buffer, bs, seg_indptr, weight_indices):
+    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
         self.set_lora = True
         self.A_buffer = A_buffer
         self.B_buffer = B_buffer
         self.bs = bs
-        self.seg_indptr = seg_indptr
         self.weight_indices = weight_indices
 
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
