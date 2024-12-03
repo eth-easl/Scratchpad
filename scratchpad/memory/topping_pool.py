@@ -63,13 +63,14 @@ class ToppingMemPool:
                 )
                 hidden_dim_A, _ = get_hidden_dim(module_A, self.base_hf_config)
             c = self.loras[-1].get_stacked_multiply(module_A)
+            print(f"max_lora_dim: {self.max_lora_dim}, c={c}")
             if module_A not in self.A_buffer:
                 self.A_buffer[module_A] = [
                     torch.empty(
                         (
                             self.max_toppings_per_batch,
-                            self.max_lora_dim * c,
                             hidden_dim_A,
+                            self.max_lora_dim * c,
                         ),
                         dtype=self.lora_dtype,
                         device="cuda",
@@ -92,8 +93,8 @@ class ToppingMemPool:
                     torch.empty(
                         (
                             self.max_toppings_per_batch,
-                            hidden_dim_B * c,
                             self.max_lora_dim,
+                            hidden_dim_B * c,
                         ),
                         dtype=self.lora_dtype,
                         device="cuda",

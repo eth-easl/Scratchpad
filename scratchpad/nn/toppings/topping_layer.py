@@ -24,6 +24,8 @@ from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 from scratchpad.distributed.utils import split_tensor_along_last_dim
 from scratchpad.model_executor.forward_info import ForwardBatch, ForwardMode
 
+from triteia.python import ldmm
+
 
 class BaseLayerWithTopping(nn.Module):
     def __init__(self, base_layer, config: Dict):
@@ -53,8 +55,7 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
         super().__init__(base_layer, config)
 
     def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
-        print("set_topping_info")
-        print(f"A_buffer: {A_buffer}")
+        pass
 
     def forward(self, input_: torch.Tensor):
         return self.base_layer(input_)
@@ -69,10 +70,31 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
         self.B_buffer = B_buffer
         self.weight_indices = weight_indices
         self.bs = bs
-        print(f"bs={bs}")
+        # model.layers.24.mlp.gate_up_proj
+        # (A_buffer: bsz, rank, dim1)
+        # (B_buffer: bsz, 2*dim0, rank)
 
     def forward(self, input_: torch.Tensor):
-        return self.base_layer(input_)
+        # input_: (bsz, dim0)
+        # indices: [0]
+        # reshape indices such that it is (bsz, 1)
+        base_output = self.base_layer(input_)[0]
+        rank = self.A_buffer.shape[2] // 2
+        b_dim = self.B_buffer.shape[2] // 2
+        for i in range(2):
+            output = ldmm(
+                indices=self.weight_indices,
+                x=input_,
+                LwA=self.A_buffer[:, :, i * rank : (i + 1) * rank],
+                LwB=self.B_buffer[:, :, i * b_dim : (i + 1) * b_dim],
+                DeltaW=None,
+                metas=None,
+                ss=None,
+            )
+            print(f"output={output.shape}")
+            print(f"base_output={base_output.shape}")
+            base_output[:, i * b_dim : (i + 1) * b_dim] += output
+        return base_output, None
 
 
 class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):

@@ -198,12 +198,12 @@ class ToppingsManager:
 
         # setup lora in forward modules
         bs = forward_batch.batch_size
-        weight_indices = torch.empty((bs,), dtype=torch.int64, device="cuda")
+        indices_len = forward_batch.input_ids.size(0)
+        weight_indices = torch.empty((indices_len,), dtype=torch.int64, device="cuda")
         for i, topping_path in enumerate(forward_batch.topping_paths):
             weight_indices[i] = self.buffer_id[topping_path]
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
-            print(f"setting topping info {module_name} @ {layer_id}")
             if "qkv_proj" not in module_name:
                 weight_name = self.get_weight_name(module_name, 0)
                 module.set_topping_info(
@@ -255,11 +255,11 @@ class ToppingsManager:
                 if "lora_A" in name:
                     lora_weight_name = self.get_weight_name(name, 0)
                     if lora_weight_name:
-                        self.A_buffer[lora_weight_name][i][buffer_id].copy_(weights)
+                        self.A_buffer[lora_weight_name][i][buffer_id].copy_(weights.T)
                 else:
                     lora_weight_name = self.get_weight_name(name, 1)
                     if lora_weight_name:
-                        self.B_buffer[lora_weight_name][i][buffer_id].copy_(weights)
+                        self.B_buffer[lora_weight_name][i][buffer_id].copy_(weights.T)
 
     def _load_delta(self):
         pass

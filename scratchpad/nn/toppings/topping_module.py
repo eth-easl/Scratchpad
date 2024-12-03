@@ -28,7 +28,6 @@ class ToppingAdapter(nn.Module):
         self.config = config
         self.base_hf_config = base_hf_config
         self.load_config = load_config
-        print(f"self.config.hf_config: {self.config.hf_config}")
         self.scaling = self.config.hf_config["lora_alpha"] / self.config.hf_config["r"]
         self.layers = nn.ModuleList(
             [
