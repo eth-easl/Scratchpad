@@ -88,62 +88,16 @@ class ToppingsManager:
         logger.info("Topping manager ready.")
 
     def init_topping_mem_pool(self, args):
-        self.topping_memory_pool = ToppingMemPool(args)
-        # TODO(xiaozhe): move below to topping memory pool
-        # preallocate lora memory pool
-
-        self.A_buffer = {}
-        self.B_buffer = {}
-        num_layer = self.base_hf_config.num_hidden_layers
-        for module_A, module_B in self.target_weights:
-            # init A tensor, column_major=True
-            if hasattr(self.base_model, "get_hidden_dim"):
-                hidden_dim_A, _ = self.base_model.get_hidden_dim(module_A)
-            else:
-                logger.warning(
-                    "WARNING: get_hidden_dim() is not defined, "
-                    "which is used to get the hidden dim for different lora modules"
-                    "Use the default one, but please check if it is correct for your model."
-                )
-                hidden_dim_A, _ = get_hidden_dim(module_A, self.base_hf_config)
-            c = self.loras[-1].get_stacked_multiply(module_A)
-            if module_A not in self.A_buffer:
-                self.A_buffer[module_A] = [
-                    torch.empty(
-                        (
-                            self.max_toppings_per_batch,
-                            self.max_lora_dim * c,
-                            hidden_dim_A,
-                        ),
-                        dtype=self.dtype,
-                        device="cuda",
-                    )
-                    for i in range(num_layer)
-                ]
-            # init B tensor, column_major=True
-            if hasattr(self.base_model, "get_hidden_dim"):
-                _, hidden_dim_B = self.base_model.get_hidden_dim(module_B)
-            else:
-                logger.warning(
-                    "WARNING: get_hidden_dim() is not defined, "
-                    "which is used to get the hidden dim for different lora modules"
-                    "Use the default one, but please check if it is correct for your model."
-                )
-                _, hidden_dim_B = get_hidden_dim(module_B, self.base_hf_config)
-            c = self.loras[-1].get_stacked_multiply(module_B)
-            if module_B not in self.B_buffer:
-                self.B_buffer[module_B] = [
-                    torch.empty(
-                        (
-                            self.max_toppings_per_batch,
-                            hidden_dim_B * c,
-                            self.max_lora_dim,
-                        ),
-                        dtype=self.dtype,
-                        device="cuda",
-                    )
-                    for i in range(num_layer)
-                ]
+        self.topping_memory_pool = ToppingMemPool(
+            args,
+            base_hf_config=self.base_hf_config,
+            loras=self.loras,
+            target_weights=self.target_weights,
+            max_toppings_per_batch=self.max_toppings_per_batch,
+            base_model=self.base_model,
+            max_lora_dim=self.max_lora_dim,
+            lora_dtype=self.dtype,
+        )
 
     def init_topping_batch(self):
         self.active_uids = set()  # set of active loras
@@ -215,7 +169,6 @@ class ToppingsManager:
         return lora_module
 
     def prepare_topping_batch(self, forward_batch: ForwardBatch):
-        print(f"Preparing topping batch for {forward_batch.topping_paths}")
         cur_uids = set(forward_batch.topping_paths)
         assert len(cur_uids) <= self.max_toppings_per_batch
         i = 0
@@ -345,3 +298,11 @@ class ToppingsManager:
     @property
     def toppings(self):
         return list(self.available_toppings.keys())
+
+    @property
+    def A_buffer(self):
+        return self.topping_memory_pool.A_buffer
+
+    @property
+    def B_buffer(self):
+        return self.topping_memory_pool.B_buffer
