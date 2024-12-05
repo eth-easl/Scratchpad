@@ -211,6 +211,9 @@ class ToppingsManager:
                     self.B_buffer[weight_name][layer_id],
                     bs,
                     weight_indices,
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0)
                 )
             else:
                 module.set_topping_info(
@@ -219,6 +222,12 @@ class ToppingsManager:
                     self.B_buffer["kv_proj"][layer_id],
                     bs,
                     weight_indices,
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0),
+                    torch.zeros(0,0,0)
                 )
 
     def register_topping(

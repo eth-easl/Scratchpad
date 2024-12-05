@@ -24,7 +24,7 @@ from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 from scratchpad.distributed.utils import split_tensor_along_last_dim
 from scratchpad.model_executor.forward_info import ForwardBatch, ForwardMode
 
-from triteia.python import ldmm
+from triteia.python.ops import ldmm
 
 
 class BaseLayerWithTopping(nn.Module):
@@ -54,11 +54,34 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: ColumnParallelLinear, config) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
-        pass
+    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices, DeltaW_buffer, metas_buffer, ss_buffer):
+        self.A_buffer = A_buffer
+        self.B_buffer = B_buffer
+        self.weight_indices = weight_indices
+        self.bs = bs
+        self.DeltaW = DeltaW_buffer
+        self.metas = metas_buffer
+        self.ss = ss_buffer
+        # model.layers.24.mlp.gate_up_proj
+        # (A_buffer: bsz, dim1, rank)
+        # (B_buffer: bsz, rank, dim2)
+        # (Deltaw: bsz,_, _)
+        # (metas: bsz,_, _)
+        # (ss: bsz, _, _)
 
     def forward(self, input_: torch.Tensor):
-        return self.base_layer(input_)
+        base_output = self.base_layer(input_)[0]
+        output = ldmm(
+            indices=self.weight_indices,
+            x=input_,
+            LwA=self.A_buffer,
+            LwB=self.B_buffer,
+            DeltaW=self.DeltaW,
+            metas=self.metas,
+            ss=self.ss,
+        )
+        base_output =+ output
+        return base_output, None
 
 
 class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
@@ -156,7 +179,7 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         # indices: [0]
         # reshape indices such that it is (bsz, 1)
         base_output = self.base_layer(input_)[0]
-        rank = self.A_buffer_qkv.shape[2] // 2
+        rank = self.A_buffer_qkv.shape[2] // 3
         b_dim_q = self.B_buffer_q.shape[2]
         b_dim_kv = self.B_buffer_kv.shape[2] // 2
         delta_dim_kv = self.DeltaW_kv.shape[2] // 2
@@ -194,18 +217,35 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: RowParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices):
-        self.set_lora = True
+    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices, DeltaW_buffer, metas_buffer, ss_buffer):
         self.A_buffer = A_buffer
         self.B_buffer = B_buffer
-        self.bs = bs
         self.weight_indices = weight_indices
+        self.bs = bs
+        self.DeltaW = DeltaW_buffer
+        self.metas = metas_buffer
+        self.ss = ss_buffer
+        # model.layers.24.mlp.gate_up_proj
+        # (A_buffer: bsz, dim1, rank)
+        # (B_buffer: bsz, rank, dim2)
+        # (Deltaw: bsz,_, _)
+        # (metas: bsz,_, _)
+        # (ss: bsz, _, _)
 
-    def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("apply_lora method is not implemented yet")
 
     def forward(self, input_: torch.Tensor):
-        return self.base_layer(input_)
+        base_output = self.base_layer(input_)[0]
+        output = ldmm(
+            indices=self.weight_indices,
+            x=input_,
+            LwA=self.A_buffer,
+            LwB=self.B_buffer,
+            DeltaW=self.DeltaW,
+            metas=self.metas,
+            ss=self.ss,
+        )
+        base_output += output
+        return base_output, None
 
 
 def get_topping_layer(
