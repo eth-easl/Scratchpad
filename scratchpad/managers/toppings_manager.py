@@ -1,3 +1,4 @@
+import os
 import re
 import torch
 from scratchpad.server.args import ServerArgs
@@ -7,8 +8,11 @@ from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.utils.toppings.topping_utils import parse_topping_config
 from scratchpad.memory.topping_pool import ToppingMemPool
 from scratchpad.config.topping_config import ToppingConfig
-from scratchpad.nn.toppings import LoRAAdapter, get_topping_layer
+from scratchpad.nn.toppings import LoRAAdapter, DeltaAdapter, get_topping_layer
 from scratchpad.utils import replace_submodule
+
+num_replicated_lora = os.environ.get("SPB_NUM_REPLICATED_LORA", 1)
+num_replicated_delta = os.environ.get("SPB_NUM_REPLICATED_DELTA", 1)
 
 
 def get_layer_id(name):
@@ -135,20 +139,38 @@ class ToppingsManager:
         # load all weights to cpu
         self.loras = []
         self.lora_id = {}
+        self.deltas = []
+        self.delta_id = {}
         for name in self.available_toppings.keys():
-            self.lora_id[name] = len(self.loras)
-            self.loras.append(
-                LoRAAdapter(
-                    name, self.configs[name], self.base_hf_config, self.load_config
+            t_type = self.available_toppings[name][0]
+            logger.info(f"Loading {t_type} {name}")
+            if t_type == "lora":
+                self.lora_id[name] = len(self.loras)
+                self.loras.append(
+                    LoRAAdapter(
+                        name, self.configs[name], self.base_hf_config, self.load_config
+                    )
                 )
-            )
-            self.loras[-1].initialize_weights()
+                self.loras[-1].initialize_weights()
+            elif t_type == "delta":
+                self.delta_id[name] = len(self.deltas)
+                self.deltas.append(
+                    DeltaAdapter(
+                        name, self.configs[name], self.base_hf_config, self.load_config
+                    )
+                )
 
         # misc lora configs
-        self.max_lora_dim = max([x.hf_config["r"] for x in self.configs.values()])
+        self.max_lora_dim = max(
+            [x.hf_config["r"] for x in self.configs.values() if "r" in x.hf_config]
+        )
         self.scaling = self.loras[0].scaling
         # FIXME remove the restrictions
-        assert all(x.hf_config["r"] == self.max_lora_dim for x in self.configs.values())
+        assert all(
+            x.hf_config["r"] == self.max_lora_dim
+            for x in self.configs.values()
+            if "r" in x.hf_config
+        )
         assert all(x.scaling == self.scaling for x in self.loras)
 
         # monkey patch to use the LoRA version

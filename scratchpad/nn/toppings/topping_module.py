@@ -28,7 +28,7 @@ class ToppingAdapter(nn.Module):
         self.config = config
         self.base_hf_config = base_hf_config
         self.load_config = load_config
-        self.scaling = self.config.hf_config["lora_alpha"] / self.config.hf_config["r"]
+
         self.layers = nn.ModuleList(
             [
                 ToppingLayer(config, base_hf_config)
@@ -59,7 +59,20 @@ class ToppingAdapter(nn.Module):
             layer.offload_from_gpu()
 
 
+class DeltaAdapter(ToppingAdapter):
+    def __init__(self, uid, config, base_hf_config, load_config):
+        super().__init__(uid, config, base_hf_config, load_config)
+
+    def initialize_weights(self):
+        model_path = self.config.path
+        weight_path = os.path.join(model_path, "pytorch_model.bin")
+
+
 class LoRAAdapter(ToppingAdapter):
+    def __init__(self, uid, config, base_hf_config, load_config):
+        super().__init__(uid, config, base_hf_config, load_config)
+        self.scaling = self.config.hf_config["lora_alpha"] / self.config.hf_config["r"]
+
     def initialize_weights(self):
         model_path = self.config.path
         loader = DefaultModelLoader(self.load_config)
