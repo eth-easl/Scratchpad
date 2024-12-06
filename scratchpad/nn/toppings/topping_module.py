@@ -3,6 +3,7 @@ import os
 import json
 import torch
 from torch import nn
+import safetensors as st
 from scratchpad.model_executor.model_loader import DefaultModelLoader
 from scratchpad.model_executor.deltazip_loader import DeltazipModelLoader
 
@@ -70,10 +71,24 @@ class DeltaAdapter(ToppingAdapter):
         print(f"Initializing weights...")
         loader = DeltazipModelLoader(self.load_config)
         local_path = loader.download_model(self.config)
-        print(local_path)
         with open(os.path.join(local_path, "delta_config.json"), "r") as f:
             delta_config = json.load(f)
         weight_path = os.path.join(local_path, "deltazip-compressed.safetensors")
+        with st.safe_open(weight_path, framework="torch", device="cpu") as f:
+            keys = f.keys()
+            for key in keys:
+                match = re.search(r"layers\.(\d+)\.", key)
+                if match is not None:
+                    layer_id = int(match.group(1))
+                    remaining_key = key[len(f"model.layers.{layer_id}.") :]
+                    # TODO(xiaozhe): we need to get the correct rank
+                    # let's assume rank==0 always
+                    my_rank = 0
+                    weight_val = f.get_tensor(key)
+                    weight_name = remaining_key.replace(f".{my_rank}", "")
+                    self.layers[layer_id].weights[weight_name] = weight_val.cpu()
+
+        print(f"delta: self.layers: {self.layers[0].weights.keys()}")
 
 
 class LoRAAdapter(ToppingAdapter):
@@ -137,3 +152,4 @@ class LoRAAdapter(ToppingAdapter):
                     )
                     layer.weights.pop(weight_name)
                     layer.weights.pop(up_name)
+        print(f"lora: self.layers: {self.layers[0].weights.keys()}")
