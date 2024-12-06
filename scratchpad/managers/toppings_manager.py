@@ -159,6 +159,7 @@ class ToppingsManager:
                         name, self.configs[name], self.base_hf_config, self.load_config
                     )
                 )
+                self.deltas[-1].initialize_weights()
 
         # misc lora configs
         self.max_lora_dim = max(
@@ -252,11 +253,16 @@ class ToppingsManager:
         pass
 
     def load_topping(self, uid, buffer_id):
+        """
+        This function loads topping from CPU -> GPU memory
+        """
         if uid not in self.available_toppings:
             logger.error(f"Topping {uid} not registered")
             return
         if self.available_toppings[uid][0] == "lora":
             self._load_lora(uid, buffer_id)
+        elif self.available_toppings[uid][0] == "delta":
+            self._load_delta(uid, buffer_id)
         else:
             raise NotImplementedError(
                 f"Loading topping {uid} not implemented: Expected Type {ToppingType.lora}, got {self.available_toppings[uid][0]}"
@@ -283,8 +289,9 @@ class ToppingsManager:
                     if lora_weight_name:
                         self.B_buffer[lora_weight_name][i][buffer_id].copy_(weights.T)
 
-    def _load_delta(self):
-        pass
+    def _load_delta(self, uid, buffer_id):
+        print(uid, buffer_id)
+        print(f"Loading Delta {uid}")
 
     def unload_topping(self):
         pass

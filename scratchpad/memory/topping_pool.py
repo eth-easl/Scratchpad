@@ -52,6 +52,7 @@ class ToppingMemPool:
         self.delta_buffer = {}
 
         num_layers = self.base_hf_config.num_hidden_layers
+        print(f"self.target_weights: {self.target_weights}")
         for module_A, module_B in self.target_weights:
             if hasattr(self.base_model, "get_hidden_dim"):
                 hidden_dim_A, _ = self.base_model.get_hidden_dim(module_A)

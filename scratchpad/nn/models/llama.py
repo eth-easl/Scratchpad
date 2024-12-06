@@ -311,6 +311,7 @@ class LlamaForCausalLM(nn.Module):
         elif module_name == "down_proj":
             return self.config.intermediate_size, self.config.hidden_size
         else:
+            print(f"module_name: {module_name}")
             raise NotImplementedError()
 
     def get_module_name(self, name):

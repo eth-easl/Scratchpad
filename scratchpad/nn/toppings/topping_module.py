@@ -1,7 +1,10 @@
 import re
+import os
+import json
 import torch
 from torch import nn
 from scratchpad.model_executor.model_loader import DefaultModelLoader
+from scratchpad.model_executor.deltazip_loader import DeltazipModelLoader
 
 
 class ToppingLayer(nn.Module):
@@ -64,8 +67,13 @@ class DeltaAdapter(ToppingAdapter):
         super().__init__(uid, config, base_hf_config, load_config)
 
     def initialize_weights(self):
-        model_path = self.config.path
-        weight_path = os.path.join(model_path, "pytorch_model.bin")
+        print(f"Initializing weights...")
+        loader = DeltazipModelLoader(self.load_config)
+        local_path = loader.download_model(self.config)
+        print(local_path)
+        with open(os.path.join(local_path, "delta_config.json"), "r") as f:
+            delta_config = json.load(f)
+        weight_path = os.path.join(local_path, "deltazip-compressed.safetensors")
 
 
 class LoRAAdapter(ToppingAdapter):
