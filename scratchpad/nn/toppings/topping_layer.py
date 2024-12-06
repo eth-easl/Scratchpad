@@ -54,14 +54,24 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: ColumnParallelLinear, config) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices, DeltaW_buffer, metas_buffer, ss_buffer):
-        self.A_buffer = A_buffer
-        self.B_buffer = B_buffer
+    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
         self.weight_indices = weight_indices
         self.bs = bs
-        self.DeltaW = DeltaW_buffer
-        self.metas = metas_buffer
-        self.ss = ss_buffer
+        if lora_buffer != None:
+            self.A_buffer = lora_buffer[0]
+            self.B_buffer = lora_buffer[1]
+        else:
+            self.A_buffer = torch.zeros(0,0,0)
+            self.B_buffer = torch.zeros(0,0,0)
+
+        if delta_buffer != None:
+            self.DeltaW = delta_buffer[0]
+            self.metas = delta_buffer[1]
+            self.ss = delta_buffer[1]
+        else:
+            self.DeltaW = torch.zeros(0,0,0)
+            self.metas = torch.zeros(0,0,0)
+            self.ss = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)
@@ -88,14 +98,24 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
     def __init__(self, base_layer: MergedColumnParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices, DeltaW_buffer, metas_buffer, ss_buffer):
-        self.A_buffer = A_buffer
-        self.B_buffer = B_buffer
+    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
         self.weight_indices = weight_indices
         self.bs = bs
-        self.DeltaW = DeltaW_buffer
-        self.metas = metas_buffer
-        self.ss = ss_buffer
+        if lora_buffer != None:
+            self.A_buffer = lora_buffer[0]
+            self.B_buffer = lora_buffer[1]
+        else:
+            self.A_buffer = torch.zeros(0,0,0)
+            self.B_buffer = torch.zeros(0,0,0)
+            
+        if delta_buffer != None:
+            self.DeltaW = delta_buffer[0]
+            self.metas = delta_buffer[1]
+            self.ss = delta_buffer[1]
+        else:
+            self.DeltaW = torch.zeros(0,0,0)
+            self.metas = torch.zeros(0,0,0)
+            self.ss = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank*2)
         # (B_buffer: bsz, rank, dim2*2)
@@ -123,8 +143,6 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
                 metas=self.metas[:, :, i * metas_dim: (i + 1) * metas_dim],
                 ss=self.ss[:, :, i * ss_dim: (i + 1) * ss_dim],
             )
-            print(f"output={output.shape}")
-            print(f"base_output={base_output.shape}")
             base_output[:, i * b_dim : (i + 1) * b_dim] += output
         return base_output, None
 
@@ -138,22 +156,35 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         super().__init__(base_layer, config)
 
     def set_topping_info(
-        self, A_buffer_qkv, B_buffer_q, B_buffer_kv, bs, weight_indices,
-        DeltaW_buffer_kv, metas_buffer_kv, ss_buffer_kv,
-        DeltaW_buffer_q, metas_buffer_q, ss_buffer_q
+        self, bs, weight_indices, lora_buffer = None, delta_kv_buffer = None, delta_q_buffer = None
     ):
         self.set_lora = True
-        self.A_buffer_qkv = A_buffer_qkv
-        self.B_buffer_q = B_buffer_q
-        self.B_buffer_kv = B_buffer_kv
         self.bs = bs
         self.weight_indices = weight_indices
-        self.DeltaW_kv = DeltaW_buffer_kv
-        self.metas_kv = metas_buffer_kv
-        self.ss_kv = ss_buffer_kv
-        self.DeltaW_q = DeltaW_buffer_q
-        self.metas_q = metas_buffer_q
-        self.ss_q = ss_buffer_q
+        if lora_buffer != None:
+            self.A_buffer_qkv = lora_buffer[0]
+            self.B_buffer_q = lora_buffer[1]
+            self.B_buffer_kv = lora_buffer[2]
+        else:
+            self.A_buffer_qkv = torch.zeros(0,0,0)
+            self.B_buffer_q = torch.zeros(0,0,0)
+            self.B_buffer_kv = torch.zeros(0,0,0)
+        if delta_kv_buffer != None:
+            self.DeltaW_kv = delta_kv_buffer[0]
+            self.metas_kv = delta_kv_buffer[1]
+            self.ss_kv = delta_kv_buffer[2]
+        else:
+            self.DeltaW_kv = torch.zeros(0,0,0)
+            self.metas_kv = torch.zeros(0,0,0)
+            self.ss_kv = torch.zeros(0,0,0)
+        if delta_q_buffer != None:
+            self.DeltaW_q = delta_q_buffer[0]
+            self.metas_q = delta_q_buffer[1]
+            self.ss_q = delta_q_buffer[2]
+        else:
+            self.DeltaW_q = torch.zeros(0,0,0)
+            self.metas_q = torch.zeros(0,0,0)
+            self.ss_q = torch.zeros(0,0,0)
 
         # q,k,v have the same input dimensions
         # k,v have the same output dimensions
@@ -217,14 +248,24 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: RowParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, A_buffer, B_buffer, bs, weight_indices, DeltaW_buffer, metas_buffer, ss_buffer):
-        self.A_buffer = A_buffer
-        self.B_buffer = B_buffer
+    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
         self.weight_indices = weight_indices
         self.bs = bs
-        self.DeltaW = DeltaW_buffer
-        self.metas = metas_buffer
-        self.ss = ss_buffer
+        if lora_buffer != None:
+            self.A_buffer = lora_buffer[0]
+            self.B_buffer = lora_buffer[1]
+        else:
+            self.A_buffer = torch.zeros(0,0,0)
+            self.B_buffer = torch.zeros(0,0,0)
+            
+        if delta_buffer != None:
+            self.DeltaW = delta_buffer[0]
+            self.metas = delta_buffer[1]
+            self.ss = delta_buffer[1]
+        else:
+            self.DeltaW = torch.zeros(0,0,0)
+            self.metas = torch.zeros(0,0,0)
+            self.ss = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)

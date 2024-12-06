@@ -207,27 +207,18 @@ class ToppingsManager:
             if "qkv_proj" not in module_name:
                 weight_name = self.get_weight_name(module_name, 0)
                 module.set_topping_info(
-                    self.A_buffer[weight_name][layer_id],
-                    self.B_buffer[weight_name][layer_id],
                     bs,
                     weight_indices,
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0)
+                    lora_buffer = (self.A_buffer[weight_name][layer_id], self.B_buffer[weight_name][layer_id]),
+                    delta_buffer = None
                 )
             else:
                 module.set_topping_info(
-                    self.A_buffer["qkv_proj"][layer_id],
-                    self.B_buffer["q_proj"][layer_id],
-                    self.B_buffer["kv_proj"][layer_id],
                     bs,
                     weight_indices,
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0),
-                    torch.zeros(0,0,0)
+                    lora_buffer = (self.A_buffer["qkv_proj"][layer_id], self.B_buffer["q_proj"][layer_id], self.B_buffer["kv_proj"][layer_id]),
+                    delta_kv_buffer = None,
+                    delta_q_buffer = None                    
                 )
 
     def register_topping(
