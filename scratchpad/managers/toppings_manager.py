@@ -243,11 +243,19 @@ class ToppingsManager:
                 device="cuda",
             )
         else:
-            # restructure forward_batch, such that requests in the batch are grouped by toppings_id
-            # and ensure the weight_indices are increasing monotonically
-            for i in range(bs):
-                weight_indices[i] = self.toppings_id[forward_batch.topping_paths[i]]
+            # 1. Convert each request's topping_path to a topping_id
+            topping_ids = torch.tensor(
+                [self.toppings_id[tp] for tp in forward_batch.topping_paths],
+                dtype=torch.long,
+                device=forward_batch.input_ids.device,
+            )
+            # 2. Sort by topping_id to group requests by topping and ensure monotonic order
+            sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
+            reordered_input_ids = forward_batch.input_ids[sorted_indices]
+            forward_batch.input_ids = reordered_input_ids
+            weight_indices = sorted_topping_ids
 
+        print(f"weight_indices: {weight_indices.shape}")
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
             if "qkv_proj" not in module_name:
