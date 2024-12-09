@@ -81,6 +81,7 @@ class ToppingsManager:
         self.base_model = base_model
         self.base_hf_config = base_hf_config
         self.load_config = load_config
+        self.toppings_id = {}
         self.max_toppings_per_batch = server_args.max_toppings_per_batch
         toppings = parse_topping_config(server_args.init_toppings)
         for topping in toppings:
@@ -146,6 +147,7 @@ class ToppingsManager:
             logger.info(f"Loading {t_type} {name}")
             if t_type == "lora":
                 self.lora_id[name] = len(self.loras)
+                self.toppings_id[name] = len(self.loras)
                 self.loras.append(
                     LoRAAdapter(
                         name, self.configs[name], self.base_hf_config, self.load_config
@@ -154,6 +156,7 @@ class ToppingsManager:
                 self.loras[-1].initialize_weights()
             elif t_type == "delta":
                 self.delta_id[name] = len(self.deltas)
+                self.toppings_id[name] = len(self.loras) + len(self.deltas)
                 self.deltas.append(
                     DeltaAdapter(
                         name, self.configs[name], self.base_hf_config, self.load_config
@@ -222,9 +225,29 @@ class ToppingsManager:
         # setup lora in forward modules
         bs = forward_batch.batch_size
         indices_len = forward_batch.input_ids.size(0)
-        weight_indices = torch.empty((indices_len,), dtype=torch.int64, device="cuda")
-        for i, topping_path in enumerate(forward_batch.topping_paths):
-            weight_indices[i] = self.buffer_id[topping_path]
+
+        # bs == len(topping_paths)
+        assert bs == len(
+            forward_batch.topping_paths
+        ), f"Expected batch size to match topping paths, got (bs={bs}) != ({len(forward_batch.topping_paths)})"
+
+        weight_indices = torch.full(
+            (indices_len,), fill_value=-1, dtype=torch.int64, device="cuda"
+        )
+
+        # TODO(xiaozhe): set indices=-1 when topping_path is not provided
+        if forward_batch.forward_mode == 1:  # prefill
+            weight_indices = torch.full(
+                (indices_len,),
+                fill_value=self.toppings_id[forward_batch.topping_paths[0]],
+                dtype=torch.int64,
+                device="cuda",
+            )
+        else:
+            for i in range(bs):
+                weight_indices[i] = self.toppings_id[forward_batch.topping_paths[i]]
+        print(f"weight indices: {weight_indices}")
+
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
             if "qkv_proj" not in module_name:
@@ -232,16 +255,23 @@ class ToppingsManager:
                 module.set_topping_info(
                     bs,
                     weight_indices,
-                    lora_buffer = (self.A_buffer[weight_name][layer_id], self.B_buffer[weight_name][layer_id]),
-                    delta_buffer = None
+                    lora_buffer=(
+                        self.A_buffer[weight_name][layer_id],
+                        self.B_buffer[weight_name][layer_id],
+                    ),
+                    delta_buffer=None,
                 )
             else:
                 module.set_topping_info(
                     bs,
                     weight_indices,
-                    lora_buffer = (self.A_buffer["qkv_proj"][layer_id], self.B_buffer["q_proj"][layer_id], self.B_buffer["kv_proj"][layer_id]),
-                    delta_kv_buffer = None,
-                    delta_q_buffer = None                    
+                    lora_buffer=(
+                        self.A_buffer["qkv_proj"][layer_id],
+                        self.B_buffer["q_proj"][layer_id],
+                        self.B_buffer["kv_proj"][layer_id],
+                    ),
+                    delta_kv_buffer=None,
+                    delta_q_buffer=None,
                 )
 
     def register_topping(
