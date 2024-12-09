@@ -101,6 +101,8 @@ class ToppingsManager:
             base_model=self.base_model,
             max_lora_dim=self.max_lora_dim,
             lora_dtype=self.dtype,
+            deltas=self.deltas,
+            delta_target_weights=self.delta_target_weights
         )
 
     def init_topping_batch(self):
@@ -135,6 +137,8 @@ class ToppingsManager:
         self.target_weights = set(
             [get_stacked_name(module) for module in self.origin_target_modules]
         )
+
+        self.delta_target_weights = ["qkv_proj", "gate_up_proj", "o_proj", "down_proj"]
 
         # load all weights to cpu
         self.loras = []
@@ -233,15 +237,14 @@ class ToppingsManager:
                     bs,
                     weight_indices,
                     lora_buffer = (self.A_buffer[weight_name][layer_id], self.B_buffer[weight_name][layer_id]),
-                    delta_buffer = None
+                    delta_buffer = (self.qweight_buffer[weight_name][layer_id], self.scales_buffer[weight_name][layer_id], self.meta_buffer[weight_name][layer_id])
                 )
             else:
                 module.set_topping_info(
                     bs,
                     weight_indices,
                     lora_buffer = (self.A_buffer["qkv_proj"][layer_id], self.B_buffer["q_proj"][layer_id], self.B_buffer["kv_proj"][layer_id]),
-                    delta_kv_buffer = None,
-                    delta_q_buffer = None                    
+                    delta_buffer = (self.qweight_buffer["qkv_proj"][layer_id], self.scales_buffer["qkv_proj"][layer_id], self.meta_buffer["qkv_proj"][layer_id])                 
                 )
 
     def register_topping(
@@ -292,9 +295,41 @@ class ToppingsManager:
     def _load_delta(self, uid, buffer_id):
         print(uid, buffer_id)
         print(f"Loading Delta {uid}")
+        num_layer = self.base_hf_config.num_hidden_layers
+
+        if uid is None:
+            for i in range(num_layer):
+                for k in self.qweight_buffer.keys():
+                    self.qweight_buffer[k][i][buffer_id] *= 0
+            return
+
+        for i in range(num_layer):
+            layer_weights = self.deltas[self.delta_id[uid]].layers[i].weights
+            for name, weights in layer_weights.items():
+                print(name)
+                if "qweight" in name:
+                    weight_name = self.get_delta_weight_name(name)
+                    print(weight_name)
+                    if weight_name:
+                        self.qweight_buffer[weight_name][i][buffer_id].copy_(weights)
+                elif "scales" in name:
+                    weight_name = self.get_delta_weight_name(name)
+                    print(weight_name)
+                    if weight_name:
+                        self.scales_buffer[weight_name][i][buffer_id].copy_(weights)
+                else:
+                    weight_name = self.get_delta_weight_name(name)
+                    print(weight_name)
+                    if weight_name:
+                        self.meta_buffer[weight_name][i][buffer_id].copy_(weights)
 
     def unload_topping(self):
         pass
+
+    def get_delta_weight_name(self, name):
+        for target_weight_name in self.delta_target_weights:
+            if target_weight_name in name:
+                return target_weight_name
 
     def get_weight_name(self, name, idx):
         for target_weight_name in self.target_weights:
@@ -325,3 +360,15 @@ class ToppingsManager:
     @property
     def B_buffer(self):
         return self.topping_memory_pool.B_buffer
+    
+    @property
+    def qweight_buffer(self):
+        return self.topping_memory_pool.qweight_buffer
+
+    @property
+    def meta_buffer(self):
+        return self.topping_memory_pool.meta_buffer
+    
+    @property
+    def scales_buffer(self):
+        return self.topping_memory_pool.scales_buffer

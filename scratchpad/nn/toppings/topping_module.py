@@ -67,6 +67,13 @@ class DeltaAdapter(ToppingAdapter):
     def __init__(self, uid, config, base_hf_config, load_config):
         super().__init__(uid, config, base_hf_config, load_config)
 
+    def get_stacked_multiply_delta(self, module_name):
+        stacked_rank = {
+            "qkv_proj": 3,
+            "gate_up_proj": 2,
+        }
+        return stacked_rank[module_name] if module_name in stacked_rank else 1
+
     def initialize_weights(self):
         print(f"Initializing weights...")
         loader = DeltazipModelLoader(self.load_config)
