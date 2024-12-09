@@ -190,7 +190,7 @@ class ToppingsManager:
             logger.info(f"({self.available_toppings[topping][0]}) {topping}")
 
     def set_lora_module(self, module_name, module):
-        lora_module = get_topping_layer(module, None, self.max_lora_dim, self.scaling)
+        lora_module = get_topping_layer(module)
         replace_submodule(self.base_model, module_name, lora_module)
         return lora_module
 
@@ -225,7 +225,7 @@ class ToppingsManager:
         # setup lora in forward modules
         bs = forward_batch.batch_size
         indices_len = forward_batch.input_ids.size(0)
-
+        print(f"forward_batch: {forward_batch.input_ids.shape}")
         # bs == len(topping_paths)
         assert bs == len(
             forward_batch.topping_paths
@@ -244,6 +244,8 @@ class ToppingsManager:
                 device="cuda",
             )
         else:
+            # restructure forward_batch, such that requests in the batch are grouped by toppings_id
+            # and ensure the weight_indices are increasing monotonically
             for i in range(bs):
                 weight_indices[i] = self.toppings_id[forward_batch.topping_paths[i]]
         print(f"weight indices: {weight_indices}")
