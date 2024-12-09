@@ -5,15 +5,13 @@ import os
 from dataclasses import asdict
 import time
 import warnings
-from typing import List, Optional, Union, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 from collections import deque
 import torch
 import zmq
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.constrained.grammar import GrammarCache
-from scratchpad.constrained.fsm_cache import FSMCache
-from scratchpad.constrained.jump_forward import JumpForwardCache
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from ..managers.structs import (
     AbortReq,
@@ -22,7 +20,6 @@ from ..managers.structs import (
     FlushCacheReq,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
-    TokenizedRewardReqInput,
     UpdateWeightReqInput,
     UpdateWeightReqOutput,
     MemoryPoolControlReqInput,

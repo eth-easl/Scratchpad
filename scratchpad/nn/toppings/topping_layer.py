@@ -1,6 +1,3 @@
-import json
-import os
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -49,20 +46,23 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
     def forward(self, input_: torch.Tensor):
         return self.base_layer(input_)
 
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
+        self.indices = weight_indices
+
 
 class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: ColumnParallelLinear, config) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
         self.weight_indices = weight_indices
         self.bs = bs
         if lora_buffer != None:
             self.A_buffer = lora_buffer[0]
             self.B_buffer = lora_buffer[1]
         else:
-            self.A_buffer = torch.zeros(0,0,0)
-            self.B_buffer = torch.zeros(0,0,0)
+            self.A_buffer = torch.zeros(0, 0, 0)
+            self.B_buffer = torch.zeros(0, 0, 0)
 
         if delta_buffer != None:
             self.qweight_buffer = delta_buffer[0]
@@ -90,7 +90,7 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             metas=self.metas_buffer,
             ss=self.scales_buffer,
         )
-        base_output =+ output
+        base_output = +output
         return base_output, None
 
 
@@ -98,16 +98,16 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
     def __init__(self, base_layer: MergedColumnParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
         self.weight_indices = weight_indices
         self.bs = bs
         if lora_buffer != None:
             self.A_buffer = lora_buffer[0]
             self.B_buffer = lora_buffer[1]
         else:
-            self.A_buffer = torch.zeros(0,0,0)
-            self.B_buffer = torch.zeros(0,0,0)
-            
+            self.A_buffer = torch.zeros(0, 0, 0)
+            self.B_buffer = torch.zeros(0, 0, 0)
+
         if delta_buffer != None:
             self.qweight_buffer = delta_buffer[0]
             self.metas_buffer = delta_buffer[1]
@@ -190,7 +190,7 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         # q,k,v have the same input dimensions
         # k,v have the same output dimensions
         # q has a different output dimension than k,v
-        
+
         # (A_buffer_qkv: bsz, dim1, rank*2)
         # (B_buffer_q: bsz, rank, dim2*2)
         # (B_buffer_kv: bsz, rank, dim3*2)
@@ -198,9 +198,6 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         # (qweight_buffer: bsz,_, _*3)
         # (meta_buffer: bsz,_, _*3)
         # (scales_buffer: bsz, _, _*3)
-
-    def apply_topping(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        pass
 
     def forward(self, input_: torch.Tensor):
         # input_: (bsz, dim0)
@@ -214,8 +211,8 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         metas_kv_dim = self.meta_buffer_kv.shape[1] // 2
         scales_kv_dim = self.scales_buffer_kv.shape[2] // 2
 
-        for i in range(3): # calculate q, k, v projections
-            if i == 0: # q
+        for i in range(3):  # calculate q, k, v projections
+            if i == 0:  # q
                 output = ldmm(
                     indices=self.weight_indices,
                     x=input_,
@@ -226,7 +223,7 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
                     ss=self.scales_buffer_q,
                 )
                 base_output[:, i * b_dim_q : (i + 1) * b_dim_q] += output
-            else: # k, v
+            else:  # k, v
                 output = ldmm(
                     indices=self.weight_indices,
                     x=input_,
@@ -236,7 +233,7 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
                     metas=self.meta_buffer_kv[:, (i - 1) * metas_kv_dim: i * metas_kv_dim, :],
                     ss=self.scales_buffer_kv[:, :, (i - 1) * scales_kv_dim: i * scales_kv_dim],
                 )
-                base_output[:, i * b_dim_kv : (i + 1) * b_dim_kv] += output               
+                base_output[:, i * b_dim_kv : (i + 1) * b_dim_kv] += output
 
         return base_output, None
 
@@ -245,16 +242,16 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer: RowParallelLinear, config: Dict) -> None:
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, bs, weight_indices, lora_buffer = None, delta_buffer = None):
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
         self.weight_indices = weight_indices
         self.bs = bs
         if lora_buffer != None:
             self.A_buffer = lora_buffer[0]
             self.B_buffer = lora_buffer[1]
         else:
-            self.A_buffer = torch.zeros(0,0,0)
-            self.B_buffer = torch.zeros(0,0,0)
-            
+            self.A_buffer = torch.zeros(0, 0, 0)
+            self.B_buffer = torch.zeros(0, 0, 0)
+
         if delta_buffer != None:
             self.qweight_buffer = delta_buffer[0]
             self.metas_buffer = delta_buffer[1]
@@ -269,7 +266,6 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
         # (qweight_buffer: bsz,_, _)
         # (metas_buffer: bsz,_, _)
         # (scales_buffer: bsz, _, _)
-
 
     def forward(self, input_: torch.Tensor):
         base_output = self.base_layer(input_)[0]
@@ -286,9 +282,7 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
         return base_output, None
 
 
-def get_topping_layer(
-    layer: nn.Module, segment_gemm, lora_rank, scaling
-) -> BaseLayerWithTopping:
+def get_topping_layer(layer: nn.Module) -> BaseLayerWithTopping:
     supported_layer_types = {
         # the order matters
         VocabParallelEmbedding: VocabParallelEmbeddingWithTopping,

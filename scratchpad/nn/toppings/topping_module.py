@@ -110,8 +110,6 @@ class DeltaAdapter(ToppingAdapter):
                     weight_name = remaining_key.replace(f".{my_rank}", "")
                     self.layers[layer_id].weights[weight_name] = weight_val.cpu()
 
-        print(f"delta: self.layers: {self.layers[0].weights.keys()}")
-
 
 class LoRAAdapter(ToppingAdapter):
     def __init__(self, uid, config, base_hf_config, load_config):
@@ -174,4 +172,3 @@ class LoRAAdapter(ToppingAdapter):
                     )
                     layer.weights.pop(weight_name)
                     layer.weights.pop(up_name)
-        print(f"lora: self.layers: {self.layers[0].weights.keys()}")
