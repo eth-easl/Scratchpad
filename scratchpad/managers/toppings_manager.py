@@ -235,7 +235,6 @@ class ToppingsManager:
             (indices_len,), fill_value=-1, dtype=torch.int64, device="cuda"
         )
 
-        # TODO(xiaozhe): set indices=-1 when topping_path is not provided
         if forward_batch.forward_mode == 1:  # prefill
             weight_indices = torch.full(
                 (indices_len,),
@@ -248,7 +247,6 @@ class ToppingsManager:
             # and ensure the weight_indices are increasing monotonically
             for i in range(bs):
                 weight_indices[i] = self.toppings_id[forward_batch.topping_paths[i]]
-        print(f"weight indices: {weight_indices}")
 
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
