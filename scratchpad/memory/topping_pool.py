@@ -51,15 +51,16 @@ class ToppingMemPool:
         self.A_buffer = {}
         self.B_buffer = {}
         # for delta
+        self.deltas = deltas
+        self.delta_target_weights = delta_target_weights
         self.qweight_buffer = {}
         self.meta_buffer = {}
         self.scales_buffer = {}
-        delta_dtypes = {torch.int16, torch.int32, torch.float16}
+        delta_dtypes = {"meta": torch.int16, "qweight": torch.int32, "scales": torch.float16}
         
 
         # allocate lora 
         num_layers = self.base_hf_config.num_hidden_layers
-        print(f"self.target_weights: {self.target_weights}")
         for module_A, module_B in self.target_weights:
             if hasattr(self.base_model, "get_hidden_dim"):
                 hidden_dim_A, _ = self.base_model.get_hidden_dim(module_A)
@@ -111,8 +112,27 @@ class ToppingMemPool:
                 ]
         
         #allocate delta
+        pack_factor = self.deltas[-1].get_pack_factor()
+        sparse_factor = self.deltas[-1].get_sparse_factor()
         for module in delta_target_weights:
+            dimensions = self.base_model.get_hidden_dim(module)
             stack_factor = self.deltas[-1].get_stacked_multiply_delta(module)
-            self.qweight_buffer[module] = [torch.zeros(0,0,0*stack_factor) for _ in range(num_layers)]
-            self.meta_buffer[module] = [torch.zeros(0,0,0*stack_factor) for _ in range(num_layers)]
-            self.scales_buffer[module] = [torch.zeros(0,0,0*stack_factor) for _ in range(num_layers)]
+            stacked_dim = dimensions[1] * stack_factor
+
+            
+            self.qweight_buffer[module] = [torch.zeros
+                                           (self.max_toppings_per_batch,
+                                            dimensions[0] // (pack_factor * sparse_factor * 2),
+                                            stacked_dim * 2,
+                                            dtype = delta_dtypes["qweight"]) 
+                                            for _ in range(num_layers)]
+            self.meta_buffer[module] = [torch.zeros(self.max_toppings_per_batch,
+                                                    stacked_dim,
+                                                    dimensions[0] // (pack_factor * sparse_factor), 
+                                                    dtype = delta_dtypes["meta"]) 
+                                                    for _ in range(num_layers)]
+            self.scales_buffer[module] = [torch.zeros(self.max_toppings_per_batch,
+                                                      1,
+                                                      stacked_dim, 
+                                                      dtype = delta_dtypes["scales"]) 
+                                                      for _ in range(num_layers)]

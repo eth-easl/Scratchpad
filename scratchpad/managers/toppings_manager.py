@@ -102,7 +102,7 @@ class ToppingsManager:
             max_lora_dim=self.max_lora_dim,
             lora_dtype=self.dtype,
             deltas=self.deltas,
-            delta_target_weights=self.delta_target_weights
+            delta_target_weights=self.delta_target_weights,
         )
 
     def init_topping_batch(self):
@@ -138,7 +138,7 @@ class ToppingsManager:
             [get_stacked_name(module) for module in self.origin_target_modules]
         )
 
-        self.delta_target_weights = ["qkv_proj", "gate_up_proj", "o_proj", "down_proj"]
+        self.delta_target_weights = ["q_proj", "kv_proj", "gate_up_proj", "o_proj", "down_proj"]
 
         # load all weights to cpu
         self.loras = []
@@ -244,7 +244,8 @@ class ToppingsManager:
                     bs,
                     weight_indices,
                     lora_buffer = (self.A_buffer["qkv_proj"][layer_id], self.B_buffer["q_proj"][layer_id], self.B_buffer["kv_proj"][layer_id]),
-                    delta_buffer = (self.qweight_buffer["qkv_proj"][layer_id], self.scales_buffer["qkv_proj"][layer_id], self.meta_buffer["qkv_proj"][layer_id])                 
+                    delta_buffer_q = (self.qweight_buffer["q_proj"][layer_id], self.scales_buffer["q_proj"][layer_id], self.meta_buffer["q_proj"][layer_id]),
+                    delta_buffer_kv = (self.qweight_buffer["kv_proj"][layer_id], self.scales_buffer["kv_proj"][layer_id], self.meta_buffer["kv_proj"][layer_id])                   
                 )
 
     def register_topping(
@@ -306,22 +307,39 @@ class ToppingsManager:
         for i in range(num_layer):
             layer_weights = self.deltas[self.delta_id[uid]].layers[i].weights
             for name, weights in layer_weights.items():
-                print(name)
-                if "qweight" in name:
-                    weight_name = self.get_delta_weight_name(name)
-                    print(weight_name)
-                    if weight_name:
-                        self.qweight_buffer[weight_name][i][buffer_id].copy_(weights)
-                elif "scales" in name:
-                    weight_name = self.get_delta_weight_name(name)
-                    print(weight_name)
-                    if weight_name:
-                        self.scales_buffer[weight_name][i][buffer_id].copy_(weights)
-                else:
-                    weight_name = self.get_delta_weight_name(name)
-                    print(weight_name)
-                    if weight_name:
-                        self.meta_buffer[weight_name][i][buffer_id].copy_(weights)
+                if "qkv_proj" in name: # we need to extract, the q_proj and kv_proj slices
+                    if "qweight" in name:
+                        q_proj_name = "q_proj"
+                        kv_proj_name = "kv_proj"
+                        q_dim = self.qweight_buffer[q_proj_name][i][buffer_id].shape[1]
+                        self.qweight_buffer[q_proj_name][i][buffer_id].copy_(weights[:, :q_dim])
+                        self.qweight_buffer[kv_proj_name][i][buffer_id].copy_(weights[:, q_dim:])
+                        
+                    elif "scales" in name:
+                        q_proj_name = "q_proj"
+                        kv_proj_name = "kv_proj"
+                        q_dim = self.scales_buffer[q_proj_name][i][buffer_id].shape[1]
+                        self.scales_buffer[q_proj_name][i][buffer_id].copy_(weights[:, :q_dim])
+                        self.scales_buffer[kv_proj_name][i][buffer_id].copy_(weights[:, q_dim:])
+                    else:
+                        q_proj_name = "q_proj"
+                        kv_proj_name = "kv_proj"
+                        q_dim = self.meta_buffer[q_proj_name][i][buffer_id].shape[0]
+                        self.meta_buffer[q_proj_name][i][buffer_id].copy_(weights[:q_dim, :])
+                        self.meta_buffer[kv_proj_name][i][buffer_id].copy_(weights[q_dim:, :])
+                else: # the other layers can be used as such
+                    if "qweight" in name:
+                        weight_name = self.get_delta_weight_name(name)
+                        if weight_name:
+                            self.qweight_buffer[weight_name][i][buffer_id].copy_(weights)
+                    elif "scales" in name:
+                        weight_name = self.get_delta_weight_name(name)
+                        if weight_name:
+                            self.scales_buffer[weight_name][i][buffer_id].copy_(weights)
+                    else:
+                        weight_name = self.get_delta_weight_name(name)
+                        if weight_name:
+                            self.meta_buffer[weight_name][i][buffer_id].copy_(weights)
 
     def unload_topping(self):
         pass

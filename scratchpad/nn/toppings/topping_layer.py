@@ -65,19 +65,19 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             self.B_buffer = torch.zeros(0,0,0)
 
         if delta_buffer != None:
-            self.DeltaW = delta_buffer[0]
-            self.metas = delta_buffer[1]
-            self.ss = delta_buffer[2]
+            self.qweight_buffer = delta_buffer[0]
+            self.metas_buffer = delta_buffer[1]
+            self.scales_buffer = delta_buffer[2]
         else:
-            self.DeltaW = torch.zeros(0,0,0)
-            self.metas = torch.zeros(0,0,0)
-            self.ss = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0,0,0)
+            self.metas_buffer = torch.zeros(0,0,0)
+            self.scales_buffer = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)
-        # (Deltaw: bsz,_, _)
-        # (metas: bsz,_, _)
-        # (ss: bsz, _, _)
+        # (qweight_buffer: bsz,_, _)
+        # (metas_buffer: bsz,_, _)
+        # (scales_buffer: bsz, _, _)
 
     def forward(self, input_: torch.Tensor):
         base_output = self.base_layer(input_)[0]
@@ -86,9 +86,9 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             x=input_,
             LwA=self.A_buffer,
             LwB=self.B_buffer,
-            DeltaW=self.DeltaW,
-            metas=self.metas,
-            ss=self.ss,
+            DeltaW=self.qweight_buffer,
+            metas=self.metas_buffer,
+            ss=self.scales_buffer,
         )
         base_output =+ output
         return base_output, None
@@ -109,19 +109,19 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
             self.B_buffer = torch.zeros(0,0,0)
             
         if delta_buffer != None:
-            self.DeltaW = delta_buffer[0]
-            self.metas = delta_buffer[1]
-            self.ss = delta_buffer[2]
+            self.qweight_buffer = delta_buffer[0]
+            self.metas_buffer = delta_buffer[1]
+            self.scales_buffer = delta_buffer[2]
         else:
-            self.DeltaW = torch.zeros(0,0,0)
-            self.metas = torch.zeros(0,0,0)
-            self.ss = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0,0,0)
+            self.metas_buffer = torch.zeros(0,0,0)
+            self.scales_buffer = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank*2)
         # (B_buffer: bsz, rank, dim2*2)
-        # (Deltaw: bsz,_, _*2)
-        # (metas: bsz,_, _*2)
-        # (ss: bsz, _, _*2)
+        # (qweight_buffer: bsz,_, _*2)
+        # (metas_buffer: bsz,_, _*2)
+        # (scales_buffer: bsz, _, _*2)
 
     def forward(self, input_: torch.Tensor):
         # input_: (bsz, dim0)
@@ -130,18 +130,18 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
         base_output = self.base_layer(input_)[0]
         rank = self.A_buffer.shape[2] // 2
         b_dim = self.B_buffer.shape[2] // 2
-        delta_dim = self.DeltaW.shape[2] // 2
-        metas_dim = self.metas.shape[2] // 2
-        ss_dim = self.ss.shape[2] // 2
+        qweight_dim = self.qweight_buffer.shape[2] // 2
+        metas_dim = self.metas_buffer.shape[1] // 2
+        scales_dim = self.scales_buffer.shape[2] // 2
         for i in range(2):
             output = ldmm(
                 indices=self.weight_indices,
                 x=input_,
                 LwA=self.A_buffer[:, :, i * rank : (i + 1) * rank],
                 LwB=self.B_buffer[:, :, i * b_dim : (i + 1) * b_dim],
-                DeltaW=self.DeltaW[:, :, i * delta_dim : (i + 1) * delta_dim],
-                metas=self.metas[:, :, i * metas_dim: (i + 1) * metas_dim],
-                ss=self.ss[:, :, i * ss_dim: (i + 1) * ss_dim],
+                DeltaW=self.qweight_buffer[:, :, i * qweight_dim : (i + 1) * qweight_dim],
+                metas=self.metas_buffer[:, i * metas_dim: (i + 1) * metas_dim, :],
+                ss=self.scales_buffer[:, :, i * scales_dim: (i + 1) * scales_dim],
             )
             base_output[:, i * b_dim : (i + 1) * b_dim] += output
         return base_output, None
@@ -156,7 +156,7 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         super().__init__(base_layer, config)
 
     def set_topping_info(
-        self, bs, weight_indices, lora_buffer = None, delta_buffer = None
+        self, bs, weight_indices, lora_buffer = None, delta_buffer_q = None, delta_buffer_kv = None, 
     ):
         self.set_lora = True
         self.bs = bs
@@ -169,14 +169,23 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
             self.A_buffer_qkv = torch.zeros(0,0,0)
             self.B_buffer_q = torch.zeros(0,0,0)
             self.B_buffer_kv = torch.zeros(0,0,0)
-        if delta_buffer != None:
-            self.qweight_buffer = delta_buffer[0]
-            self.meta_buffer = delta_buffer[1]
-            self.scales_buffer = delta_buffer[2]
+        if delta_buffer_q != None:
+            self.qweight_buffer_q = delta_buffer_q[0]
+            self.meta_buffer_q = delta_buffer_q[1]
+            self.scales_buffer_q = delta_buffer_q[2]
         else:
-            self.qweight_buffer = torch.zeros(0,0,0)
-            self.meta_buffer = torch.zeros(0,0,0)
-            self.scales_buffer = torch.zeros(0,0,0)
+            self.qweight_buffer_q = torch.zeros(0,0,0)
+            self.meta_buffer_q = torch.zeros(0,0,0)
+            self.scales_buffer_q = torch.zeros(0,0,0)
+
+        if delta_buffer_kv != None:
+            self.qweight_buffer_kv = delta_buffer_kv[0]
+            self.meta_buffer_kv = delta_buffer_kv[1]
+            self.scales_buffer_kv = delta_buffer_kv[2]
+        else:
+            self.qweight_buffer_kv = torch.zeros(0,0,0)
+            self.meta_buffer_kv = torch.zeros(0,0,0)
+            self.scales_buffer_kv = torch.zeros(0,0,0)
 
         # q,k,v have the same input dimensions
         # k,v have the same output dimensions
@@ -201,9 +210,9 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         rank = self.A_buffer_qkv.shape[2] // 3
         b_dim_q = self.B_buffer_q.shape[2]
         b_dim_kv = self.B_buffer_kv.shape[2] // 2
-        delta_dim = self.DeltaW_kv.shape[2] // 3
-        metas_dim = self.metas_kv.shape[2] // 3
-        ss_dim = self.ss_kv.shape[2] // 3
+        qweight_kv_dim = self.qweight_buffer_kv.shape[2] // 2
+        metas_kv_dim = self.meta_buffer_kv.shape[1] // 2
+        scales_kv_dim = self.scales_buffer_kv.shape[2] // 2
 
         for i in range(3): # calculate q, k, v projections
             if i == 0: # q
@@ -212,9 +221,9 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
                     x=input_,
                     LwA=self.A_buffer_qkv[:, :, i * rank : (i + 1) * rank],
                     LwB=self.B_buffer_q,
-                    DeltaW=self.delta_buffer[:, :, i * delta_dim:(i + 1) * delta_dim],
-                    metas=self.metas_q[:, :, i * delta_dim:(i + 1) * metas_dim],
-                    ss=self.ss_q[:, :, i * delta_dim:(i + 1) * ss_dim],
+                    DeltaW=self.qweight_buffer_q,
+                    metas=self.meta_buffer_q,
+                    ss=self.scales_buffer_q,
                 )
                 base_output[:, i * b_dim_q : (i + 1) * b_dim_q] += output
             else: # k, v
@@ -223,9 +232,9 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
                     x=input_,
                     LwA=self.A_buffer_qkv[:, :, i * rank : (i + 1) * rank],
                     LwB=self.B_buffer_kv[:, :, (i - 1) * b_dim_kv : i * b_dim_kv],
-                    DeltaW=self.delta_buffer[:, :, i * delta_dim:(i + 1) * delta_dim],
-                    metas=self.metas_q[:, :, i * delta_dim:(i + 1) * metas_dim],
-                    ss=self.ss_q[:, :, i * delta_dim:(i+1) * ss_dim],
+                    DeltaW=self.qweight_buffer_kv[:, :, (i - 1) * qweight_kv_dim: i * qweight_kv_dim],
+                    metas=self.meta_buffer_kv[:, (i - 1) * metas_kv_dim: i * metas_kv_dim, :],
+                    ss=self.scales_buffer_kv[:, :, (i - 1) * scales_kv_dim: i * scales_kv_dim],
                 )
                 base_output[:, i * b_dim_kv : (i + 1) * b_dim_kv] += output               
 
@@ -247,19 +256,19 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
             self.B_buffer = torch.zeros(0,0,0)
             
         if delta_buffer != None:
-            self.DeltaW = delta_buffer[0]
-            self.metas = delta_buffer[1]
-            self.ss = delta_buffer[2]
+            self.qweight_buffer = delta_buffer[0]
+            self.metas_buffer = delta_buffer[1]
+            self.scales_buffer = delta_buffer[2]
         else:
-            self.DeltaW = torch.zeros(0,0,0)
-            self.metas = torch.zeros(0,0,0)
-            self.ss = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0,0,0)
+            self.metas_buffer = torch.zeros(0,0,0)
+            self.scales_buffer = torch.zeros(0,0,0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)
-        # (Deltaw: bsz,_, _)
-        # (metas: bsz,_, _)
-        # (ss: bsz, _, _)
+        # (qweight_buffer: bsz,_, _)
+        # (metas_buffer: bsz,_, _)
+        # (scales_buffer: bsz, _, _)
 
 
     def forward(self, input_: torch.Tensor):
@@ -269,9 +278,9 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
             x=input_,
             LwA=self.A_buffer,
             LwB=self.B_buffer,
-            DeltaW=self.DeltaW,
-            metas=self.metas,
-            ss=self.ss,
+            DeltaW=self.qweight_buffer,
+            metas=self.metas_buffer,
+            ss=self.scales_buffer,
         )
         base_output += output
         return base_output, None
