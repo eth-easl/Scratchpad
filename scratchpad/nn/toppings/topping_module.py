@@ -64,8 +64,28 @@ class ToppingAdapter(nn.Module):
 
 
 class DeltaAdapter(ToppingAdapter):
+    
     def __init__(self, uid, config, base_hf_config, load_config):
         super().__init__(uid, config, base_hf_config, load_config)
+        self.pack_factor = None
+        self.sparse_factor = None
+
+    def get_stacked_multiply_delta(self, module_name):
+        stacked_rank = {
+            "kv_proj": 2,
+            "gate_up_proj": 2,
+        }
+        return stacked_rank[module_name] if module_name in stacked_rank else 1
+    
+    def get_pack_factor(self):
+        if self.pack_factor is None:
+            raise ValueError("pack factor not initialized")
+        return self.pack_factor
+
+    def get_sparse_factor(self):
+        if self.sparse_factor is None:
+            raise ValueError("sparse factor not initialized")
+        return self.sparse_factor
 
     def initialize_weights(self):
         print(f"Initializing weights...")
@@ -73,6 +93,8 @@ class DeltaAdapter(ToppingAdapter):
         local_path = loader.download_model(self.config)
         with open(os.path.join(local_path, "delta_config.json"), "r") as f:
             delta_config = json.load(f)
+            self.pack_factor = 32 // delta_config["compress_config"]["bits"]
+            self.sparse_factor = int(1 / delta_config["compress_config"]["sparsity"])
         weight_path = os.path.join(local_path, "deltazip-compressed.safetensors")
         with st.safe_open(weight_path, framework="torch", device="cpu") as f:
             keys = f.keys()
