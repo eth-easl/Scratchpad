@@ -742,7 +742,9 @@ class Scheduler:
                 return
 
         # Update batch tensors
-        batch.prepare_for_decode(self.enable_overlap)
+        batch.prepare_for_decode(
+            self.enable_overlap, self.tp_worker.model_runner.topping_manager
+        )
 
     def run_batch(self, batch: ScheduleBatch):
         """Run a batch."""

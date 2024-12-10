@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 
 import torch
 
@@ -17,6 +17,9 @@ from scratchpad.utils import envs, logger
 from scratchpad.config.model_config import ModelConfig
 
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
+
+if TYPE_CHECKING:
+    from scratchpad.managers.toppings_manager import ToppingsManager
 
 
 class BaseFinishReason:
@@ -815,15 +818,30 @@ class ScheduleBatch:
         # Reset the encoder cached status
         self.encoder_cached = [True] * len(self.reqs)
 
-    def prepare_for_decode(self, enable_overlap: bool = False):
+    def prepare_for_decode(
+        self,
+        enable_overlap: bool = False,
+        topping_manager: Optional["ToppingsManager"] = None,
+    ):
         self.forward_mode = ForwardMode.DECODE
-
         self.input_ids = self.output_ids
         self.output_ids = None
         if self.sampling_info.penalizer_orchestrator:
             self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
                 self.input_ids
             )
+
+        topping_ids = torch.tensor(
+            [topping_manager.toppings_id[req.topping_path] for req in self.reqs],
+            dtype=torch.long,
+            device=self.input_ids.device,
+        )
+        sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
+        # reorder reqs
+        self.input_ids = self.input_ids[sorted_indices]
+        self.reqs = [self.reqs[i] for i in sorted_indices]
+        self.req_pool_indices = self.req_pool_indices[sorted_indices]
+        self.seq_lens = self.seq_lens[sorted_indices]
 
         # Alloc mem
         bs = len(self.reqs)

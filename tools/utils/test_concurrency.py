@@ -1,6 +1,6 @@
-from tools.client.req import make_requests
-import numpy as np
 import asyncio
+import numpy as np
+from tools.client.req import make_requests
 
 
 def main(args):
@@ -8,21 +8,19 @@ def main(args):
     prompts = [
         "Who is Alan Turing?",
         "What is the capital of France?",
-        "What is the capital of Germany?",
-        "What is the capital of Spain?",
-        "Who is the president of the United States?",
-        "Who is the president of France?",
-        "Who is Albert Einstein?",
     ]
-    # randomly pick num_req prompts
-    prompts = np.random.choice(prompts, args.num_req, replace=True)
+    models = [
+        "eltorio/Llama-3.2-3B-appreciation-1",
+        "eltorio/Llama-3.2-3B-appreciation-1",
+    ]
+    prompts = prompts[: args.num_req]
     reqs = [
         {
             "messages": [{"role": "user", "content": prompt}],
-            "model": args.model,
+            "model": model,
             "max_tokens": 32,
         }
-        for prompt in prompts
+        for prompt, model in zip(prompts, models)
     ]
     responses = asyncio.run(make_requests(args.endpoint, reqs))
     print(responses)
