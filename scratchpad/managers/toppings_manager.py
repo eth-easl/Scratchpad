@@ -258,30 +258,35 @@ class ToppingsManager:
         # remap weight_indices so it's local to the batch
         # get unique_indices in weight_indices, and remap them from 0 to len(toppings_in_batch)
         unique_indices = torch.unique(weight_indices)
+        len_loras = len([x for x in unique_indices if x < len(self.loras)])
+        len_deltas = len([x for x in unique_indices if x >= len(self.loras)])
         remap_indices = {
             unique_indices[i].item(): i for i in range(len(unique_indices))
         }
+
         # remap weight_indices, new tensor will have values from 0 to len(toppings_in_batch), but the same shape as weight_indices
         weight_indices = torch.tensor(
             [remap_indices[idx.item()] for idx in weight_indices],
             dtype=torch.int64,
             device=forward_batch.input_ids.device,
         )
+
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
             if "qkv_proj" not in module_name:
                 weight_name = self.get_weight_name(module_name, 0)
+                # print(f"A_buffer shape: {self.A_buffer[weight_name][layer_id].shape}")
                 module.set_topping_info(
                     bs,
                     weight_indices,
                     lora_buffer=(
-                        self.A_buffer[weight_name][layer_id],
-                        self.B_buffer[weight_name][layer_id],
+                        self.A_buffer[weight_name][layer_id][:len_loras],
+                        self.B_buffer[weight_name][layer_id][:len_loras],
                     ),
                     delta_buffer=(
-                        self.qweight_buffer[weight_name][layer_id],
-                        self.scales_buffer[weight_name][layer_id],
-                        self.meta_buffer[weight_name][layer_id],
+                        self.qweight_buffer[weight_name][layer_id][:len_deltas],
+                        self.scales_buffer[weight_name][layer_id][:len_deltas],
+                        self.meta_buffer[weight_name][layer_id][:len_deltas],
                     ),
                 )
             else:
@@ -289,19 +294,19 @@ class ToppingsManager:
                     bs,
                     weight_indices,
                     lora_buffer=(
-                        self.A_buffer["qkv_proj"][layer_id],
-                        self.B_buffer["q_proj"][layer_id],
-                        self.B_buffer["kv_proj"][layer_id],
+                        self.A_buffer["qkv_proj"][layer_id][:len_loras],
+                        self.B_buffer["q_proj"][layer_id][:len_loras],
+                        self.B_buffer["kv_proj"][layer_id][:len_loras],
                     ),
                     delta_buffer_q=(
-                        self.qweight_buffer["q_proj"][layer_id],
-                        self.scales_buffer["q_proj"][layer_id],
-                        self.meta_buffer["q_proj"][layer_id],
+                        self.qweight_buffer["q_proj"][layer_id][:len_deltas],
+                        self.scales_buffer["q_proj"][layer_id][:len_deltas],
+                        self.meta_buffer["q_proj"][layer_id][:len_deltas],
                     ),
                     delta_buffer_kv=(
-                        self.qweight_buffer["kv_proj"][layer_id],
-                        self.scales_buffer["kv_proj"][layer_id],
-                        self.meta_buffer["kv_proj"][layer_id],
+                        self.qweight_buffer["kv_proj"][layer_id][:len_deltas],
+                        self.scales_buffer["kv_proj"][layer_id][:len_deltas],
+                        self.meta_buffer["kv_proj"][layer_id][:len_deltas],
                     ),
                 )
 
