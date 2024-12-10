@@ -62,7 +62,6 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
                 w = self.base_layer.weight
             else:
                 w = self.delta_weights[id]
-                print(w.shape)
             base_output[idx_mask] = nn.functional.embedding(inp, w)
         return base_output
 
@@ -298,17 +297,31 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
         # (scales_buffer: bsz, _, _)
 
     def forward(self, input_: torch.Tensor):
-        base_output = self.base_layer(input_)[0]
-        # base_output += ldmm(
-        #     indices=self.weight_indices,
-        #     x=input_,
-        #     LwA=self.A_buffer,
-        #     LwB=self.B_buffer,
-        #     DeltaW=self.qweight_buffer,
-        #     metas=self.metas_buffer,
-        #     ss=self.scales_buffer,
-        # )
-        return base_output, None
+        base_output = torch.matmul(input_, self.base_layer.weight.T)
+
+        delta_output = ldmm(
+            indices=self.weight_indices,
+            x=input_,
+            LwA=self.A_buffer,
+            LwB=self.B_buffer,
+            DeltaW=self.qweight_buffer,
+            metas=self.metas_buffer,
+            ss=self.scales_buffer,
+        )
+        assert base_output.shape == delta_output.shape
+        output_ = base_output + delta_output
+        output_ = base_output
+        if not self.base_layer.skip_bias_add:
+            output = (
+                output_ + self.base_layer.bias
+                if self.base_layer.bias is not None
+                else output_
+            )
+            output_bias = None
+        else:
+            output = output_
+            output_bias = self.base_layer.bias
+        return output, output_bias
 
 
 class LogitsProcessorWithTopping(BaseLayerWithTopping):

@@ -295,7 +295,27 @@ class ToppingsManager:
                     lora_buffer=None,
                     delta_buffer=self.weights_buffer["embed_tokens"][:len_deltas],
                 )
-            elif "qkv_proj" not in module_name:
+            elif "qkv_proj" in module_name:
+                module.set_topping_info(
+                    bs,
+                    weight_indices,
+                    lora_buffer=(
+                        self.A_buffer["qkv_proj"][layer_id][:len_loras],
+                        self.B_buffer["q_proj"][layer_id][:len_loras],
+                        self.B_buffer["kv_proj"][layer_id][:len_loras],
+                    ),
+                    delta_buffer_q=(
+                        self.qweight_buffer["q_proj"][layer_id][:len_deltas],
+                        self.meta_buffer["q_proj"][layer_id][:len_deltas],
+                        self.scales_buffer["q_proj"][layer_id][:len_deltas],
+                    ),
+                    delta_buffer_kv=(
+                        self.qweight_buffer["kv_proj"][layer_id][:len_deltas],
+                        self.meta_buffer["kv_proj"][layer_id][:len_deltas],
+                        self.scales_buffer["kv_proj"][layer_id][:len_deltas],
+                    ),
+                )
+            else:
                 weight_name = self.get_weight_name(module_name, 0)
                 module.set_topping_info(
                     bs,
@@ -328,26 +348,6 @@ class ToppingsManager:
                             if weight_name in self.scales_buffer
                             else None
                         ),
-                    ),
-                )
-            else:
-                module.set_topping_info(
-                    bs,
-                    weight_indices,
-                    lora_buffer=(
-                        self.A_buffer["qkv_proj"][layer_id][:len_loras],
-                        self.B_buffer["q_proj"][layer_id][:len_loras],
-                        self.B_buffer["kv_proj"][layer_id][:len_loras],
-                    ),
-                    delta_buffer_q=(
-                        self.qweight_buffer["q_proj"][layer_id][:len_deltas],
-                        self.meta_buffer["q_proj"][layer_id][:len_deltas],
-                        self.scales_buffer["q_proj"][layer_id][:len_deltas],
-                    ),
-                    delta_buffer_kv=(
-                        self.qweight_buffer["kv_proj"][layer_id][:len_deltas],
-                        self.meta_buffer["kv_proj"][layer_id][:len_deltas],
-                        self.scales_buffer["kv_proj"][layer_id][:len_deltas],
                     ),
                 )
 
