@@ -48,6 +48,8 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
         self.delta_weights = delta_buffer
 
     def forward(self, input_: torch.Tensor):
+        if self.delta_weights == None or self.delta_weights.shape[0] == 0:
+            return self.base_layer(input_)
         base_output = torch.zeros(
             (input_.shape[0], self.delta_weights[0].shape[1]),
             device=input_.device,
@@ -339,6 +341,8 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
         weight,
         logits_metadata: Union[LogitsMetadata, ForwardBatch],
     ):
+        if self.delta_buffer == None or self.delta_buffer.shape[0] == 0:
+            return self.base_layer._get_logits(input_ids, hidden_states, weight, logits_metadata)
         if isinstance(logits_metadata, ForwardBatch):
             logits_metadata = LogitsMetadata.from_forward_batch(logits_metadata)
         assert isinstance(logits_metadata, LogitsMetadata)
