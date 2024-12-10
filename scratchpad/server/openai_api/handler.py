@@ -460,7 +460,7 @@ def v1_generate_request(
     return_logprobs = []
     logprob_start_lens = []
     top_logprobs_nums = []
-
+    topping_paths = []
     # NOTE: with openai API, the prompt's logprobs are always not computed
     first_prompt_type = type(all_requests[0].prompt)
     for request in all_requests:
@@ -479,6 +479,7 @@ def v1_generate_request(
         top_logprobs_nums.append(
             request.logprobs if request.logprobs is not None else 0
         )
+        topping_paths.append(model_to_topping(request.model))
         sampling_params_list.append(
             {
                 "temperature": request.temperature,
@@ -507,6 +508,7 @@ def v1_generate_request(
             prompt_kwargs = {"text": prompt}
         else:
             prompt_kwargs = {"input_ids": prompt}
+        topping_paths = topping_paths[0]
     else:
         if isinstance(prompts[0], str):
             prompt_kwargs = {"text": prompts}
@@ -522,6 +524,7 @@ def v1_generate_request(
         return_text_in_logprobs=True,
         stream=all_requests[0].stream,
         rid=request_ids,
+        topping_path=topping_paths,
     )
 
     if len(all_requests) == 1:
@@ -532,7 +535,7 @@ def v1_generate_request(
 def v1_generate_response(request, ret, tokenizer_manager, to_file=False):
     choices = []
     echo = False
-
+    topping_paths = []
     if (not isinstance(request, list)) and request.echo:
         # TODO: handle the case propmt is token ids
         if isinstance(request.prompt, list) and isinstance(request.prompt[0], str):
