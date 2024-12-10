@@ -256,12 +256,8 @@ class ToppingsManager:
                 device=forward_batch.input_ids.device,
             )
         # remap weight_indices so it's local to the batch
-        toppings_in_batch = self.active_uids
         # get unique_indices in weight_indices, and remap them from 0 to len(toppings_in_batch)
         unique_indices = torch.unique(weight_indices)
-        assert len(unique_indices) == len(
-            toppings_in_batch
-        ), f"Expected {len(toppings_in_batch)} unique indices, got {len(unique_indices)}"
         remap_indices = {
             unique_indices[i].item(): i for i in range(len(unique_indices))
         }

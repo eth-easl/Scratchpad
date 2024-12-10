@@ -4,7 +4,6 @@ from tools.client.req import make_requests
 
 
 def main(args):
-    print(args)
     prompts = [
         "Who is Alan Turing?",
         "What is the capital of France?",
@@ -13,7 +12,8 @@ def main(args):
         "eltorio/Llama-3.2-3B-appreciation-1",
         "eltorio/Llama-3.2-3B-appreciation-2",
     ]
-    prompts = prompts[: args.num_req]
+    prompts = np.random.choice(prompts, args.num_req, replace=True)
+    models = np.random.choice(models, args.num_req, replace=True)
     reqs = [
         {
             "messages": [{"role": "user", "content": prompt}],
