@@ -310,9 +310,14 @@ class LlamaForCausalLM(nn.Module):
             return self.config.hidden_size, self.config.intermediate_size
         elif module_name == "down_proj":
             return self.config.intermediate_size, self.config.hidden_size
+        elif module_name == "lm_head":
+            return self.config.vocab_size, self.config.hidden_size
+        elif module_name == "embed_tokens":
+            return self.config.vocab_size, self.config.hidden_size
         else:
-            print(f"module_name: {module_name}")
-            raise NotImplementedError()
+            raise NotImplementedError(
+                f"get_hidden_dim for {module_name} is not implemented"
+            )
 
     def get_module_name(self, name):
         params_mapping = {

@@ -21,8 +21,15 @@ def get_hidden_dim(module_name, config):
         return config.hidden_size, config.intermediate_size
     elif module_name == "down_proj":
         return config.intermediate_size, config.hidden_size
+    elif module_name == "lm_head":
+        return config.vocab_size, config.hidden_size
+    elif module_name == "logits_processor":
+        return config.vocab_size, config.hidden_size
     else:
-        raise NotImplementedError()
+        print(f"get_hidden_dim for {module_name} is not implemented")
+        raise NotImplementedError(
+            f"get_hidden_dim for {module_name} is not implemented"
+        )
 
 
 class ToppingMemPool:
@@ -38,6 +45,7 @@ class ToppingMemPool:
         lora_dtype: torch.dtype,
         deltas: List,
         delta_target_weights: List,
+        uncompressed_delta_target_weights: List,
     ):
         self.args = args
         self.base_model = base_model
@@ -53,13 +61,18 @@ class ToppingMemPool:
         # for delta
         self.deltas = deltas
         self.delta_target_weights = delta_target_weights
+        self.uncompressed_delta_target_weights = uncompressed_delta_target_weights
         self.qweight_buffer = {}
         self.meta_buffer = {}
         self.scales_buffer = {}
-        delta_dtypes = {"meta": torch.int16, "qweight": torch.int32, "scales": torch.float16}
-        
+        self.weights_buffer = {}
+        delta_dtypes = {
+            "meta": torch.int16,
+            "qweight": torch.int32,
+            "scales": torch.float16,
+        }
 
-        # allocate lora 
+        # allocate lora
         num_layers = self.base_hf_config.num_hidden_layers
         for module_A, module_B in self.target_weights:
             if hasattr(self.base_model, "get_hidden_dim"):
@@ -72,7 +85,6 @@ class ToppingMemPool:
                 )
                 hidden_dim_A, _ = get_hidden_dim(module_A, self.base_hf_config)
             c = self.loras[-1].get_stacked_multiply(module_A)
-            print(f"max_lora_dim: {self.max_lora_dim}, c={c}")
             if module_A not in self.A_buffer:
                 self.A_buffer[module_A] = [
                     torch.empty(
@@ -110,32 +122,51 @@ class ToppingMemPool:
                     )
                     for i in range(num_layers)
                 ]
-        
-        #allocate delta
+
+        # allocate delta
         pack_factor = self.deltas[-1].get_pack_factor()
         sparse_factor = self.deltas[-1].get_sparse_factor()
+        for module in uncompressed_delta_target_weights:
+            self.weights_buffer[module] = torch.zeros(
+                self.max_toppings_per_batch,
+                self.base_model.get_hidden_dim(module)[0],
+                self.base_model.get_hidden_dim(module)[1],
+                dtype=torch.bfloat16,
+                device="cuda",
+            )
+
         for module in delta_target_weights:
             dimensions = self.base_model.get_hidden_dim(module)
             stack_factor = self.deltas[-1].get_stacked_multiply_delta(module)
             stacked_dim = dimensions[1] * stack_factor
 
-            
-            self.qweight_buffer[module] = [torch.zeros
-                                           (self.max_toppings_per_batch,
-                                            dimensions[0] // (pack_factor * sparse_factor * 2),
-                                            stacked_dim * 2,
-                                            dtype = delta_dtypes["qweight"],
-                                            device="cuda") 
-                                            for _ in range(num_layers)]
-            self.meta_buffer[module] = [torch.zeros(self.max_toppings_per_batch,
-                                                    stacked_dim,
-                                                    dimensions[0] // (pack_factor * sparse_factor), 
-                                                    dtype = delta_dtypes["meta"],
-                                                    device="cuda") 
-                                                    for _ in range(num_layers)]
-            self.scales_buffer[module] = [torch.zeros(self.max_toppings_per_batch,
-                                                      1,
-                                                      stacked_dim, 
-                                                      dtype = delta_dtypes["scales"],
-                                                      device="cuda") 
-                                                      for _ in range(num_layers)]
+            self.qweight_buffer[module] = [
+                torch.zeros(
+                    self.max_toppings_per_batch,
+                    dimensions[0] // (pack_factor * sparse_factor * 2),
+                    stacked_dim * 2,
+                    dtype=delta_dtypes["qweight"],
+                    device="cuda",
+                )
+                for _ in range(num_layers)
+            ]
+            self.meta_buffer[module] = [
+                torch.zeros(
+                    self.max_toppings_per_batch,
+                    stacked_dim,
+                    dimensions[0] // (pack_factor * sparse_factor),
+                    dtype=delta_dtypes["meta"],
+                    device="cuda",
+                )
+                for _ in range(num_layers)
+            ]
+            self.scales_buffer[module] = [
+                torch.zeros(
+                    self.max_toppings_per_batch,
+                    1,
+                    stacked_dim,
+                    dtype=delta_dtypes["scales"],
+                    device="cuda",
+                )
+                for _ in range(num_layers)
+            ]

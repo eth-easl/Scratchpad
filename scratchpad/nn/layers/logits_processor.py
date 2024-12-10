@@ -144,7 +144,7 @@ class LogitsProcessor(nn.Module):
 
             return input_top_logprobs, output_top_logprobs
 
-    def forward(
+    def _get_logits(
         self,
         input_ids,
         hidden_states,
@@ -164,6 +164,20 @@ class LogitsProcessor(nn.Module):
             last_hidden = hidden_states[last_index]
 
         last_logits = torch.matmul(last_hidden, weight.T)
+        return last_logits
+
+    def forward(
+        self,
+        input_ids,
+        hidden_states,
+        weight,
+        logits_metadata: Union[LogitsMetadata, ForwardBatch],
+        last_logits: Optional[torch.Tensor] = None,
+    ):
+        if last_logits is None:
+            last_logits = self._get_logits(
+                input_ids, hidden_states, weight, logits_metadata
+            )
         if self.do_tensor_parallel_all_gather:
             last_logits = tensor_model_parallel_all_gather(last_logits)
         last_logits = last_logits[:, : self.config.vocab_size].float()

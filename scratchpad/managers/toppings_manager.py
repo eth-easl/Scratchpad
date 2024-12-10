@@ -1,6 +1,7 @@
 import os
 import re
 import torch
+from typing import List
 from scratchpad.server.args import ServerArgs
 from scratchpad.utils import logger
 from scratchpad.config.topping_config import ToppingType
@@ -104,6 +105,7 @@ class ToppingsManager:
             lora_dtype=self.dtype,
             deltas=self.deltas,
             delta_target_weights=self.delta_target_weights,
+            uncompressed_delta_target_weights=self.uncompressed_delta_target_weights,
         )
 
     def init_topping_batch(self):
@@ -135,10 +137,13 @@ class ToppingsManager:
             self.target_modules = {
                 get_module_name(module) for module in self.origin_target_modules
             }
+        self.target_modules = set(self.target_modules) | set(
+            {"lm_head", "logits_processor", "embed_tokens"}
+        )
         self.target_weights = set(
             [get_stacked_name(module) for module in self.origin_target_modules]
         )
-
+        # TODO(xiaozhe): eventually put this in the config file per delta
         self.delta_target_weights = [
             "q_proj",
             "kv_proj",
@@ -146,11 +151,14 @@ class ToppingsManager:
             "o_proj",
             "down_proj",
         ]
-
+        self.uncompressed_delta_target_weights = [
+            "embed_tokens",
+            "lm_head",
+        ]
         # load all weights to cpu
-        self.loras = []
+        self.loras: List[LoRAAdapter] = []
         self.lora_id = {}
-        self.deltas = []
+        self.deltas: List[DeltaAdapter] = []
         self.delta_id = {}
         for name in self.available_toppings.keys():
             t_type = self.available_toppings[name][0]
@@ -187,11 +195,10 @@ class ToppingsManager:
         )
         assert all(x.scaling == self.scaling for x in self.loras)
 
-        # monkey patch to use the LoRA version
         self.topping_modules = []
         for module_name, module in self.get_target_modules():
             self.topping_modules.append(
-                (module_name, self.set_lora_module(module_name, module))
+                (module_name, self.set_topping_module(module_name, module))
             )
 
     def print_available_toppings(self):
@@ -199,10 +206,10 @@ class ToppingsManager:
         for topping in self.available_toppings:
             logger.info(f"({self.available_toppings[topping][0]}) {topping}")
 
-    def set_lora_module(self, module_name, module):
-        lora_module = get_topping_layer(module)
-        replace_submodule(self.base_model, module_name, lora_module)
-        return lora_module
+    def set_topping_module(self, module_name, module):
+        topping_module = get_topping_layer(module)
+        replace_submodule(self.base_model, module_name, topping_module)
+        return topping_module
 
     def prepare_topping_batch(self, forward_batch: ForwardBatch):
         cur_uids = set(forward_batch.topping_paths)
@@ -270,23 +277,57 @@ class ToppingsManager:
             dtype=torch.int64,
             device=forward_batch.input_ids.device,
         )
-
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
-            if "qkv_proj" not in module_name:
+            if "lm_head" in module_name:
+                pass
+            elif "logits_processor" in module_name:
+                module.set_topping_info(
+                    bs,
+                    weight_indices,
+                    lora_buffer=None,
+                    delta_buffer=self.weights_buffer["lm_head"][:len_deltas],
+                )
+            elif "embed_tokens" in module_name:
+                module.set_topping_info(
+                    bs,
+                    weight_indices,
+                    lora_buffer=None,
+                    delta_buffer=self.weights_buffer["embed_tokens"][:len_deltas],
+                )
+            elif "qkv_proj" not in module_name:
                 weight_name = self.get_weight_name(module_name, 0)
-                # print(f"A_buffer shape: {self.A_buffer[weight_name][layer_id].shape}")
                 module.set_topping_info(
                     bs,
                     weight_indices,
                     lora_buffer=(
-                        self.A_buffer[weight_name][layer_id][:len_loras],
-                        self.B_buffer[weight_name][layer_id][:len_loras],
+                        (
+                            self.A_buffer[weight_name][layer_id][:len_loras]
+                            if weight_name in self.A_buffer
+                            else None
+                        ),
+                        (
+                            self.B_buffer[weight_name][layer_id][:len_loras]
+                            if weight_name in self.B_buffer
+                            else None
+                        ),
                     ),
                     delta_buffer=(
-                        self.qweight_buffer[weight_name][layer_id][:len_deltas],
-                        self.meta_buffer[weight_name][layer_id][:len_deltas],
-                        self.scales_buffer[weight_name][layer_id][:len_deltas],
+                        (
+                            self.qweight_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.qweight_buffer
+                            else None
+                        ),
+                        (
+                            self.meta_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.meta_buffer
+                            else None
+                        ),
+                        (
+                            self.scales_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.scales_buffer
+                            else None
+                        ),
                     ),
                 )
             else:
@@ -402,7 +443,7 @@ class ToppingsManager:
                         self.meta_buffer[kv_proj_name][i][buffer_id].copy_(
                             weights[q_dim:, :]
                         )
-                else:  # the other layers can be used as such
+                else:
                     if "qweight" in name:
                         weight_name = self.get_delta_weight_name(name)
                         if weight_name:
@@ -413,10 +454,17 @@ class ToppingsManager:
                         weight_name = self.get_delta_weight_name(name)
                         if weight_name:
                             self.scales_buffer[weight_name][i][buffer_id].copy_(weights)
-                    else:
+                    elif "meta" in name:
                         weight_name = self.get_delta_weight_name(name)
                         if weight_name:
                             self.meta_buffer[weight_name][i][buffer_id].copy_(weights)
+                    else:
+                        print("Unknown delta weight name: {name}")
+
+        for name, outside_module in self.deltas[
+            self.delta_id[uid]
+        ].outside_layer_modules.items():
+            self.weights_buffer[name][buffer_id].copy_(outside_module)
 
     def unload_topping(self):
         pass
@@ -467,3 +515,7 @@ class ToppingsManager:
     @property
     def scales_buffer(self):
         return self.topping_memory_pool.scales_buffer
+
+    @property
+    def weights_buffer(self):
+        return self.topping_memory_pool.weights_buffer

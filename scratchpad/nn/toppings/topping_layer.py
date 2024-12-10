@@ -2,7 +2,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch import nn
-
+from typing import Union
 from scratchpad.nn.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
@@ -13,6 +13,7 @@ from scratchpad.nn.layers.linear import (
     QKVParallelLinear,
     RowParallelLinear,
 )
+from scratchpad.nn.layers.logits_processor import LogitsProcessor, LogitsMetadata
 from scratchpad.distributed.communication_op import (
     tensor_model_parallel_all_gather,
     tensor_model_parallel_all_reduce,
@@ -20,7 +21,6 @@ from scratchpad.distributed.communication_op import (
 from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 from scratchpad.distributed.utils import split_tensor_along_last_dim
 from scratchpad.model_executor.forward_info import ForwardBatch, ForwardMode
-
 from triteia.python.ops import ldmm
 
 
@@ -43,11 +43,28 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
         super().__init__(base_layer, config)
         self.weight = base_layer.weight
 
-    def forward(self, input_: torch.Tensor):
-        return self.base_layer(input_)
-
     def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
-        self.indices = weight_indices
+        self.weight_indices = weight_indices
+        self.delta_weights = delta_buffer
+
+    def forward(self, input_: torch.Tensor):
+        base_output = torch.zeros(
+            (input_.shape[0], self.delta_weights[0].shape[1]),
+            device=input_.device,
+            dtype=self.delta_weights[0].dtype,
+        )
+        unique_indices = torch.unique(self.weight_indices)
+
+        for id in unique_indices:
+            idx_mask = self.weight_indices == id
+            inp = input_[idx_mask]
+            if id == -1:
+                w = self.base_layer.weight
+            else:
+                w = self.delta_weights[id]
+                print(w.shape)
+            base_output[idx_mask] = nn.functional.embedding(inp, w)
+        return base_output
 
 
 class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
@@ -69,9 +86,9 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             self.metas_buffer = delta_buffer[1]
             self.scales_buffer = delta_buffer[2]
         else:
-            self.qweight_buffer = torch.zeros(0,0,0)
-            self.metas_buffer = torch.zeros(0,0,0)
-            self.scales_buffer = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0, 0, 0)
+            self.metas_buffer = torch.zeros(0, 0, 0)
+            self.scales_buffer = torch.zeros(0, 0, 0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)
@@ -113,9 +130,9 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
             self.metas_buffer = delta_buffer[1]
             self.scales_buffer = delta_buffer[2]
         else:
-            self.qweight_buffer = torch.zeros(0,0,0)
-            self.metas_buffer = torch.zeros(0,0,0)
-            self.scales_buffer = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0, 0, 0)
+            self.metas_buffer = torch.zeros(0, 0, 0)
+            self.scales_buffer = torch.zeros(0, 0, 0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank*2)
         # (B_buffer: bsz, rank, dim2*2)
@@ -139,9 +156,11 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
                 x=input_,
                 LwA=self.A_buffer[:, :, i * rank : (i + 1) * rank],
                 LwB=self.B_buffer[:, :, i * b_dim : (i + 1) * b_dim],
-                DeltaW=self.qweight_buffer[:, :, i * qweight_dim : (i + 1) * qweight_dim],
-                metas=self.metas_buffer[:, i * metas_dim: (i + 1) * metas_dim, :],
-                ss=self.scales_buffer[:, :, i * scales_dim: (i + 1) * scales_dim],
+                DeltaW=self.qweight_buffer[
+                    :, :, i * qweight_dim : (i + 1) * qweight_dim
+                ],
+                metas=self.metas_buffer[:, i * metas_dim : (i + 1) * metas_dim, :],
+                ss=self.scales_buffer[:, :, i * scales_dim : (i + 1) * scales_dim],
             )
             base_output[:, i * b_dim : (i + 1) * b_dim] += output
         return base_output, None
@@ -156,7 +175,12 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         super().__init__(base_layer, config)
 
     def set_topping_info(
-        self, bs, weight_indices, lora_buffer = None, delta_buffer_q = None, delta_buffer_kv = None, 
+        self,
+        bs,
+        weight_indices,
+        lora_buffer=None,
+        delta_buffer_q=None,
+        delta_buffer_kv=None,
     ):
         self.set_lora = True
         self.bs = bs
@@ -166,26 +190,26 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
             self.B_buffer_q = lora_buffer[1]
             self.B_buffer_kv = lora_buffer[2]
         else:
-            self.A_buffer_qkv = torch.zeros(0,0,0)
-            self.B_buffer_q = torch.zeros(0,0,0)
-            self.B_buffer_kv = torch.zeros(0,0,0)
+            self.A_buffer_qkv = torch.zeros(0, 0, 0)
+            self.B_buffer_q = torch.zeros(0, 0, 0)
+            self.B_buffer_kv = torch.zeros(0, 0, 0)
         if delta_buffer_q != None:
             self.qweight_buffer_q = delta_buffer_q[0]
             self.meta_buffer_q = delta_buffer_q[1]
             self.scales_buffer_q = delta_buffer_q[2]
         else:
-            self.qweight_buffer_q = torch.zeros(0,0,0)
-            self.meta_buffer_q = torch.zeros(0,0,0)
-            self.scales_buffer_q = torch.zeros(0,0,0)
+            self.qweight_buffer_q = torch.zeros(0, 0, 0)
+            self.meta_buffer_q = torch.zeros(0, 0, 0)
+            self.scales_buffer_q = torch.zeros(0, 0, 0)
 
         if delta_buffer_kv != None:
             self.qweight_buffer_kv = delta_buffer_kv[0]
             self.meta_buffer_kv = delta_buffer_kv[1]
             self.scales_buffer_kv = delta_buffer_kv[2]
         else:
-            self.qweight_buffer_kv = torch.zeros(0,0,0)
-            self.meta_buffer_kv = torch.zeros(0,0,0)
-            self.scales_buffer_kv = torch.zeros(0,0,0)
+            self.qweight_buffer_kv = torch.zeros(0, 0, 0)
+            self.meta_buffer_kv = torch.zeros(0, 0, 0)
+            self.scales_buffer_kv = torch.zeros(0, 0, 0)
 
         # q,k,v have the same input dimensions
         # k,v have the same output dimensions
@@ -229,9 +253,15 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
                     x=input_,
                     LwA=self.A_buffer_qkv[:, :, i * rank : (i + 1) * rank],
                     LwB=self.B_buffer_kv[:, :, (i - 1) * b_dim_kv : i * b_dim_kv],
-                    DeltaW=self.qweight_buffer_kv[:, :, (i - 1) * qweight_kv_dim: i * qweight_kv_dim],
-                    metas=self.meta_buffer_kv[:, (i - 1) * metas_kv_dim: i * metas_kv_dim, :],
-                    ss=self.scales_buffer_kv[:, :, (i - 1) * scales_kv_dim: i * scales_kv_dim],
+                    DeltaW=self.qweight_buffer_kv[
+                        :, :, (i - 1) * qweight_kv_dim : i * qweight_kv_dim
+                    ],
+                    metas=self.meta_buffer_kv[
+                        :, (i - 1) * metas_kv_dim : i * metas_kv_dim, :
+                    ],
+                    ss=self.scales_buffer_kv[
+                        :, :, (i - 1) * scales_kv_dim : i * scales_kv_dim
+                    ],
                 )
                 base_output[:, i * b_dim_kv : (i + 1) * b_dim_kv] += output
 
@@ -257,9 +287,9 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
             self.metas_buffer = delta_buffer[1]
             self.scales_buffer = delta_buffer[2]
         else:
-            self.qweight_buffer = torch.zeros(0,0,0)
-            self.metas_buffer = torch.zeros(0,0,0)
-            self.scales_buffer = torch.zeros(0,0,0)
+            self.qweight_buffer = torch.zeros(0, 0, 0)
+            self.metas_buffer = torch.zeros(0, 0, 0)
+            self.scales_buffer = torch.zeros(0, 0, 0)
         # model.layers.24.mlp.gate_up_proj
         # (A_buffer: bsz, dim1, rank)
         # (B_buffer: bsz, rank, dim2)
@@ -269,17 +299,77 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
 
     def forward(self, input_: torch.Tensor):
         base_output = self.base_layer(input_)[0]
-        output = ldmm(
-            indices=self.weight_indices,
-            x=input_,
-            LwA=self.A_buffer,
-            LwB=self.B_buffer,
-            DeltaW=self.qweight_buffer,
-            metas=self.metas_buffer,
-            ss=self.scales_buffer,
-        )
-        base_output += output
+        # base_output += ldmm(
+        #     indices=self.weight_indices,
+        #     x=input_,
+        #     LwA=self.A_buffer,
+        #     LwB=self.B_buffer,
+        #     DeltaW=self.qweight_buffer,
+        #     metas=self.metas_buffer,
+        #     ss=self.scales_buffer,
+        # )
         return base_output, None
+
+
+class LogitsProcessorWithTopping(BaseLayerWithTopping):
+    def __init__(self, base_layer, config):
+        super().__init__(base_layer, config)
+
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
+        self.weight_indices = weight_indices
+        self.delta_buffer = delta_buffer
+
+    def _get_logits(
+        self,
+        input_ids,
+        hidden_states,
+        weight,
+        logits_metadata: Union[LogitsMetadata, ForwardBatch],
+    ):
+        if isinstance(logits_metadata, ForwardBatch):
+            logits_metadata = LogitsMetadata.from_forward_batch(logits_metadata)
+        assert isinstance(logits_metadata, LogitsMetadata)
+
+        # Get the last hidden states and last logits for the next token prediction
+        if logits_metadata.forward_mode.is_decode():
+            last_index = None
+            last_hidden = hidden_states
+        else:
+            last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
+            last_hidden = hidden_states[last_index]
+
+        base_output = torch.zeros(
+            last_hidden.shape[0],
+            self.delta_buffer[0].shape[0],
+            dtype=last_hidden.dtype,
+            device=last_hidden.device,
+        )
+        unique_indices = torch.unique(self.weight_indices)
+        for id in unique_indices:
+            # inp = last_hidden[self.weight_indices == id]
+            if id == -1:
+                w = weight
+            else:
+                w = self.delta_buffer[id]
+            output = nn.functional.linear(last_hidden, w)
+            base_output = output
+        return base_output
+
+    def forward(
+        self,
+        input_ids,
+        hidden_states,
+        weight,
+        logits_metadata: Union[LogitsMetadata, ForwardBatch],
+        last_logits: Optional[torch.Tensor] = None,
+    ):
+        return self.base_layer(
+            input_ids,
+            hidden_states,
+            weight,
+            logits_metadata,
+            self._get_logits(input_ids, hidden_states, weight, logits_metadata),
+        )
 
 
 def get_topping_layer(layer: nn.Module) -> BaseLayerWithTopping:
@@ -290,6 +380,7 @@ def get_topping_layer(layer: nn.Module) -> BaseLayerWithTopping:
         MergedColumnParallelLinear: MergedColumnParallelLinearWithTopping,
         ColumnParallelLinear: ColumnParallelLinearWithTopping,
         RowParallelLinear: RowParallelLinearWithTopping,
+        LogitsProcessor: LogitsProcessorWithTopping,
     }
     for src_layer_type, topping_layer_type in supported_layer_types.items():
         if isinstance(layer, src_layer_type):  # pylint: disable=unidiomatic-typecheck

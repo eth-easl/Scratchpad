@@ -14,3 +14,7 @@ html-docs:
 	sphinx-build -M html docs/sources docs/build
 cli-docs:
 	typer scratchpad.cli.sp utils docs --title "CLI Reference" --name "scratchpad" --output docs/sources/cli.md
+monitor-up:
+	docker compose -f docker/monitor.yaml up -d
+monitor-down:
+	docker compose -f docker/monitor.yaml down

@@ -6,6 +6,7 @@ from torch import nn
 import safetensors as st
 from scratchpad.model_executor.model_loader import DefaultModelLoader
 from scratchpad.model_executor.deltazip_loader import DeltazipModelLoader
+from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 
 
 class ToppingLayer(nn.Module):
@@ -39,6 +40,7 @@ class ToppingAdapter(nn.Module):
                 for i in range(base_hf_config.num_hidden_layers)
             ]
         )
+        self.outside_layer_modules = {}
         self.weights = {}
         self.weights_gpu = {}
 
@@ -64,7 +66,6 @@ class ToppingAdapter(nn.Module):
 
 
 class DeltaAdapter(ToppingAdapter):
-    
     def __init__(self, uid, config, base_hf_config, load_config):
         super().__init__(uid, config, base_hf_config, load_config)
         self.pack_factor = None
@@ -76,7 +77,7 @@ class DeltaAdapter(ToppingAdapter):
             "gate_up_proj": 2,
         }
         return stacked_rank[module_name] if module_name in stacked_rank else 1
-    
+
     def get_pack_factor(self):
         if self.pack_factor is None:
             raise ValueError("pack factor not initialized")
@@ -88,9 +89,9 @@ class DeltaAdapter(ToppingAdapter):
         return self.sparse_factor
 
     def initialize_weights(self):
-        print(f"Initializing weights...")
         loader = DeltazipModelLoader(self.load_config)
         local_path = loader.download_model(self.config)
+        my_rank = get_tensor_model_parallel_rank()
         with open(os.path.join(local_path, "delta_config.json"), "r") as f:
             delta_config = json.load(f)
             self.pack_factor = 32 // delta_config["compress_config"]["bits"]
@@ -103,12 +104,17 @@ class DeltaAdapter(ToppingAdapter):
                 if match is not None:
                     layer_id = int(match.group(1))
                     remaining_key = key[len(f"model.layers.{layer_id}.") :]
-                    # TODO(xiaozhe): we need to get the correct rank
-                    # let's assume rank==0 always
-                    my_rank = 0
                     weight_val = f.get_tensor(key)
                     weight_name = remaining_key.replace(f".{my_rank}", "")
                     self.layers[layer_id].weights[weight_name] = weight_val.cpu()
+                else:
+                    weight_val = f.get_tensor(key)
+                    weight_name = (
+                        key.replace(f".{my_rank}", "")
+                        .replace(".weight", "")
+                        .replace("model.", "")
+                    )
+                    self.outside_layer_modules[weight_name] = weight_val.cpu()
 
 
 class LoRAAdapter(ToppingAdapter):
