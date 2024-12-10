@@ -598,7 +598,6 @@ class Scheduler:
                 if self.running_batch is not None
                 else set([])
             )
-            print(f"Topping set: {topping_set}")
 
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:

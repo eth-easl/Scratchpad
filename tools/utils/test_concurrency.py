@@ -11,7 +11,7 @@ def main(args):
     ]
     models = [
         "eltorio/Llama-3.2-3B-appreciation-1",
-        "eltorio/Llama-3.2-3B-appreciation-1",
+        "eltorio/Llama-3.2-3B-appreciation-2",
     ]
     prompts = prompts[: args.num_req]
     reqs = [
@@ -23,7 +23,8 @@ def main(args):
         for prompt, model in zip(prompts, models)
     ]
     responses = asyncio.run(make_requests(args.endpoint, reqs))
-    print(responses)
+    for resp in responses:
+        print(resp)
 
 
 if __name__ == "__main__":
