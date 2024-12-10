@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
 from scratchpad.scheduler.scheduler import run_scheduler_process
-from scratchpad.server.metrics import PrometheusStatLogger
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -175,7 +174,6 @@ def launch_server(model_name, args: "ServerArgs"):
     if args.api_key:
         add_api_key_middleware(app, args.api_key)
 
-    # loggers = [PrometheusStatLogger(1, {"server_id": args.server_id}, 4096)]
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []
@@ -190,7 +188,7 @@ def launch_server(model_name, args: "ServerArgs"):
         gpu_id = tp_rank % tp_size_per_node
         proc = mp.Process(
             target=run_scheduler_process,
-            args=(args, gpu_id, tp_rank, writer, []),
+            args=(args, gpu_id, tp_rank, writer),
         )
         proc.start()
         scheduler_procs.append(proc)
@@ -215,4 +213,11 @@ def launch_server(model_name, args: "ServerArgs"):
         load_chat_template_for_openai_api(tokenizer_manager, server_args.chat_template)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
-    uvicorn.run(app, host=args.host, port=args.port, timeout_keep_alive=5, loop="auto")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        timeout_keep_alive=5,
+        loop="auto",
+        log_level="info",
+    )

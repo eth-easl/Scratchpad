@@ -25,6 +25,7 @@ def mount_metrics(app: FastAPI):
     from prometheus_client import CollectorRegistry, make_asgi_app, multiprocess
 
     prometheus_multiproc_dir_path = os.getenv("PROMETHEUS_MULTIPROC_DIR", None)
+
     if prometheus_multiproc_dir_path is not None:
         logger.info(
             f"Scratchpad to use {prometheus_multiproc_dir_path} as PROMETHEUS_MULTIPROC_DIR"
