@@ -280,8 +280,8 @@ class ToppingsManager:
                     ),
                     delta_buffer=(
                         self.qweight_buffer[weight_name][layer_id],
-                        self.scales_buffer[weight_name][layer_id],
                         self.meta_buffer[weight_name][layer_id],
+                        self.scales_buffer[weight_name][layer_id],
                     ),
                 )
             else:
@@ -295,13 +295,13 @@ class ToppingsManager:
                     ),
                     delta_buffer_q=(
                         self.qweight_buffer["q_proj"][layer_id],
-                        self.scales_buffer["q_proj"][layer_id],
                         self.meta_buffer["q_proj"][layer_id],
+                        self.scales_buffer["q_proj"][layer_id],
                     ),
                     delta_buffer_kv=(
                         self.qweight_buffer["kv_proj"][layer_id],
-                        self.scales_buffer["kv_proj"][layer_id],
                         self.meta_buffer["kv_proj"][layer_id],
+                        self.scales_buffer["kv_proj"][layer_id],
                     ),
                 )
 
