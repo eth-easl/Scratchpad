@@ -41,6 +41,7 @@ from scratchpad.scheduler.policy_scheduler import (
     SchedulePolicy,
     AddReqResult,
 )
+from scratchpad.server.metrics import PrometheusStatLogger
 from ..managers.tp_worker import TpModelWorker
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.radix_cache import RadixCache
@@ -75,6 +76,7 @@ class Scheduler:
         gpu_id: int,
         tp_rank: int,
         dp_rank: Optional[int],
+        loggers: Optional[List["StatLoggerBase"]],
     ):
         # Parse args
         self.server_args = server_args
@@ -86,7 +88,7 @@ class Scheduler:
         self.max_toppings_per_batch = server_args.max_toppings_per_batch
         self.enable_overlap = server_args.enable_overlap_schedule
         self.skip_tokenizer_init = server_args.skip_tokenizer_init
-
+        self.loggers = loggers
         # update this ondemand
         # Init inter-process communication
         context = zmq.Context(2)
@@ -461,6 +463,10 @@ class Scheduler:
 
         self.waiting_queue.append(req)
 
+    def log_stats(self, stats):
+        for logger in self.loggers:
+            logger.log(stats)
+
     def handle_embedding_request(
         self,
         recv_req: TokenizedEmbeddingReqInput,
@@ -488,6 +494,15 @@ class Scheduler:
             self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
         )
         throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
+        stats = Stats(
+            time.time(),
+            generation_throughput=throughput,
+            running_requests=len(self.running_batch.reqs),
+            queued_requests=len(self.waiting_queue),
+            token_usage=num_used / self.max_total_num_tokens,
+            used_token_pool=num_used,
+        )
+        self.log_stats(stats)
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
         num_running_reqs = len(self.running_batch.reqs) if self.running_batch else 0
@@ -657,7 +672,15 @@ class Scheduler:
                 self.token_to_kv_pool.available_size()
                 + self.tree_cache.evictable_size()
             )
-
+            stats = Stats(
+                now=time.time(),
+                generation_throughput=0,
+                token_usage=num_used / self.max_total_num_tokens,
+                queued_requests=len(self.waiting_queue) + has_inflight,
+                running_requests=num_mixed_running + running_bs,
+                used_token_pool=num_used,
+            )
+            self.log_stats(stats)
             if num_mixed_running > 0:
                 logger.info(
                     f"Prefill batch"
@@ -1164,10 +1187,12 @@ def run_scheduler_process(
     gpu_id: int,
     tp_rank: int,
     pipe_writer: multiprocessing.connection.Connection,
-    loggers: List["StatLoggerBase"],
 ):
     try:
-        scheduler = Scheduler(server_args, gpu_id, tp_rank, dp_rank=None)
+        loggers = [PrometheusStatLogger(1, {"server_id": server_args.server_id}, 4096)]
+        scheduler = Scheduler(
+            server_args, gpu_id, tp_rank, dp_rank=None, loggers=loggers
+        )
         pipe_writer.send("ready")
         scheduler.event_loop_normal()
     except Exception:
