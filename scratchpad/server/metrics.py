@@ -74,6 +74,12 @@ class Metrics:
             labelnames=labelnames,
             multiprocess_mode="sum",
         )
+        self.gauge_avg_gpu_utilization = self._gauge_cls(
+            name="scratchpad:avg_gpu_utilization",
+            documentation="Average GPU utilization.",
+            labelnames=labelnames,
+            multiprocess_mode="mostrecent",
+        )
 
 
 def local_interval_elapsed(now: float, last_log: float, local_interval: float) -> bool:
@@ -143,6 +149,10 @@ class PrometheusStatLogger(StatLoggerBase):
         self._log_gauge(
             self.metrics.gauge_mempool_usage,
             stats.used_token_pool,
+        )
+        self._log_gauge(
+            self.metrics.gauge_avg_gpu_utilization,
+            stats.gpu_utilization,
         )
 
     def _log_prometheus_interval(

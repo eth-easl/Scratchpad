@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, TYPE_CHECKING
 
 import torch
 
@@ -17,6 +17,9 @@ from scratchpad.utils import envs, logger
 from scratchpad.config.model_config import ModelConfig
 
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
+
+if TYPE_CHECKING:
+    from scratchpad.managers.toppings_manager import ToppingsManager
 
 
 class BaseFinishReason:
@@ -125,7 +128,7 @@ class Req:
         origin_input_text: str,
         origin_input_ids: Tuple[int],
         sampling_params: SamplingParams,
-        lora_path: Optional[str] = None,
+        topping_path: Optional[str] = None,
     ):
         # Input and output info
         self.rid = rid
@@ -136,7 +139,7 @@ class Req:
         self.fill_ids = None  # fill_ids = origin_input_ids + output_ids
 
         self.sampling_params = sampling_params
-        self.lora_path = lora_path
+        self.topping_path = topping_path
 
         # Memory info
         self.req_pool_idx = None
@@ -372,7 +375,12 @@ class Req:
         return True
 
     def __repr__(self):
-        return f"rid(n={self.rid}, " f"input_ids={self.origin_input_ids}, "
+        return (
+            f"rid(n={self.rid}, "
+            f"input_ids={self.origin_input_ids}, "
+            f"output_ids={self.output_ids}), "
+            f"finished={self.finished()}, topping={self.topping_path}"
+        )
 
 
 bid = 0
@@ -810,15 +818,32 @@ class ScheduleBatch:
         # Reset the encoder cached status
         self.encoder_cached = [True] * len(self.reqs)
 
-    def prepare_for_decode(self, enable_overlap: bool = False):
+    def prepare_for_decode(
+        self,
+        enable_overlap: bool = False,
+        topping_manager: Optional["ToppingsManager"] = None,
+    ):
         self.forward_mode = ForwardMode.DECODE
-
         self.input_ids = self.output_ids
         self.output_ids = None
         if self.sampling_info.penalizer_orchestrator:
             self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
                 self.input_ids
             )
+        if topping_manager.enabled:
+            topping_ids = torch.tensor(
+                [topping_manager.toppings_id[req.topping_path] for req in self.reqs],
+                dtype=torch.long,
+                device=self.input_ids.device,
+            )
+            sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
+
+            # reorder reqs
+            self.input_ids = self.input_ids[sorted_indices]
+            self.reqs = [self.reqs[i] for i in sorted_indices]
+
+            self.req_pool_indices = self.req_pool_indices[sorted_indices]
+            self.seq_lens = self.seq_lens[sorted_indices]
 
         # Alloc mem
         bs = len(self.reqs)
@@ -937,7 +962,6 @@ class ScheduleBatch:
         bid += 1
 
         mrope_positions_delta = [req.mrope_position_delta for req in self.reqs]
-
         return ModelWorkerBatch(
             bid=bid,
             forward_mode=self.forward_mode,
@@ -958,7 +982,7 @@ class ScheduleBatch:
             encoder_lens=self.encoder_lens,
             encoder_lens_cpu=self.encoder_lens_cpu,
             encoder_out_cache_loc=self.encoder_out_cache_loc,
-            lora_paths=[req.lora_path for req in self.reqs],
+            topping_paths=[req.topping_path for req in self.reqs],
             sampling_info=self.sampling_info,
             mrope_positions_delta=mrope_positions_delta,
         )
@@ -1021,8 +1045,8 @@ class ModelWorkerBatch:
     encoder_lens_cpu: Optional[List[int]]
     encoder_out_cache_loc: Optional[torch.Tensor]
 
-    # For LoRA
-    lora_paths: Optional[List[str]]
+    # For Topping
+    topping_paths: Optional[List[str]]
 
     # Sampling info
     sampling_info: SamplingBatchInfo

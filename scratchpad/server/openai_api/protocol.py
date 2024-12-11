@@ -11,7 +11,7 @@ class ModelCard(BaseModel):
     id: str
     object: str = "model"
     created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "sglang"
+    owned_by: str = "scratchpad"
     root: Optional[str] = None
 
 

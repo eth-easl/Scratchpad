@@ -3,8 +3,11 @@ from scratchpad.utils import logger
 from scratchpad.utils import (
     get_available_gpu_memory,
 )
-
+from typing import TYPE_CHECKING
 from .pool import BaseTokenToKVPool
+
+if TYPE_CHECKING:
+    from scratchpad.nn.attention.radix_attention import RadixAttention
 
 
 class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
@@ -16,22 +19,24 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
         head_num: int,
         head_dim: int,
         layer_num: int,
+        device: str,
     ):
-        super().__init__(size, dtype)
+        super().__init__(size, dtype, device)
         self.head_num = head_num
         self.head_dim = head_dim
         self.layer_num = layer_num
-
+        self.primary_device = device
+        self.secondary_device = "cpu"
         # [size, head_num, head_dim] for each layer
         self.k_buffer = [
             torch.empty(
-                (size + 1, head_num, head_dim), dtype=self.store_dtype, device="cuda"
+                (size + 1, head_num, head_dim), dtype=self.store_dtype, device=device
             )
             for _ in range(layer_num)
         ]
         self.v_buffer = [
             torch.empty(
-                (size + 1, head_num, head_dim), dtype=self.store_dtype, device="cuda"
+                (size + 1, head_num, head_dim), dtype=self.store_dtype, device=device
             )
             for _ in range(layer_num)
         ]
@@ -64,11 +69,12 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
 
     def set_kv_buffer(
         self,
-        layer_id: int,
+        layer: "RadixAttention",
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
+        layer_id = layer.layer_id
         if cache_k.dtype != self.dtype:
             cache_k = cache_k.to(self.dtype)
         if cache_v.dtype != self.dtype:

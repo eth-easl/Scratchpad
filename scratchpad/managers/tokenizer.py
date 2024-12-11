@@ -19,8 +19,6 @@ from .structs import (
     AbortReq,
     BatchEmbeddingOut,
     BatchStrOut,
-    RewardReqInput,
-    TokenizedRewardReqInput,
     BatchTokenIDOut,
     EmbeddingReqInput,
     FlushCacheReq,
@@ -37,15 +35,7 @@ import numpy as np
 from scratchpad.utils import (
     logger,
     get_tokenizer,
-    process_anyres_image,
-    expand2square,
-    get_context_length,
     get_processor,
-    get_config,
-    is_generation_model,
-    is_multimodal_model,
-    load_image,
-    get_exception_traceback,
     get_zmq_socket,
     kill_child_process,
 )
@@ -208,7 +198,7 @@ class TokenizerManager:
                 logprob_start_len,
                 top_logprobs_num,
                 obj.stream,
-                obj.lora_path,
+                obj.topping_path,
             )
         elif isinstance(obj, EmbeddingReqInput):
             tokenized_obj = TokenizedEmbeddingReqInput(
@@ -280,7 +270,6 @@ class TokenizerManager:
                 rids.append(tmp_obj.rid)
         else:
             # FIXME: When using batch and parallel_sample_num together, the perf is not optimal.
-
             # Tokenize all requests
             objs = [obj[i] for i in range(batch_size)]
             tokenized_objs = await asyncio.gather(

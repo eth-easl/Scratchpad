@@ -1,19 +1,17 @@
-import json
+from functools import cached_property
 import multiprocessing
 import threading
 import os
 from dataclasses import asdict
 import time
 import warnings
-from typing import List, Optional, Union, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING
 from collections import deque
 import torch
 import zmq
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.constrained.grammar import GrammarCache
-from scratchpad.constrained.fsm_cache import FSMCache
-from scratchpad.constrained.jump_forward import JumpForwardCache
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from ..managers.structs import (
     AbortReq,
@@ -22,13 +20,13 @@ from ..managers.structs import (
     FlushCacheReq,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
-    TokenizedRewardReqInput,
     UpdateWeightReqInput,
     UpdateWeightReqOutput,
     MemoryPoolControlReqInput,
     ProfileReq,
     GetMemPoolSizeReq,
     GetMemPoolSizeReqOutput,
+    RegisterToppingsReqInput,
 )
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -43,6 +41,7 @@ from scratchpad.scheduler.policy_scheduler import (
     SchedulePolicy,
     AddReqResult,
 )
+from scratchpad.server.metrics import PrometheusStatLogger
 from ..managers.tp_worker import TpModelWorker
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.radix_cache import RadixCache
@@ -77,6 +76,7 @@ class Scheduler:
         gpu_id: int,
         tp_rank: int,
         dp_rank: Optional[int],
+        loggers: Optional[List["StatLoggerBase"]],
     ):
         # Parse args
         self.server_args = server_args
@@ -84,11 +84,12 @@ class Scheduler:
         self.tp_size = server_args.tp_size
         self.schedule_policy = server_args.schedule_policy
         self.disable_regex_jump_forward = server_args.disable_regex_jump_forward
-        self.lora_paths = server_args.lora_paths
-        self.max_loras_per_batch = server_args.max_loras_per_batch
+
+        self.max_toppings_per_batch = server_args.max_toppings_per_batch
         self.enable_overlap = server_args.enable_overlap_schedule
         self.skip_tokenizer_init = server_args.skip_tokenizer_init
-
+        self.loggers = loggers
+        # update this ondemand
         # Init inter-process communication
         context = zmq.Context(2)
 
@@ -390,6 +391,10 @@ class Scheduler:
                 self.send_to_detokenizer.send_pyobj(
                     GetMemPoolSizeReqOutput(self.max_total_num_tokens)
                 )
+            elif isinstance(recv_req, MemoryPoolControlReqInput):
+                self.tp_worker.expand_memory_pool(recv_req.delta)
+            elif isinstance(recv_req, RegisterToppingsReqInput):
+                self.tp_worker.register_toppings(recv_req)
             else:
                 raise ValueError(f"Invalid request: {recv_req}")
 
@@ -402,10 +407,9 @@ class Scheduler:
             recv_req.input_text,
             recv_req.input_ids,
             recv_req.sampling_params,
-            lora_path=recv_req.lora_path,
+            topping_path=recv_req.topping_path,
         )
         req.tokenizer = self.tokenizer
-
         # Image inputs
         if recv_req.image_inputs is not None:
             req.image_inputs = ImageInputs.from_dict(
@@ -459,6 +463,10 @@ class Scheduler:
 
         self.waiting_queue.append(req)
 
+    def log_stats(self, stats):
+        for logger in self.loggers:
+            logger.log(stats)
+
     def handle_embedding_request(
         self,
         recv_req: TokenizedEmbeddingReqInput,
@@ -486,6 +494,15 @@ class Scheduler:
             self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
         )
         throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
+        stats = Stats(
+            time.time(),
+            generation_throughput=throughput,
+            running_requests=len(self.running_batch.reqs),
+            queued_requests=len(self.waiting_queue),
+            token_usage=num_used / self.max_total_num_tokens,
+            used_token_pool=num_used,
+        )
+        self.log_stats(stats)
         self.num_generated_tokens = 0
         self.last_stats_tic = time.time()
         num_running_reqs = len(self.running_batch.reqs) if self.running_batch else 0
@@ -532,6 +549,7 @@ class Scheduler:
                 # Inflight request keeps its rid but will get a new req_pool_idx.
                 self.req_to_token_pool.free(self.being_chunked_req.req_pool_idx)
                 self.batch_is_full = False
+
             if not self.last_batch.is_empty():
                 if self.running_batch is None:
                     self.running_batch = self.last_batch
@@ -589,23 +607,24 @@ class Scheduler:
             self.being_chunked_req.init_next_round_input()
             self.being_chunked_req = adder.add_inflight_req(self.being_chunked_req)
 
-        if self.lora_paths:
-            lora_set = (
-                set([req.lora_path for req in self.running_batch.reqs])
+        if self.topping_paths:
+            topping_set = (
+                set([req.topping_path for req in self.running_batch.reqs])
                 if self.running_batch is not None
                 else set([])
             )
 
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:
+
             if (
-                self.lora_paths
+                self.topping_paths
                 and len(
-                    lora_set
-                    | set([req.lora_path for req in adder.can_run_list])
-                    | set([req.lora_path])
+                    topping_set
+                    | set([req.topping_path for req in adder.can_run_list])
+                    | set([req.topping_path])
                 )
-                > self.max_loras_per_batch
+                > self.max_toppings_per_batch
             ):
                 self.batch_is_full = True
                 break
@@ -653,7 +672,15 @@ class Scheduler:
                 self.token_to_kv_pool.available_size()
                 + self.tree_cache.evictable_size()
             )
-
+            stats = Stats(
+                now=time.time(),
+                generation_throughput=0,
+                token_usage=num_used / self.max_total_num_tokens,
+                queued_requests=len(self.waiting_queue) + has_inflight,
+                running_requests=num_mixed_running + running_bs,
+                used_token_pool=num_used,
+            )
+            self.log_stats(stats)
             if num_mixed_running > 0:
                 logger.info(
                     f"Prefill batch"
@@ -697,7 +724,6 @@ class Scheduler:
             self.running_batch = None
         else:
             new_batch.decoding_reqs = None
-
         return new_batch
 
     def update_running_batch(self):
@@ -738,7 +764,9 @@ class Scheduler:
                 return
 
         # Update batch tensors
-        batch.prepare_for_decode(self.enable_overlap)
+        batch.prepare_for_decode(
+            self.enable_overlap, self.tp_worker.model_runner.topping_manager
+        )
 
     def run_batch(self, batch: ScheduleBatch):
         """Run a batch."""
@@ -781,7 +809,7 @@ class Scheduler:
             logits_output, next_token_ids, bid = result
 
             if self.enable_overlap:
-                logits_output, next_token_ids = self.tp_worker.resulve_batch_result(bid)
+                logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             else:
                 # Move next_token_ids and logprobs to cpu
                 if batch.return_logprob:
@@ -856,7 +884,7 @@ class Scheduler:
         self.num_generated_tokens += len(batch.reqs)
 
         if self.enable_overlap:
-            logits_output, next_token_ids = self.tp_worker.resulve_batch_result(bid)
+            logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             next_token_logprobs = logits_output.next_token_logprobs
         else:
             # Move next_token_ids and logprobs to cpu
@@ -1149,16 +1177,22 @@ class Scheduler:
         )
         logger.info("Profiler is done")
 
+    @cached_property
+    def topping_paths(self):
+        return self.tp_worker.model_runner.topping_manager.toppings
+
 
 def run_scheduler_process(
     server_args: ServerArgs,
     gpu_id: int,
     tp_rank: int,
     pipe_writer: multiprocessing.connection.Connection,
-    loggers: List["StatLoggerBase"],
 ):
     try:
-        scheduler = Scheduler(server_args, gpu_id, tp_rank, dp_rank=None)
+        loggers = [PrometheusStatLogger(1, {"server_id": server_args.server_id}, 4096)]
+        scheduler = Scheduler(
+            server_args, gpu_id, tp_rank, dp_rank=None, loggers=loggers
+        )
         pipe_writer.send("ready")
         scheduler.event_loop_normal()
     except Exception:

@@ -5,7 +5,6 @@ import importlib.resources
 import pkgutil
 from functools import lru_cache
 from typing import Optional, Tuple, Type
-
 import torch
 import torch.nn as nn
 from scratchpad.config import DeviceConfig, LoadConfig
@@ -44,6 +43,7 @@ from scratchpad.utils import (
     logger,
 )
 from scratchpad.constrained import disable_cache
+from scratchpad.managers import ToppingsManager
 
 
 class ModelRunner:
@@ -110,11 +110,11 @@ class ModelRunner:
         )
 
         # Init componnets
+
         min_per_gpu_memory = self.init_torch_distributed()
         self.sampler = Sampler()
         self.load_model()
-        # if server_args.lora_paths is not None:
-        #     self.init_lora_manager()
+        self.init_toppings_manager()
         self.init_memory_pool(
             min_per_gpu_memory,
             server_args.max_running_requests,
@@ -134,12 +134,8 @@ class ModelRunner:
         if self.device == "cuda":
             torch.cuda.set_device(self.gpu_id)
             backend = "nccl"
-        # ToDO(liangan1):Just use gloo to bypass the initilization fail
-        # Need to use xccl for xpu backend in the future
-        elif self.device == "xpu":
-            torch.xpu.set_device(self.gpu_id)
-            backend = "gloo"
-
+        else:
+            raise ValueError(f"Unsupported device: {self.device}")
         # if not self.server_args.enable_p2p_check:
         #     monkey_patch_vllm_p2p_access_check(self.gpu_id)
         if self.server_args.dist_init_addr:
@@ -322,16 +318,13 @@ class ModelRunner:
         logger.info("Update weights end.")
         return True, "Succeeded to update model weights."
 
-    # def init_lora_manager(self):
-    #     self.lora_manager = LoRAManager(
-    #         base_model=self.model,
-    #         lora_paths=self.server_args.lora_paths,
-    #         base_hf_config=self.model_config.hf_config,
-    #         max_loras_per_batch=self.server_args.max_loras_per_batch,
-    #         load_config=self.load_config,
-    #         dtype=self.dtype,
-    #     )
-    #     logger.info("LoRA manager ready.")
+    def init_toppings_manager(self):
+        self.topping_manager = ToppingsManager(
+            self.server_args,
+            base_model=self.model,
+            base_hf_config=self.model_config.hf_config,
+            load_config=self.load_config,
+        )
 
     def profile_max_num_token(self, total_gpu_memory: int):
         available_gpu_memory = get_available_gpu_memory(
@@ -427,6 +420,7 @@ class ModelRunner:
                 head_num=self.model_config.get_num_kv_heads(self.tp_size),
                 head_dim=self.model_config.head_dim,
                 layer_num=self.model_config.num_hidden_layers,
+                device=self.device,
             )
         else:
             self.token_to_kv_pool = MHATokenToKVPool(

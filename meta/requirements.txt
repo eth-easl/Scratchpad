@@ -15,3 +15,6 @@ python-multipart
 rich
 humanize
 prometheus_client
+tqdm
+einops
+pillow

@@ -73,6 +73,7 @@ def end_to_end(args):
         messages=messages,
         response_format=response_format,
         stream=args.stream,
+        max_tokens=10,
     )
     if args.stream:
         for chunk in response:
