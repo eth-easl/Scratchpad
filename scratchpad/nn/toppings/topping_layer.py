@@ -21,7 +21,7 @@ from scratchpad.distributed.communication_op import (
 from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 from scratchpad.distributed.utils import split_tensor_along_last_dim
 from scratchpad.model_executor.forward_info import ForwardBatch, ForwardMode
-from triteia.python.ops import ldmm
+from triteia.python.ops import ldmm as ldmm
 
 
 class BaseLayerWithTopping(nn.Module):
@@ -50,6 +50,7 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
     def forward(self, input_: torch.Tensor):
         if self.delta_weights == None or self.delta_weights.shape[0] == 0:
             return self.base_layer(input_)
+
         base_output = torch.zeros(
             (input_.shape[0], self.delta_weights[0].shape[1]),
             device=input_.device,
@@ -90,12 +91,6 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             self.qweight_buffer = torch.zeros(0, 0, 0)
             self.metas_buffer = torch.zeros(0, 0, 0)
             self.scales_buffer = torch.zeros(0, 0, 0)
-        # model.layers.24.mlp.gate_up_proj
-        # (A_buffer: bsz, dim1, rank)
-        # (B_buffer: bsz, rank, dim2)
-        # (qweight_buffer: bsz,_, _)
-        # (metas_buffer: bsz,_, _)
-        # (scales_buffer: bsz, _, _)
 
     def forward(self, input_: torch.Tensor):
         base_output = self.base_layer(input_)[0]
@@ -108,7 +103,7 @@ class ColumnParallelLinearWithTopping(BaseLayerWithTopping):
             metas=self.metas_buffer,
             ss=self.scales_buffer,
         )
-        base_output = +output
+        base_output += output
         return base_output, None
 
 
@@ -134,17 +129,8 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
             self.qweight_buffer = torch.zeros(0, 0, 0)
             self.metas_buffer = torch.zeros(0, 0, 0)
             self.scales_buffer = torch.zeros(0, 0, 0)
-        # model.layers.24.mlp.gate_up_proj
-        # (A_buffer: bsz, dim1, rank*2)
-        # (B_buffer: bsz, rank, dim2*2)
-        # (qweight_buffer: bsz,_, _*2)
-        # (metas_buffer: bsz,_, _*2)
-        # (scales_buffer: bsz, _, _*2)
 
     def forward(self, input_: torch.Tensor):
-        # input_: (bsz, dim0)
-        # indices: [0]
-        # reshape indices such that it is (bsz, 1)
         base_output = self.base_layer(input_)[0]
         rank = self.A_buffer.shape[2] // 2
         b_dim = self.B_buffer.shape[2] // 2
@@ -225,9 +211,6 @@ class QKVParallelLinearWithToppings(ColumnParallelLinearWithTopping):
         # (scales_buffer: bsz, _, _*3)
 
     def forward(self, input_: torch.Tensor):
-        # input_: (bsz, dim0)
-        # indices: [0]
-        # reshape indices such that it is (bsz, 1)
         base_output = self.base_layer(input_)[0]
         rank = self.A_buffer_qkv.shape[2] // 3
         b_dim_q = self.B_buffer_q.shape[2]
@@ -291,16 +274,9 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
             self.qweight_buffer = torch.zeros(0, 0, 0)
             self.metas_buffer = torch.zeros(0, 0, 0)
             self.scales_buffer = torch.zeros(0, 0, 0)
-        # model.layers.24.mlp.gate_up_proj
-        # (A_buffer: bsz, dim1, rank)
-        # (B_buffer: bsz, rank, dim2)
-        # (qweight_buffer: bsz,_, _)
-        # (metas_buffer: bsz,_, _)
-        # (scales_buffer: bsz, _, _)
 
     def forward(self, input_: torch.Tensor):
         base_output = torch.matmul(input_, self.base_layer.weight.T)
-
         delta_output = ldmm(
             indices=self.weight_indices,
             x=input_,
@@ -310,9 +286,15 @@ class RowParallelLinearWithTopping(BaseLayerWithTopping):
             metas=self.metas_buffer,
             ss=self.scales_buffer,
         )
+        print(f"weight_indices: {self.weight_indices}")
+        print(f"A_buffer.shape: {self.A_buffer.shape}")
+        print(f"base_output.shape: {base_output.shape}")
+        print(f"delta_output.shape: {delta_output.shape}")
+        print(f"base: {base_output}")
+        print(f"max delta: {torch.max(abs(delta_output))}")
         assert base_output.shape == delta_output.shape
         output_ = base_output + delta_output
-        output_ = base_output
+        # output_ = base_output
         if not self.base_layer.skip_bias_add:
             output = (
                 output_ + self.base_layer.bias
@@ -342,7 +324,9 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
         logits_metadata: Union[LogitsMetadata, ForwardBatch],
     ):
         if self.delta_buffer == None or self.delta_buffer.shape[0] == 0:
-            return self.base_layer._get_logits(input_ids, hidden_states, weight, logits_metadata)
+            return self.base_layer._get_logits(
+                input_ids, hidden_states, weight, logits_metadata
+            )
         if isinstance(logits_metadata, ForwardBatch):
             logits_metadata = LogitsMetadata.from_forward_batch(logits_metadata)
         assert isinstance(logits_metadata, LogitsMetadata)
@@ -351,23 +335,38 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
         if logits_metadata.forward_mode.is_decode():
             last_index = None
             last_hidden = hidden_states
+            base_output = torch.zeros(
+                last_hidden.shape[0],
+                self.delta_buffer[0].shape[0],
+                dtype=last_hidden.dtype,
+                device=last_hidden.device,
+            )
+            unique_indices = torch.unique(self.weight_indices)
+            for id in unique_indices:
+                idx_mask = self.weight_indices == id
+                inp = last_hidden[idx_mask]
+                if id == -1:
+                    w = weight.T
+                else:
+                    w = self.delta_buffer[id]
+                output = nn.functional.linear(inp, w)
+                base_output[idx_mask] = output
         else:
             last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
             last_hidden = hidden_states[last_index]
-
-        base_output = torch.zeros(
-            last_hidden.shape[0],
-            self.delta_buffer[0].shape[0],
-            dtype=last_hidden.dtype,
-            device=last_hidden.device,
-        )
-        unique_indices = torch.unique(self.weight_indices)
-        for id in unique_indices:
-            # inp = last_hidden[self.weight_indices == id]
-            if id == -1:
-                w = weight
+            base_output = torch.zeros(
+                last_hidden.shape[0],
+                self.delta_buffer[0].shape[0],
+                dtype=last_hidden.dtype,
+                device=last_hidden.device,
+            )
+            unique_indices = torch.unique(self.weight_indices)
+            assert len(unique_indices) == 1, f"Prefill stage only supports one index"
+            w_idx = unique_indices[0]
+            if w_idx == -1:
+                w = weight.T
             else:
-                w = self.delta_buffer[id]
+                w = self.delta_buffer[w_idx]
             output = nn.functional.linear(last_hidden, w)
             base_output = output
         return base_output

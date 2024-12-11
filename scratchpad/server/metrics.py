@@ -131,7 +131,6 @@ class PrometheusStatLogger(StatLoggerBase):
         gauge.labels(**data).set(1)
 
     def _log_prometheus(self, stats: Stats) -> None:
-        print(stats)
         self._log_gauge(
             self.metrics.gauge_avg_generation_throughput, stats.generation_throughput
         )

@@ -837,9 +837,11 @@ class ScheduleBatch:
             device=self.input_ids.device,
         )
         sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
+
         # reorder reqs
         self.input_ids = self.input_ids[sorted_indices]
         self.reqs = [self.reqs[i] for i in sorted_indices]
+
         self.req_pool_indices = self.req_pool_indices[sorted_indices]
         self.seq_lens = self.seq_lens[sorted_indices]
 

@@ -262,21 +262,26 @@ class ToppingsManager:
                 dtype=torch.int64,
                 device=forward_batch.input_ids.device,
             )
-        # remap weight_indices so it's local to the batch
-        # get unique_indices in weight_indices, and remap them from 0 to len(toppings_in_batch)
         unique_indices = torch.unique(weight_indices)
         len_loras = len([x for x in unique_indices if x < len(self.loras)])
         len_deltas = len([x for x in unique_indices if x >= len(self.loras)])
+        assert len_loras == 0, "LoRA is not supported in this version"
+
+        # weight_indices should be sorted,
+        assert torch.sort(weight_indices).values.equal(
+            weight_indices
+        ), f"weight_indices should be sorted, got {weight_indices}"
+
         remap_indices = {
             unique_indices[i].item(): i for i in range(len(unique_indices))
         }
-
         # remap weight_indices, new tensor will have values from 0 to len(toppings_in_batch), but the same shape as weight_indices
         weight_indices = torch.tensor(
             [remap_indices[idx.item()] for idx in weight_indices],
             dtype=torch.int64,
             device=forward_batch.input_ids.device,
         )
+        print(f"weight_indices: {weight_indices}")
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
             if "lm_head" in module_name:
