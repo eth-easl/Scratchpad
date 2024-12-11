@@ -85,6 +85,12 @@ class ToppingsManager:
         self.toppings_id = {}
         self.max_toppings_per_batch = server_args.max_toppings_per_batch
         toppings = parse_topping_config(server_args.init_toppings)
+        if toppings is None or not server_args.enable_toppings:
+            logger.info("No toppings to load, skipping topping manager initialization.")
+            self.enabled = False
+            return
+        else:
+            self.enabled = True
         for topping in toppings:
             self.register_topping(topping[0], topping[1], topping[2])
         self.print_available_toppings()
@@ -213,6 +219,10 @@ class ToppingsManager:
 
     def prepare_topping_batch(self, forward_batch: ForwardBatch):
         cur_uids = set(forward_batch.topping_paths)
+        print(f"Current toppings: {cur_uids}")
+        if cur_uids == set([None]):
+            print("No toppings in batch")
+            return
         assert (
             len(cur_uids) <= self.max_toppings_per_batch
         ), f"Got {len(cur_uids)} toppings, but max is {self.max_toppings_per_batch}"
@@ -235,9 +245,6 @@ class ToppingsManager:
                 self.load_topping(uid, index)
                 self.active_uids.add(uid)
                 self.buffer_id[uid] = index
-
-        if cur_uids == set([None]):
-            return
 
         # setup lora in forward modules
         bs = forward_batch.batch_size

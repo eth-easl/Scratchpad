@@ -7,6 +7,8 @@ def parse_topping_config(topping_conf: str) -> List:
     topping_conf: common-separated string
     """
     toppings = []
+    if not topping_conf:
+        return None
     topping_confs = topping_conf.split(",")
 
     for topping_conf in topping_confs:

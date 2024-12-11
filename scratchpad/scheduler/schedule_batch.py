@@ -830,20 +830,20 @@ class ScheduleBatch:
             self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
                 self.input_ids
             )
+        if topping_manager.enabled:
+            topping_ids = torch.tensor(
+                [topping_manager.toppings_id[req.topping_path] for req in self.reqs],
+                dtype=torch.long,
+                device=self.input_ids.device,
+            )
+            sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
 
-        topping_ids = torch.tensor(
-            [topping_manager.toppings_id[req.topping_path] for req in self.reqs],
-            dtype=torch.long,
-            device=self.input_ids.device,
-        )
-        sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
+            # reorder reqs
+            self.input_ids = self.input_ids[sorted_indices]
+            self.reqs = [self.reqs[i] for i in sorted_indices]
 
-        # reorder reqs
-        self.input_ids = self.input_ids[sorted_indices]
-        self.reqs = [self.reqs[i] for i in sorted_indices]
-
-        self.req_pool_indices = self.req_pool_indices[sorted_indices]
-        self.seq_lens = self.seq_lens[sorted_indices]
+            self.req_pool_indices = self.req_pool_indices[sorted_indices]
+            self.seq_lens = self.seq_lens[sorted_indices]
 
         # Alloc mem
         bs = len(self.reqs)
