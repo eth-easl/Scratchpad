@@ -1,5 +1,5 @@
-from tools.client.req import LLM
 import multiprocessing as mp
+from scratchpad.utils.client import LLM
 
 llm = LLM(
     model="meta-llama/Llama-3.3-70B-Instruct",
