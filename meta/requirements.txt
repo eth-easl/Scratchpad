@@ -18,3 +18,4 @@ prometheus_client
 tqdm
 einops
 pillow
+tenacity

@@ -1,19 +1,7 @@
 import os
-import anyio
+from typing import Optional
 import requests
-import aiohttp
-import asyncio
-from typing import Dict, Optional
-
-
-async def async_request(endpoint, req: Dict):
-    async with aiohttp.ClientSession() as session:
-        async with session.post(endpoint, json=req) as response:
-            return await response.json()
-
-
-async def make_requests(endpoint, reqs):
-    return await asyncio.gather(*[async_request(endpoint, req) for req in reqs])
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 
 class LLM:
@@ -38,6 +26,7 @@ class LLM:
         self.system_prompt = system_prompt
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def __call__(self, prompt: str):
         data = {
             "model": self.model,
