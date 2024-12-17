@@ -11,8 +11,9 @@ _GENERATION_MODELS = {
         "llama_naive_moe",
         "LlamaNaiveQuantisedMoEForCausalLM",
     ),
-    "LlamaQuantisedMoEForCausalLM": ("llama_quant_moe", "LlamaQuantisedMoEForCausalLM"),
     "LlamaMoEForCausalLM": ("llama_moe", "LlamaMoEForCausalLM"),
+    "LlamaBTCMoECausalLM": ("llama_btc_moe", "LlamaBTCMoECausalLM"),
+    "LlamaQuantisedMoEForCausalLM": ("llama_quant_moe", "LlamaQuantisedMoEForCausalLM"),
 }
 
 _EMBEDDING_MODELS = {

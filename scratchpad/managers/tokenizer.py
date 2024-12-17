@@ -42,6 +42,8 @@ from scratchpad.utils import (
 from scratchpad.config.model_config import ModelConfig
 from .image_processor import get_dummy_image_processor, get_image_processor
 
+from scratchpad.server.protocol import GenerateReqInput as ProtocolGenerateReqInput
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
@@ -141,7 +143,9 @@ class TokenizerManager:
                 "This model does not appear to be an embedding model by default. "
                 "Please add `--is-embedding` when launching the server or try another model."
             )
-
+        print("HERE 1")
+        print(obj)
+        print(type(obj))
         obj.normalize_batch_and_arguments()
         is_single = obj.is_single
         if is_single:
@@ -187,7 +191,7 @@ class TokenizerManager:
         sampling_params.verify()
 
         # Build return object
-        if isinstance(obj, GenerateReqInput):
+        if isinstance(obj, GenerateReqInput) or isinstance(obj, ProtocolGenerateReqInput):
             tokenized_obj = TokenizedGenerateReqInput(
                 obj.rid,
                 input_text,

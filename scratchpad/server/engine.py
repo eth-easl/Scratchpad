@@ -34,7 +34,7 @@ class AsyncLLMEngine:
             gpu_id = tp_rank % tp_size_per_node
             proc = mp.Process(
                 target=run_scheduler_process,
-                args=(self.args, gpu_id, tp_rank, writer, []),
+                args=(self.args, gpu_id, tp_rank, writer),
             )
             proc.start()
             scheduler_procs.append(proc)
@@ -77,7 +77,7 @@ class AsyncLLMEngine:
             return_logprob=return_logprob,
             logprob_start_len=logprob_start_len,
             top_logprobs_num=top_logprobs_num,
-            lora_path=lora_path,
+            topping_path=lora_path,
         )
         task = self.loop.create_task(self.generate_request(obj))
         return self.loop.run_until_complete(task)
