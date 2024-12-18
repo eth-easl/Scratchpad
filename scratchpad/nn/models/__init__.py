@@ -11,9 +11,20 @@ _GENERATION_MODELS = {
         "llama_naive_moe",
         "LlamaNaiveQuantisedMoEForCausalLM",
     ),
+    "LLamaNaiveQuantisedBTCForCausalLM": (
+        "llama_naive_btc",
+        "LLamaNaiveQuantisedBTCForCausalLM"
+    ),
     "LlamaMoEForCausalLM": ("llama_moe", "LlamaMoEForCausalLM"),
-    "LlamaBTCMoECausalLM": ("llama_btc_moe", "LlamaBTCMoECausalLM"),
-    "LlamaQuantisedMoEForCausalLM": ("llama_quant_moe", "LlamaQuantisedMoEForCausalLM"),
+    "LlamaBTCForCausalLM": ("llama_btc", "LlamaBTCForCausalLM"),
+    "LlamaQuantisedMoEForCausalLM": (
+        "llama_quant_moe",
+        "LlamaQuantisedMoEForCausalLM"
+    ),
+     "LlamaQuantisedBTCForCausalLM": (
+        "llama_quant_btc",
+        "LlamaQuantisedBTCForCausalLM"
+    ),
 }
 
 _EMBEDDING_MODELS = {
