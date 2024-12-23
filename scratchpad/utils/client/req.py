@@ -43,8 +43,9 @@ class LLM:
                 self.endpoint,
                 headers=self.headers,
                 json=data,
-            ).json()
+            )
+            result = res.json()
         except Exception as e:
-            print(f"Error calling LLM: {e}")
+            print(f"Error calling LLM: {res.text}")
             return None
-        return res["choices"][0]["message"]["content"]
+        return result["choices"][0]["message"]["content"]
