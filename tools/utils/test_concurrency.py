@@ -6,18 +6,19 @@ from tools.client.req import make_requests
 def main(args):
     prompts = [
         "Who is Alan Turing?",
-        "What is the capital of France?",
-        "What is the capital of Germany?",
-        "Who is Albert Einstein?",
+        # "What is the capital of France?",
+        # "What is the capital of Germany?",
+        # "Who is Albert Einstein?",
     ]
     models = [
         # "eltorio/Llama-3.2-3B-appreciation-1",
         # "eltorio/Llama-3.2-3B-appreciation-2",
-        "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-1",
-        "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-2",
+        # "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-1",
+        # "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-2",
+        "meta-llama/Llama-3.2-3B"
     ]
     prompts = np.random.choice(prompts, args.num_req, replace=True)
-    models = np.random.choice(models, args.num_req, replace=True)
+    # models = np.random.choice(models, args.num_req, replace=True)
     print(models)
     reqs = [
         {
@@ -29,6 +30,7 @@ def main(args):
     ]
     responses = asyncio.run(make_requests(args.endpoint, reqs))
     for resp in responses:
+        print(f"---")
         print(resp["choices"][0]["message"]["content"])
 
 

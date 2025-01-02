@@ -302,11 +302,11 @@ class LlamaForCausalLM(nn.Module):
     def get_hidden_dim(self, module_name):
         if module_name in ["q_proj", "o_proj", "qkv_proj"]:
             return self.config.hidden_size, self.config.hidden_size
-        elif module_name in ["kv_proj"]:
+        elif module_name in ["kv_proj", "k_proj", "v_proj"]:
             return self.config.hidden_size, self.config.hidden_size // (
                 self.config.num_attention_heads // self.config.num_key_value_heads
             )
-        elif module_name == "gate_up_proj":
+        elif module_name in ["gate_up_proj", "up_proj", "gate_proj"]:
             return self.config.hidden_size, self.config.intermediate_size
         elif module_name == "down_proj":
             return self.config.intermediate_size, self.config.hidden_size

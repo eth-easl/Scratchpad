@@ -141,32 +141,32 @@ class ToppingMemPool:
             stacked_dim = dimensions[1] * stack_factor
 
             self.qweight_buffer[module] = [
-                torch.zeros(
+                torch.empty(
                     self.max_toppings_per_batch,
                     dimensions[0] // (pack_factor * sparse_factor * 2),
                     stacked_dim * 2,
                     dtype=delta_dtypes["qweight"],
                     device="cuda",
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ]
             self.meta_buffer[module] = [
-                torch.zeros(
+                torch.empty(
                     self.max_toppings_per_batch,
                     stacked_dim,
                     dimensions[0] // (pack_factor * sparse_factor),
                     dtype=delta_dtypes["meta"],
                     device="cuda",
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ]
             self.scales_buffer[module] = [
-                torch.zeros(
+                torch.empty(
                     self.max_toppings_per_batch,
                     1,
                     stacked_dim,
                     dtype=delta_dtypes["scales"],
                     device="cuda",
                 )
-                for _ in range(num_layers)
+                for i in range(num_layers)
             ]

@@ -100,6 +100,7 @@ class ToppingsManager:
         logger.info("Topping manager ready.")
 
     def init_topping_mem_pool(self, args):
+        print(self.target_weights)
         self.topping_memory_pool = ToppingMemPool(
             args,
             base_hf_config=self.base_hf_config,
@@ -124,7 +125,6 @@ class ToppingsManager:
         self.origin_target_modules = set()
         for name, top in self.available_toppings.items():
             self.configs[name] = ToppingConfig(topping_type=top[0], path=top[1])
-
             self.origin_target_modules = set(self.origin_target_modules) | set(
                 self.configs[name].hf_config["target_modules"]
             )
@@ -134,6 +134,9 @@ class ToppingsManager:
                 self.base_model.get_module_name(module)
                 for module in self.origin_target_modules
             }
+            # remove down_proj from target modules
+            self.target_modules = set(self.target_modules) - set({"down_proj"})
+            logger.info(f"Target modules: {self.target_modules}")
         else:
             logger.warning(
                 "WARNING: get_module_name() is not defined, "
@@ -166,6 +169,7 @@ class ToppingsManager:
         self.lora_id = {}
         self.deltas: List[DeltaAdapter] = []
         self.delta_id = {}
+
         for name in self.available_toppings.keys():
             t_type = self.available_toppings[name][0]
             logger.info(f"Loading {t_type} {name}")
@@ -189,10 +193,15 @@ class ToppingsManager:
                 self.deltas[-1].initialize_weights()
 
         # misc lora configs
-        self.max_lora_dim = max(
-            [x.hf_config["r"] for x in self.configs.values() if "r" in x.hf_config]
-        )
-        self.scaling = self.loras[0].scaling
+        self.max_lora_dim = [
+            x.hf_config["r"] for x in self.configs.values() if "r" in x.hf_config
+        ]
+        if len(self.max_lora_dim) == 0:
+            self.max_lora_dim = 0
+            self.scaling = 0
+        else:
+            self.max_lora_dim = max(self.max_lora_dim)
+            self.scaling = self.loras[0].scaling
         # FIXME remove the restrictions
         assert all(
             x.hf_config["r"] == self.max_lora_dim
@@ -215,6 +224,9 @@ class ToppingsManager:
     def set_topping_module(self, module_name, module):
         topping_module = get_topping_layer(module)
         replace_submodule(self.base_model, module_name, topping_module)
+        logger.info(
+            f"Replaced {module_name} with topping module {type(topping_module)}"
+        )
         return topping_module
 
     def prepare_topping_batch(self, forward_batch: ForwardBatch):
@@ -288,7 +300,6 @@ class ToppingsManager:
             dtype=torch.int64,
             device=forward_batch.input_ids.device,
         )
-        print(f"weight_indices: {weight_indices}")
         for module_name, module in self.topping_modules:
             layer_id = get_layer_id(module_name)
             if "lm_head" in module_name:
@@ -326,6 +337,42 @@ class ToppingsManager:
                         self.meta_buffer["kv_proj"][layer_id][:len_deltas],
                         self.scales_buffer["kv_proj"][layer_id][:len_deltas],
                     ),
+                )
+            elif "down_proj" in module_name:
+                weight_name = self.get_weight_name(module_name, 0)
+                module.set_topping_info(
+                    bs,
+                    weight_indices,
+                    lora_buffer=(
+                        (
+                            self.A_buffer[weight_name][layer_id][:len_loras]
+                            if weight_name in self.A_buffer
+                            else None
+                        ),
+                        (
+                            self.B_buffer[weight_name][layer_id][:len_loras]
+                            if weight_name in self.B_buffer
+                            else None
+                        ),
+                    ),
+                    delta_buffer=(
+                        (
+                            self.qweight_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.qweight_buffer
+                            else None
+                        ),
+                        (
+                            self.meta_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.meta_buffer
+                            else None
+                        ),
+                        (
+                            self.scales_buffer[weight_name][layer_id][:len_deltas]
+                            if weight_name in self.scales_buffer
+                            else None
+                        ),
+                    ),
+                    debug=False,
                 )
             else:
                 weight_name = self.get_weight_name(module_name, 0)
@@ -375,6 +422,7 @@ class ToppingsManager:
         """
         This function loads topping from CPU -> GPU memory
         """
+
         if uid not in self.available_toppings:
             logger.error(f"Topping {uid} not registered")
             return
@@ -420,6 +468,7 @@ class ToppingsManager:
 
         for i in range(num_layer):
             layer_weights = self.deltas[self.delta_id[uid]].layers[i].weights
+            # load to buffer space
             for name, weights in layer_weights.items():
                 if (
                     "qkv_proj" in name
@@ -445,7 +494,7 @@ class ToppingsManager:
                         self.scales_buffer[kv_proj_name][i][buffer_id].copy_(
                             weights[:, q_dim:]
                         )
-                    else:
+                    elif "meta" in name:
                         q_proj_name = "q_proj"
                         kv_proj_name = "kv_proj"
                         q_dim = self.meta_buffer[q_proj_name][i][buffer_id].shape[0]
@@ -455,6 +504,8 @@ class ToppingsManager:
                         self.meta_buffer[kv_proj_name][i][buffer_id].copy_(
                             weights[q_dim:, :]
                         )
+                    else:
+                        print("Unknown delta weight name: {name}")
                 else:
                     if "qweight" in name:
                         weight_name = self.get_delta_weight_name(name)
@@ -462,16 +513,21 @@ class ToppingsManager:
                             self.qweight_buffer[weight_name][i][buffer_id].copy_(
                                 weights
                             )
+                        else:
+                            print("Unknown delta weight name: {name}")
+
                     elif "scales" in name:
                         weight_name = self.get_delta_weight_name(name)
                         if weight_name:
                             self.scales_buffer[weight_name][i][buffer_id].copy_(weights)
+
                     elif "meta" in name:
                         weight_name = self.get_delta_weight_name(name)
                         if weight_name:
                             self.meta_buffer[weight_name][i][buffer_id].copy_(weights)
                     else:
                         print("Unknown delta weight name: {name}")
+                        raise ValueError(f"Unknown delta weight name: {name}")
 
         for name, outside_module in self.deltas[
             self.delta_id[uid]
