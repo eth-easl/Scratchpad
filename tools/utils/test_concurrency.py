@@ -15,6 +15,7 @@ def main(args):
         # "eltorio/Llama-3.2-3B-appreciation-2",
         "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-1",
         "deltazip/meta-llama.Llama-3.2-3B-Instruct.4b_2n4m_128bs-2",
+        # "meta-llama/Llama-3.2-3B"
     ]
     prompts = np.random.choice(prompts, args.num_req, replace=True)
     models = np.random.choice(models, args.num_req, replace=True)
@@ -29,6 +30,7 @@ def main(args):
     ]
     responses = asyncio.run(make_requests(args.endpoint, reqs))
     for resp in responses:
+        print(f"---")
         print(resp["choices"][0]["message"]["content"])
 
 

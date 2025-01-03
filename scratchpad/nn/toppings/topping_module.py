@@ -96,6 +96,7 @@ class DeltaAdapter(ToppingAdapter):
             delta_config = json.load(f)
             self.pack_factor = 32 // delta_config["compress_config"]["bits"]
             self.sparse_factor = int(1 / delta_config["compress_config"]["sparsity"])
+
         weight_path = os.path.join(local_path, "deltazip-compressed.safetensors")
         with st.safe_open(weight_path, framework="torch", device="cpu") as f:
             keys = f.keys()
