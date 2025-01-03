@@ -19,3 +19,4 @@ tqdm
 einops
 pillow
 tenacity
+orjson
