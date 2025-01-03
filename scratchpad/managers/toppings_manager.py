@@ -100,7 +100,6 @@ class ToppingsManager:
         logger.info("Topping manager ready.")
 
     def init_topping_mem_pool(self, args):
-        print(self.target_weights)
         self.topping_memory_pool = ToppingMemPool(
             args,
             base_hf_config=self.base_hf_config,
