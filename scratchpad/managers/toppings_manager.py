@@ -135,7 +135,6 @@ class ToppingsManager:
                 for module in self.origin_target_modules
             }
             # remove down_proj from target modules
-            self.target_modules = set(self.target_modules) - set({"down_proj"})
             logger.info(f"Target modules: {self.target_modules}")
         else:
             logger.warning(

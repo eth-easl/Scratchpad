@@ -22,7 +22,7 @@ from scratchpad.distributed.communication_op import (
 from scratchpad.distributed.parallel_state import get_tensor_model_parallel_rank
 from scratchpad.distributed.utils import split_tensor_along_last_dim
 from scratchpad.model_executor.forward_info import ForwardBatch, ForwardMode
-from triteia.python.ops import baseline_ldmm as ldmm
+from triteia.python.ops import ldmm as ldmm
 
 
 class BaseLayerWithTopping(nn.Module):
@@ -138,6 +138,7 @@ class MergedColumnParallelLinearWithTopping(ColumnParallelLinearWithTopping):
         qweight_dim = self.qweight_buffer.shape[2] // 2
         metas_dim = self.metas_buffer.shape[1] // 2
         scales_dim = self.scales_buffer.shape[2] // 2
+
         for i in range(2):
             output = ldmm(
                 indices=self.weight_indices,
