@@ -32,6 +32,7 @@ class TpModelWorker:
         dp_rank: Optional[int] = 0,
     ):
         # Parse args
+        logger.info(f"Initalizing model worker on GPU {gpu_id}, tp_rank: {tp_rank}")
         self.tp_rank = tp_rank
         self.server_args = server_args
         # Init model and tokenizer

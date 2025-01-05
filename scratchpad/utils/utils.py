@@ -140,10 +140,10 @@ def update_environment_variables(envs: Dict[str, str]):
 
 
 def find_nccl_library() -> str:
-    if torch.version.cuda is not None:
+    if os.environ.get("SP_NCCL_SO_PATH", None):
+        so_file = os.path.join(os.environ["SP_NCCL_SO_PATH"], "libnccl.so.2")
+    elif torch.version.cuda is not None:
         so_file = "libnccl.so.2"
-    elif torch.version.hip is not None:
-        so_file = "librccl.so.1"
     else:
         raise ValueError("NCCL only supports CUDA and ROCm backends.")
     logger.info(f"Found nccl from library {so_file}")
