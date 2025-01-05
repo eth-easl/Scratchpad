@@ -20,6 +20,7 @@ from scratchpad.nn.layers.linear import (
     QKVParallelLinear,
     RowParallelLinear,
 )
+from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.nn.layers.logits_processor import LogitsProcessor, LogitsProcessorOutput
 from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.attention.radix_attention import RadixAttention
@@ -28,7 +29,6 @@ from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import ForwardBatch
 from triteia.python.nn.linear import sparse_low_precision_linear
 from .llama import LlamaAttention
-
 
 class LlamaMoE(nn.Module):
     def __init__(
@@ -55,6 +55,7 @@ class LlamaMoE(nn.Module):
         )
 
     def forward(self, x):
+        base_y = self.base_mlp(x)
         x = x.view(1, *x.shape) if x.dim() == 2 else x
         batch_size, sequence_length, hidden_dim = x.shape
         router_logits = self.gate(x)
@@ -69,11 +70,11 @@ class LlamaMoE(nn.Module):
         for ix, expert in enumerate(self.experts):
             mask = selected_experts == ix
             batch_idx, tok_idx, expert_idx = torch.where(mask)
-            if batch_idx.numel() != 0 and tok_idx.numel() != 0:
-                results[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
-                    batch_idx, tok_idx, expert_idx
-                ].unsqueeze(-1)
+            results[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
+                batch_idx, tok_idx, expert_idx
+            ].unsqueeze(-1)
         results = results.view((batch_size, sequence_length, self.output_size))
+        results += base_y
         return results
 
 
@@ -184,7 +185,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
-            input_metadata=input_metadata,
+            forward_batch=input_metadata,
         )
 
         # Fully Connected
@@ -320,17 +321,21 @@ class LlamaNaiveQuantisedBTCForCausalLM(nn.Module):
             (".qkv_proj", ".q_proj", "q"),
             (".qkv_proj", ".k_proj", "k"),
             (".qkv_proj", ".v_proj", "v"),
-            (".gate_up_proj", ".gate_proj", 0),
-            (".gate_up_proj", ".up_proj", 1),
+            # (".gate_up_proj", ".gate_proj", 0),
+            # (".gate_up_proj", ".up_proj", 1),
         ]
         params_dict = dict(self.named_parameters())
 
         name_transformations = [
-            ("down_proj.0", "down_proj"),
-            ("gate_up_proj.0", "gate_up_proj"),
-            ("mlp.EXPERT_ID", "base_mlp"),
+            # ("down_proj.0", "down_proj"),
+            # ("gate_up_proj.0", "gate_up_proj"),
+            ("experts.EXPERT_ID", "base_mlp"),
+            (".0.meta", ".meta"),
+            (".0.scales", ".scales"),
+            (".0.qweight", ".qweight"),
         ]
         for name, loaded_weight in weights:
+            # print(name)
             assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
@@ -353,6 +358,7 @@ class LlamaNaiveQuantisedBTCForCausalLM(nn.Module):
                     if transformation[0] in name:
                         name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
+                # print(name, param, flush=True)
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
@@ -369,6 +375,7 @@ class LlamaNaiveQuantisedBTCForCausalLM(nn.Module):
                         name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                # print(name, param, flush=True)
                 weight_loader(param, loaded_weight)
 
         if (

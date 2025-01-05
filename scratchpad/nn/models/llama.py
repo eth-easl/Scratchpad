@@ -25,6 +25,7 @@ from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
 from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.model_executor.forward_info import ForwardBatch
+from triteia.python.nn.linear import sparse_low_precision_linear
 
 
 class LlamaMLP(nn.Module):
