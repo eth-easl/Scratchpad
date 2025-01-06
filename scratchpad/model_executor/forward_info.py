@@ -212,5 +212,4 @@ class ForwardBatch:
         # Init lora information
         if model_runner.server_args.enable_toppings:
             model_runner.topping_manager.prepare_topping_batch(ret)
-
         return ret

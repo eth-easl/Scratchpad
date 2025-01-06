@@ -14,7 +14,8 @@ json_schema = json.dumps(
     }
 )
 prompt = "What is in this image? Return a JSON object"
-img_url = "https://images.unsplash.com/photo-1692350914621-f0ca2d206368?q=80&w=3000&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D"
+img_url = "https://skyhookcontentful.imgix.net/1hN1i44NxZiF7pxEPWVbvz/6aa0bef25c189b37cfcaa26b677415c1/pixabay-violetta-mattehorn-mountain-switzerland.jpg?auto=compress%2Cformat%2Cenhance%2Credeye&crop=faces%2Ccenter&fit=crop&ar=1%3A1&w=576px&ixlib=react-9.7.0"
+
 stream = True
 
 
@@ -73,7 +74,7 @@ def end_to_end(args):
         messages=messages,
         response_format=response_format,
         stream=args.stream,
-        max_tokens=10,
+        max_tokens=128,
     )
     if args.stream:
         for chunk in response:

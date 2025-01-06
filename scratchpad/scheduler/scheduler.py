@@ -57,6 +57,7 @@ from scratchpad.utils import (
     get_exception_traceback,
     logger,
     get_zmq_socket,
+    RequestRejectedException,
 )
 
 if TYPE_CHECKING:
@@ -297,26 +298,32 @@ class Scheduler:
         self.last_batch = None
 
         while True:
-            recv_reqs = self.recv_requests()
-            self.process_input_requests(recv_reqs)
+            try:
+                recv_reqs = self.recv_requests()
+                self.process_input_requests(recv_reqs)
 
-            batch = self.get_next_batch_to_run()
-            self.cur_batch = batch
+                batch = self.get_next_batch_to_run()
+                self.cur_batch = batch
 
-            if batch:
-                result = self.run_batch(batch)
-                self.process_batch_result(batch, result)
+                if batch:
+                    result = self.run_batch(batch)
+                    self.process_batch_result(batch, result)
 
-                # Decode multiple steps to reduce the overhead
-                if batch.forward_mode.is_decode():
-                    for _ in range(self.server_args.num_continuous_decode_steps - 1):
-                        if not self.running_batch:
-                            break
-                        self.update_running_batch()
-                        if not self.running_batch:
-                            break
-                        result = self.run_batch(batch)
-                        self.process_batch_result(batch, result)
+                    # Decode multiple steps to reduce the overhead
+                    if batch.forward_mode.is_decode():
+                        for _ in range(
+                            self.server_args.num_continuous_decode_steps - 1
+                        ):
+                            if not self.running_batch:
+                                break
+                            self.update_running_batch()
+                            if not self.running_batch:
+                                break
+                            result = self.run_batch(batch)
+                            self.process_batch_result(batch, result)
+            except Exception as e:
+                logger.error(f"Error in run_batch: {e}")
+                self.running_batch = None
             else:
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
@@ -370,7 +377,9 @@ class Scheduler:
     def process_input_requests(self, recv_reqs: List):
         for recv_req in recv_reqs:
             if isinstance(recv_req, TokenizedGenerateReqInput):
-                self.handle_generate_request(recv_req)
+                accepted = self.handle_generate_request(recv_req)
+                if not accepted:
+                    raise ValueError("Request rejected")
             elif isinstance(recv_req, TokenizedEmbeddingReqInput):
                 self.handle_embedding_request(recv_req)
             elif isinstance(recv_req, FlushCacheReq):
@@ -446,10 +455,11 @@ class Scheduler:
 
         # Truncate prompts that are too long
         if len(req.origin_input_ids) > self.max_req_input_len:
-            logger.warning(
+            logger.error(
                 "Request length is longer than the KV cache pool size or "
                 "the max context length. Truncated!!!"
             )
+            return False
             req.origin_input_ids = req.origin_input_ids[: self.max_req_input_len]
 
         req.sampling_params.max_new_tokens = min(
@@ -462,6 +472,7 @@ class Scheduler:
         )
 
         self.waiting_queue.append(req)
+        return True
 
     def log_stats(self, stats):
         for logger in self.loggers:
@@ -1195,6 +1206,8 @@ def run_scheduler_process(
         )
         pipe_writer.send("ready")
         scheduler.event_loop_normal()
+    except ValueError as e:
+        logger.info(f"Scheduler process exited: {e}")
     except Exception:
         msg = get_exception_traceback()
         logger.error(msg)
