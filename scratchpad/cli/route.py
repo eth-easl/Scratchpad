@@ -6,7 +6,6 @@ encoder = LLMEncoder(
     base_url="http://localhost:8080/v1",
     api_key="test",
 )
-
 local_1b = LLM(
     model="meta-llama/Llama-3.2-1B-Instruct",
     base_url="http://localhost:8080",
@@ -39,4 +38,6 @@ complex_factual = Route(
 
 router = Router(encoder, [chitchat, complex_factual])
 
-router("What's the invention of internet?")
+response = router("What's the invention of internet?")
+response = router("Who is Alan Turing?")
+response = router("Hi there!")

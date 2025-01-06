@@ -26,8 +26,11 @@ class LLM:
         self.system_prompt = system_prompt
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
 
+    def set_system_prompt(self, system_prompt: str):
+        self.system_prompt = system_prompt
+
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-    def __call__(self, prompt: str):
+    def __call__(self, prompt: str, max_tokens: int = 10, temperature: float = 0.5):
         data = {
             "model": self.model,
             "messages": [
@@ -37,6 +40,8 @@ class LLM:
                     "content": prompt,
                 },
             ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         }
         try:
             res = requests.post(
