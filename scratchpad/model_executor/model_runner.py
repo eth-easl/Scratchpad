@@ -70,7 +70,7 @@ class ModelRunner:
         self.server_args = server_args
         self.is_generation = model_config.is_generation
         self.is_multimodal = model_config.is_multimodal
-
+        logger.info(f"model config: {model_config}")
         # Model-specific adjustment
         if (
             self.model_config.attention_arch == AttentionArch.MLA

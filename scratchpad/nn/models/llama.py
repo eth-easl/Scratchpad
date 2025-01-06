@@ -20,6 +20,7 @@ from scratchpad.nn.layers.linear import (
     RowParallelLinear,
 )
 from scratchpad.nn.layers.logits_processor import LogitsProcessor, LogitsProcessorOutput
+from scratchpad.nn.layers.pooler import Pooler, PoolingType
 from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
@@ -290,6 +291,7 @@ class LlamaForCausalLM(nn.Module):
                 config.vocab_size, config.hidden_size, quant_config=quant_config
             )
         self.logits_processor = LogitsProcessor(config)
+        self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
 
     @torch.no_grad()
     def forward(
@@ -298,11 +300,15 @@ class LlamaForCausalLM(nn.Module):
         positions: torch.Tensor,
         input_metadata: ForwardBatch,
         input_embeds: torch.Tensor = None,
+        get_embedding: bool = False,
     ) -> LogitsProcessorOutput:
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)
-        return self.logits_processor(
-            input_ids, hidden_states, self.lm_head.weight, input_metadata
-        )
+        if not get_embedding:
+            return self.logits_processor(
+                input_ids, hidden_states, self.lm_head.weight, input_metadata
+            )
+        else:
+            return self.pooler(hidden_states, input_metadata)
 
     def get_hidden_dim(self, module_name):
         if module_name in ["q_proj", "o_proj", "qkv_proj"]:

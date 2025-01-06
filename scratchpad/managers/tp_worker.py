@@ -41,6 +41,7 @@ class TpModelWorker:
             server_args.trust_remote_code,
             context_length=server_args.context_length,
             model_override_args=server_args.json_model_override_args,
+            is_embedding=server_args.is_embedding,
         )
         self.model_runner = ModelRunner(
             model_config=self.model_config,
