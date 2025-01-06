@@ -8,20 +8,20 @@ class LLM:
     def __init__(
         self,
         model: str,
-        endpoint: Optional[str] = None,
+        base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
     ):
-        if not endpoint:
-            endpoint = os.environ.get("RC_API_BASE", None)
+        if not base_url:
+            base_url = os.environ.get("RC_API_BASE", None)
         if not api_key:
             api_key = os.environ.get("RC_API_KEY", None)
-        if not endpoint or not api_key:
-            raise ValueError("API key or endpoint not found")
+        if not base_url or not api_key:
+            raise ValueError("API key or base_url not found")
         if not system_prompt:
             system_prompt = "You are a helpful assistant."
         self.model = model
-        self.endpoint = endpoint + "/chat/completions"
+        self.base_url = base_url + "/chat/completions"
         self.api_key = api_key
         self.system_prompt = system_prompt
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -40,7 +40,7 @@ class LLM:
         }
         try:
             res = requests.post(
-                self.endpoint,
+                self.base_url,
                 headers=self.headers,
                 json=data,
             )

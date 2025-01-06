@@ -2,3 +2,4 @@ gguf
 matplotlib
 prompt_toolkit
 openai
+faiss-cpu
