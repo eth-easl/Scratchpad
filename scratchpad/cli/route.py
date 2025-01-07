@@ -1,14 +1,14 @@
-from scratchpad.extensions.shepherd import Route, Router
+from scratchpad.extensions.shepherd import Route, Router, create_route_from_knn_builder
 from scratchpad.utils.client import LLM, LLMEncoder
 
 encoder = LLMEncoder(
     model="meta-llama/Llama-3.2-1B-Instruct",
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost:8083/v1",
     api_key="test",
 )
 local_1b = LLM(
     model="meta-llama/Llama-3.2-1B-Instruct",
-    base_url="http://localhost:8080",
+    base_url="http://localhost:8080/v1",
     api_key="test",
 )
 remote_70b = LLM(
@@ -26,18 +26,11 @@ chitchat = Route(
     model_preferences=[local_1b, remote_70b],
 )
 
-complex_factual = Route(
-    name="complex_factual",
-    utterances=[
-        "Write a 500 word essay on the history of the internet",
-        "What is the capital of France?",
-        "Who is Alan Turing?",
-    ],
-    model_preferences=[remote_70b, local_1b],
-)
+routes = create_route_from_knn_builder(".local/shepherd/knn_builder.jsonl")
 
-router = Router(encoder, [chitchat, complex_factual])
+print(routes)
+router = Router(encoder, [chitchat] + routes)
 
-response = router("What's the invention of internet?")
+response = router("What's the invention of internet?", max_tokens=50)
 response = router("Who is Alan Turing?")
 response = router("Hi there!")

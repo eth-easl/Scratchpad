@@ -29,7 +29,7 @@ def main(args):
     results = []
     dataset = datasets.load_dataset(args.dataset, "all")
     choices = ["A", "B", "C", "D"]
-    for row in tqdm(dataset["dev"]):
+    for row in tqdm(dataset["test"]):
         subject = row["subject"]
         llm_answers = {}
         for llm in llms:
@@ -60,7 +60,7 @@ def main(args):
             }
         )
         print(results)
-    with open(f".local/shepherd/knn_builder.jsonl", "w") as f:
+    with open(f".local/shepherd/llm_responses.jsonl", "w") as f:
         for result in results:
             f.write(json.dumps(result) + "\n")
 
