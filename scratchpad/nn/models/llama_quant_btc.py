@@ -454,7 +454,7 @@ class LlamaQuantisedBTCForCausalLM(nn.Module):
         ]
         
         for name, loaded_weight in weights:
-            # print(name)q
+            # print(name)
             assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:

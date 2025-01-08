@@ -143,9 +143,6 @@ class TokenizerManager:
                 "This model does not appear to be an embedding model by default. "
                 "Please add `--is-embedding` when launching the server or try another model."
             )
-        print("HERE 1")
-        print(obj)
-        print(type(obj))
         obj.normalize_batch_and_arguments()
         is_single = obj.is_single
         if is_single:
