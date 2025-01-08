@@ -1,8 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Union
-from scratchpad.utils import Singleton
-from scratchpad.utils import logger
+from scratchpad.utils.logger import logger
 import tempfile
 
 

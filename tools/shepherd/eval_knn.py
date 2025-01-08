@@ -1,8 +1,10 @@
-from scratchpad.extensions.shepherd import Route, Router, create_route_from_knn_builder
+from scratchpad.extensions.shepherd import Route, Router
 from scratchpad.utils.client import LLM, LLMEncoder
 import datasets
 import json
 from tqdm import tqdm
+
+from tools.shepherd.utils import create_route_from_knn_builder
 
 dataset = datasets.load_dataset("cais/mmlu", "all")["test"]
 
@@ -17,6 +19,11 @@ router = Router(encoder, routes)
 
 choices = ["A", "B", "C", "D"]
 results = []
+subjects = set([row["subject"] for row in dataset])
+
+subject = subjects.pop()
+# dataset = [row for row in dataset if row["subject"] == subject]
+
 for row in tqdm(dataset):
     subject = row["subject"]
     router.set_system_prompt(
@@ -40,6 +47,6 @@ for row in tqdm(dataset):
             "output": response,
         }
     )
-    with open(f".local/shepherd/router_response.jsonl", "w") as f:
-        for result in results:
-            f.write(json.dumps(result) + "\n")
+# with open(".local/shepherd/router_response_2.jsonl", "w") as f:
+#     for res in results:
+#         f.write(json.dumps(res) + "\n")

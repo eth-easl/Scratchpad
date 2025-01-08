@@ -48,7 +48,6 @@ def get_physical_device_capability(device_id: int = 0) -> Tuple[int, int]:
 def get_gpu_utilization(device_id: int = 0) -> float:
     handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
     util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-    print(f"GPU utilization: {util.gpu}")
     return util.gpu
 
 
