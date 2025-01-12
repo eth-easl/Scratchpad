@@ -204,7 +204,7 @@ class EmbeddingReqInput:
     rid: Optional[Union[List[str], str]] = None
     # Dummy sampling params for compatibility
     sampling_params: Union[List[Dict], Dict] = None
-
+    input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
     is_single: bool = True
 
     def post_init(self):
@@ -239,6 +239,58 @@ class EmbeddingReqInput:
                 self.sampling_params = [{}] * self.batch_size
             for i in range(self.batch_size):
                 self.sampling_params[i]["max_new_tokens"] = 1
+
+    def normalize_batch_and_arguments(self):
+        if (self.text is None and self.input_ids is None) or (
+            self.text is not None and self.input_ids is not None
+        ):
+            raise ValueError("Either text or input_ids should be provided.")
+
+        # Derive the batch size
+        if self.text is not None:
+            if isinstance(self.text, str):
+                self.is_single = True
+                self.batch_size = 1
+            else:
+                self.is_single = False
+                self.batch_size = len(self.text)
+        else:
+            if isinstance(self.input_ids[0], int):
+                self.is_single = True
+                self.batch_size = 1
+            else:
+                self.is_single = False
+                self.batch_size = len(self.input_ids)
+
+        # Fill in default arguments
+        if self.is_single:
+            if self.rid is None:
+                self.rid = uuid.uuid4().hex
+            if self.sampling_params is None:
+                self.sampling_params = {}
+            self.sampling_params["max_new_tokens"] = 0
+        else:
+            if self.rid is None:
+                self.rid = [uuid.uuid4().hex for _ in range(self.batch_size)]
+            else:
+                assert isinstance(self.rid, list), "The rid should be a list."
+
+            if self.sampling_params is None:
+                self.sampling_params = [{}] * self.batch_size
+            for i in range(self.batch_size):
+                self.sampling_params[i]["max_new_tokens"] = 0
+
+    def regenerate_rid(self):
+        self.rid = uuid.uuid4().hex
+        return self.rid
+
+    def __getitem__(self, i):
+        return EmbeddingReqInput(
+            text=self.text[i] if self.text is not None else None,
+            input_ids=self.input_ids[i] if self.input_ids is not None else None,
+            sampling_params=self.sampling_params[i],
+            rid=self.rid[i],
+        )
 
 
 @dataclass

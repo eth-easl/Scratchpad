@@ -6,3 +6,4 @@ pyrightconfig.json
 .vscode
 .zed
 .data
+*.ipynb
