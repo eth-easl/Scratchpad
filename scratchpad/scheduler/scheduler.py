@@ -202,6 +202,7 @@ class Scheduler:
                 token_to_kv_pool=self.token_to_kv_pool,
                 disable=server_args.disable_radix_cache,
             )
+        print("self.tree_cache", self.tree_cache)
         self.tree_cache_metrics = {"total": 0, "hit": 0}
         self.policy = SchedulePolicy(self.schedule_policy, self.tree_cache)
 
@@ -326,13 +327,14 @@ class Scheduler:
                                 break
                             result = self.run_batch(batch)
                             self.process_batch_result(batch, result)
+                else:
+                    self.check_memory()
+                    self.new_token_ratio = self.init_new_token_ratio
+
             except Exception as e:
                 logger.error(f"Error in run_batch: {e}")
                 traceback.print_exc()
                 self.running_batch = None
-            else:
-                self.check_memory()
-                self.new_token_ratio = self.init_new_token_ratio
 
             self.last_batch = batch
 
@@ -540,7 +542,7 @@ class Scheduler:
             warnings.warn(
                 "Warning: "
                 f"available_size={available_size}, max_total_num_tokens={self.max_total_num_tokens}\n"
-                "KV cache pool leak detected!"
+                f"KV cache pool leak detected! pool size = {self.token_to_kv_pool.available_size()}, cache: {self.tree_cache.evictable_size()}"
             )
             exit(1) if crash_on_warning else None
 

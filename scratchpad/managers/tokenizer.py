@@ -496,7 +496,6 @@ class TokenizerManager:
         """The event loop that handles requests"""
 
         while True:
-            print(f"Waiting for object...")
             recv_obj: Union[
                 BatchStrOut, BatchEmbeddingOut, BatchTokenIDOut, UpdateWeightReqOutput
             ] = await self.recv_from_detokenizer.recv_pyobj()
@@ -567,7 +566,6 @@ class TokenizerManager:
                         "embedding": recv_obj.embeddings[i],
                         "meta_info": meta_info,
                     }
-                print(out_dict)
                 state.out_list.append(out_dict)
                 state.finished = recv_obj.finished_reasons[i] is not None
                 state.event.set()

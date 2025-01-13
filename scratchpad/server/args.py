@@ -107,7 +107,6 @@ class ServerArgs:
     disable_nan_detection: bool = False
     # Topping config
     enable_toppings: bool = False
-    lora_paths: Optional[str] = None
     max_toppings_per_batch: int = 4
     init_number_of_deltas: int = 1
     init_number_of_loras: int = 1
