@@ -305,7 +305,7 @@ class LlamaForCausalLM(nn.Module):
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)
         if not get_embedding:
             return self.logits_processor(
-                input_ids, hidden_states, self.lm_head.weight, input_metadata
+                input_ids, hidden_states, self.lm_head, input_metadata
             )
         else:
             return self.pooler(hidden_states, input_metadata)
