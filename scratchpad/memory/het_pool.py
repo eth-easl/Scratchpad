@@ -54,6 +54,28 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
             for _ in range(layer_num)
         ]
 
+    def _clear_buffers(self):
+        del self.k_buffer
+        del self.v_buffer
+
+    def get_flat_data(self, indices):
+        # prepare a large chunk of contiguous data for efficient transfer
+        flatten = torch.stack(
+            [
+                torch.stack([self.k_buffer[i][indices] for i in range(self.layer_num)]),
+                torch.stack([self.v_buffer[i][indices] for i in range(self.layer_num)]),
+            ]
+        )
+        return flatten
+
+    def transfer(self, indices, flat_data):
+        # transfer prepared data from host to device
+        flat_data = flat_data.to(device=self.device, non_blocking=False)
+        k_data, v_data = flat_data[0], flat_data[1]
+        for i in range(self.layer_num):
+            self.k_buffer[i][indices] = k_data[i]
+            self.v_buffer[i][indices] = v_data[i]
+
     def get_key_buffer(self, layer_id: int):
         if self.store_dtype != self.dtype:
             return self.k_buffer[layer_id].view(self.dtype)
@@ -73,12 +95,13 @@ class HeterogeneousMHATokenToKVPool(BaseTokenToKVPool):
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
+        k_scale: float = 1.0,
+        v_scale: float = 1.0,
     ):
         layer_id = layer.layer_id
         if cache_k.dtype != self.dtype:
-            cache_k = cache_k.to(self.dtype)
-        if cache_v.dtype != self.dtype:
-            cache_v = cache_v.to(self.dtype)
+            cache_k = (cache_k / k_scale).to(self.dtype)
+            cache_v = (cache_v / v_scale).to(self.dtype)
         if self.store_dtype != self.dtype:
             self.k_buffer[layer_id][loc] = cache_k.view(self.store_dtype)
             self.v_buffer[layer_id][loc] = cache_v.view(self.store_dtype)

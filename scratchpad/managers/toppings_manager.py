@@ -229,13 +229,13 @@ class ToppingsManager:
 
     def prepare_topping_batch(self, forward_batch: ForwardBatch):
         cur_uids = set(forward_batch.topping_paths)
-        print(f"Current toppings: {cur_uids}")
         if cur_uids == set([None]):
             print("No toppings in batch")
             return
         assert (
             len(cur_uids) <= self.max_toppings_per_batch
         ), f"Got {len(cur_uids)} toppings, but max is {self.max_toppings_per_batch}"
+
         i = 0
         j = len(self.active_uids)
         evictable_uids = list(self.active_uids)
@@ -260,6 +260,7 @@ class ToppingsManager:
         bs = forward_batch.batch_size
         indices_len = forward_batch.input_ids.size(0)
 
+        # TODO(xiaozhe): figure out why this assertion fails (bsz alarm)
         assert bs == len(
             forward_batch.topping_paths
         ), f"Expected batch size to match topping paths, got (bs={bs}) != ({len(forward_batch.topping_paths)})"
@@ -287,7 +288,7 @@ class ToppingsManager:
         # weight_indices should be sorted,
         assert torch.sort(weight_indices).values.equal(
             weight_indices
-        ), f"weight_indices should be sorted, got {weight_indices}"
+        ), f"weight_indices should be sorted, got {weight_indices}, toppings_id: {self.toppings_id}"
 
         remap_indices = {
             unique_indices[i].item(): i for i in range(len(unique_indices))
