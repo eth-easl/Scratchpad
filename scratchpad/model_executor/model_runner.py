@@ -33,6 +33,7 @@ from scratchpad.memory.het_pool import (
     HeterogeneousMHATokenToKVPool,
 )
 from scratchpad.model_executor.forward_info import ForwardBatch
+from scratchpad.model_executor.speculative.spec_info import SpeculativeAlgorithm
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.server.args import ServerArgs
 from scratchpad.utils import (
@@ -70,6 +71,7 @@ class ModelRunner:
         self.server_args = server_args
         self.is_generation = model_config.is_generation
         self.is_multimodal = model_config.is_multimodal
+        self.spec_algorithm = SpeculativeAlgorithm.NONE
         logger.info(f"model config: {model_config}")
         # Model-specific adjustment
         if (

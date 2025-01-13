@@ -265,7 +265,7 @@ class LlamaMoEForCausalLM(nn.Module):
     ) -> LogitsProcessorOutput:
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)
         return self.logits_processor(
-            input_ids, hidden_states, self.lm_head.weight, input_metadata
+            input_ids, hidden_states, self.lm_head, input_metadata
         )
 
     def get_hidden_dim(self, module_name):

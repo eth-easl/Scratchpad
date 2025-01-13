@@ -219,5 +219,5 @@ def launch_server(model_name, args: "ServerArgs"):
         port=args.port,
         timeout_keep_alive=5,
         loop="auto",
-        log_level="warning",
+        log_level="info",
     )

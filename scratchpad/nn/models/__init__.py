@@ -7,6 +7,7 @@ from scratchpad.utils import logger
 
 _GENERATION_MODELS = {
     "LlamaForCausalLM": ("llama", "LlamaForCausalLM"),
+    "Qwen2ForCausalLM": ("qwen2", "Qwen2ForCausalLM"),
     "LlamaNaiveQuantisedMoEForCausalLM": (
         "llama_naive_moe",
         "LlamaNaiveQuantisedMoEForCausalLM",
@@ -21,6 +22,7 @@ _EMBEDDING_MODELS = {
 
 _MULTIMODAL_MODELS = {
     "MllamaForConditionalGeneration": ("mllama", "MllamaForConditionalGeneration"),
+    "Qwen2VLForConditionalGeneration": ("qwen2", "Qwen2VLForConditionalGeneration"),
 }
 _CONDITIONAL_GENERATION_MODELS = {}
 

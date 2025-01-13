@@ -80,7 +80,7 @@ class ServerArgs:
     disable_flashinfer: bool = False
     disable_flashinfer_sampling: bool = False
     disable_radix_cache: bool = False
-    disable_regex_jump_forward: bool = False
+    disable_jump_forward: bool = False
     disable_cuda_graph: bool = False
     disable_cuda_graph_padding: bool = False
     disable_disk_cache: bool = False
@@ -88,6 +88,7 @@ class ServerArgs:
     disable_mla: bool = False
     enable_mixed_chunk: bool = False
     enable_torch_compile: bool = False
+    enable_dp_attention: bool = False
     max_torch_compile_bs: int = 32
     torchao_config: str = ""
     enable_p2p_check: bool = False
@@ -106,7 +107,6 @@ class ServerArgs:
     disable_nan_detection: bool = False
     # Topping config
     enable_toppings: bool = False
-    lora_paths: Optional[str] = None
     max_toppings_per_batch: int = 4
     init_number_of_deltas: int = 1
     init_number_of_loras: int = 1

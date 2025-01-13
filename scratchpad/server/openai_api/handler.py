@@ -347,7 +347,7 @@ async def process_batch(tokenizer_manager, batch_id: str, batch_request: BatchRe
         }
 
     except Exception as e:
-        logger.error("error in SGLang:", e)
+        logger.error("error in SP:", e)
         # Update batch status to "failed"
         retrieve_batch = batch_storage[batch_id]
         retrieve_batch.status = "failed"
@@ -422,7 +422,7 @@ async def cancel_batch(tokenizer_manager, batch_id: str, input_file_id: str):
         retrieve_batch.status = "cancelled"
 
     except Exception as e:
-        logger.error("error in SGLang:", e)
+        logger.error("error in SP:", e)
         # Update batch status to "failed"
         retrieve_batch = batch_storage[batch_id]
         retrieve_batch.status = "failed"

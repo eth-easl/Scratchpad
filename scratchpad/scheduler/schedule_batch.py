@@ -9,12 +9,16 @@ from scratchpad.memory.base_prefix_cache import BasePrefixCache
 from scratchpad.constrained.grammar import Grammar
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.pool import BaseTokenToKVPool, ReqToTokenPool
-from scratchpad.model_executor.forward_info import ForwardMode
+from scratchpad.model_executor.forward_info import ForwardMode, CaptureHiddenMode
 from scratchpad.server.args import global_args
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.sampling.sampling_params import SamplingParams
 from scratchpad.utils import envs, logger
 from scratchpad.config.model_config import ModelConfig
+from scratchpad.model_executor.speculative.spec_info import (
+    SpeculativeAlgorithm,
+    SpecInfo,
+)
 
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
 
@@ -398,12 +402,17 @@ class ScheduleBatch:
 
     # For utility
     model_config: ModelConfig = None
-
     forward_mode: ForwardMode = None
+    enable_overlap: bool = False
+
+    # Sampling Info
     sampling_info: SamplingBatchInfo = None
+    next_batch_sampling_info: SamplingBatchInfo = None
 
     # Batched arguments to model runner
     input_ids: torch.Tensor = None
+    input_embeds: torch.Tensor = None
+
     req_pool_indices: torch.Tensor = None
     seq_lens: torch.Tensor = None
     # The output locations of the KV cache
@@ -438,14 +447,20 @@ class ScheduleBatch:
     # device
     device: str = "cuda"
 
+    # Speculative decoding
+    spec_algorithm: SpeculativeAlgorithm = None
+    spec_info: Optional[SpecInfo] = None
+
     @classmethod
     def init_new(
         cls,
         reqs: List[Req],
-        req_to_token_pool,
-        token_to_kv_pool,
-        tree_cache,
-        model_config,
+        req_to_token_pool: ReqToTokenPool,
+        token_to_kv_pool: ReqToTokenPool,
+        tree_cache: BasePrefixCache,
+        model_config: ModelConfig,
+        enable_overlap: bool,
+        spec_algorithm: SpeculativeAlgorithm,
     ):
         return cls(
             reqs=reqs,
@@ -453,10 +468,12 @@ class ScheduleBatch:
             token_to_kv_pool=token_to_kv_pool,
             tree_cache=tree_cache,
             model_config=model_config,
+            enable_overlap=enable_overlap,
             return_logprob=any(req.return_logprob for req in reqs),
             has_stream=any(req.stream for req in reqs),
             has_grammar=any(req.grammar for req in reqs),
             device=req_to_token_pool.device,
+            spec_algorithm=spec_algorithm,
         )
 
     def batch_size(self):
@@ -670,8 +687,8 @@ class ScheduleBatch:
         self.extend_lens.extend([1] * running_bs)
         self.extend_logprob_start_lens.extend([0] * running_bs)
 
-    def check_decode_mem(self):
-        bs = len(self.reqs)
+    def check_decode_mem(self, buf_multiplier=1):
+        bs = len(self.reqs) * buf_multiplier
         if self.token_to_kv_pool.available_size() >= bs:
             return True
 
@@ -818,32 +835,14 @@ class ScheduleBatch:
         # Reset the encoder cached status
         self.encoder_cached = [True] * len(self.reqs)
 
-    def prepare_for_decode(
-        self,
-        enable_overlap: bool = False,
-        topping_manager: Optional["ToppingsManager"] = None,
-    ):
+    def prepare_for_decode(self):
         self.forward_mode = ForwardMode.DECODE
+        if self.spec_algorithm.is_eagle():
+            return
+
         self.input_ids = self.output_ids
         self.output_ids = None
-        if self.sampling_info.penalizer_orchestrator:
-            self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
-                self.input_ids
-            )
-        if topping_manager.enabled:
-            topping_ids = torch.tensor(
-                [topping_manager.toppings_id[req.topping_path] for req in self.reqs],
-                dtype=torch.long,
-                device=self.input_ids.device,
-            )
-            sorted_topping_ids, sorted_indices = torch.sort(topping_ids)
-
-            # reorder reqs
-            self.input_ids = self.input_ids[sorted_indices]
-            self.reqs = [self.reqs[i] for i in sorted_indices]
-
-            self.req_pool_indices = self.req_pool_indices[sorted_indices]
-            self.seq_lens = self.seq_lens[sorted_indices]
+        self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(self.input_ids)
 
         # Alloc mem
         bs = len(self.reqs)
@@ -855,7 +854,7 @@ class ScheduleBatch:
         else:
             locs = self.seq_lens
 
-        if enable_overlap:
+        if self.enable_overlap:
             # Do not use in-place operations in the overlap mode
             self.req_to_token_pool.write(
                 (self.req_pool_indices, locs), self.out_cache_loc
@@ -985,6 +984,14 @@ class ScheduleBatch:
             topping_paths=[req.topping_path for req in self.reqs],
             sampling_info=self.sampling_info,
             mrope_positions_delta=mrope_positions_delta,
+            input_embeds=self.input_embeds,
+            spec_algorithm=self.spec_algorithm,
+            spec_info=self.spec_info,
+            capture_hidden_mode=(
+                getattr(self.spec_info, "capture_hidden_mode", CaptureHiddenMode.NULL)
+                if self.spec_info
+                else CaptureHiddenMode.NULL
+            ),
         )
 
     def copy(self):
@@ -996,6 +1003,7 @@ class ScheduleBatch:
             out_cache_loc=self.out_cache_loc,
             return_logprob=self.return_logprob,
             decoding_reqs=self.decoding_reqs,
+            spec_algorithm=self.spec_algorithm,
         )
 
     def __str__(self):
@@ -1053,6 +1061,13 @@ class ModelWorkerBatch:
 
     # For Qwen2-VL
     mrope_positions_delta: List[List[int]]
+    # The input Embeds
+    input_embeds: Optional[torch.tensor] = None
+
+    # Speculative decoding
+    spec_algorithm: SpeculativeAlgorithm = None
+    spec_info: Optional[SpecInfo] = None
+    capture_hidden_mode: CaptureHiddenMode = None
 
     def copy(self):
         return replace(self, sampling_info=self.sampling_info.copy())
