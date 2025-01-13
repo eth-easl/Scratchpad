@@ -7,6 +7,7 @@ from scratchpad.utils import logger
 
 _GENERATION_MODELS = {
     "LlamaForCausalLM": ("llama", "LlamaForCausalLM"),
+    "Qwen2ForCausalLM": ("qwen2", "Qwen2ForCausalLM"),
     "LlamaNaiveQuantisedMoEForCausalLM": (
         "llama_naive_moe",
         "LlamaNaiveQuantisedMoEForCausalLM",

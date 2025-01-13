@@ -1,15 +1,13 @@
-from abc import abstractmethod
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any, Awaitable
 import dataclasses
 import asyncio
 import sys
+import time
 import signal
 import zmq
 import zmq.asyncio
 import os
-import json
 import copy
-import multiprocessing as mp
 import fastapi
 from fastapi import BackgroundTasks
 import uvloop
@@ -30,14 +28,17 @@ from .structs import (
     GetMemPoolSizeReq,
     GetMemPoolSizeReqOutput,
     ProfileReq,
+    SessionParams,
+    UpdateWeightFromDiskReqOutput,
 )
-import numpy as np
 from scratchpad.utils import (
     logger,
     get_tokenizer,
     get_processor,
     get_zmq_socket,
     kill_child_process,
+    dataclass_to_string_truncated,
+    RWLock,
 )
 from scratchpad.config.model_config import ModelConfig
 from .image_processor import get_dummy_image_processor, get_image_processor
@@ -52,6 +53,14 @@ class ReqState:
     out_list: List
     finished: bool
     event: asyncio.Event
+    obj: Any
+
+    # For metrics
+    created_time: float
+    first_token_time: Optional[float] = None
+
+    # For streaming output
+    last_output_offset: int = 0
 
 
 class TokenizerManager:
@@ -118,9 +127,11 @@ class TokenizerManager:
         self.to_create_loop = True
         self.rid_to_state: Dict[str, ReqState] = {}
 
-        # For update model weights
-        self.model_update_lock = asyncio.Lock()
-        self.model_update_result = None
+        self.model_update_lock = RWLock()
+        self.model_update_result: Optional[
+            Awaitable[UpdateWeightFromDiskReqOutput]
+        ] = None
+        self.asyncio_tasks = set()
 
         # Others
         self.gracefully_exit = False
@@ -130,11 +141,9 @@ class TokenizerManager:
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
     ):
-        if self.to_create_loop:
-            self.create_handle_loop()
+        created_time = time.time()
 
-        while self.model_update_lock.locked():
-            await asyncio.sleep(0.001)
+        self.auto_create_handle_loop()
 
         if isinstance(obj, EmbeddingReqInput) and self.is_generation:
             raise ValueError(
@@ -143,15 +152,22 @@ class TokenizerManager:
             )
 
         obj.normalize_batch_and_arguments()
-        is_single = obj.is_single
-        if is_single:
-            tokenized_obj = await self._tokenize_one_request(obj)
-            self.send_to_scheduler.send_pyobj(tokenized_obj)
-            async for response in self._wait_one_response(obj, request):
-                yield response
-        else:
-            async for response in self._handle_batch_request(obj, request):
-                yield response
+
+        if self.server_args.log_requests:
+            logger.info(f"Receive: obj={dataclass_to_string_truncated(obj)}")
+
+        async with self.model_update_lock.reader_lock:
+            is_single = obj.is_single
+            if is_single:
+                tokenized_obj = await self._tokenize_one_request(obj)
+                self._send_one_request(obj, tokenized_obj, created_time)
+                async for response in self._wait_one_response(obj, request):
+                    yield response
+            else:
+                async for response in self._handle_batch_request(
+                    obj, request, created_time
+                ):
+                    yield response
 
     async def _tokenize_one_request(
         self,
@@ -159,14 +175,25 @@ class TokenizerManager:
     ):
         """Tokenize one request."""
         # Tokenize
+        input_embeds = None
         input_text = obj.text
-        if obj.input_ids is None:
+        if obj.input_embeds is not None:
+            if not self.server_args.disable_radix_cache:
+                raise ValueError(
+                    "input_embeds is provided while disable_radix_cache is False. "
+                    "Please add `--disable-radix-cache` when you launch the server "
+                    "if you want to use input_embeds as inputs."
+                )
+            input_embeds = obj.input_embeds
+            input_ids = obj.input_ids
+        elif obj.input_ids is None:
             input_ids = self.tokenizer.encode(input_text)
         else:
             input_ids = obj.input_ids
 
         if self.is_generation:
-            image_inputs = await self.image_processor.process_images_async(
+            # TODO: also support getting embeddings for multimodal models
+            image_inputs: Dict = await self.image_processor.process_images_async(
                 obj.image_data, input_text or input_ids, obj
             )
             if image_inputs and "input_ids" in image_inputs:
@@ -174,8 +201,11 @@ class TokenizerManager:
             return_logprob = obj.return_logprob
             logprob_start_len = obj.logprob_start_len
             top_logprobs_num = obj.top_logprobs_num
+            session_params = (
+                SessionParams(**obj.session_params) if obj.session_params else None
+            )
 
-        if len(input_ids) >= self.context_len:
+        if obj.input_ids is not None and len(input_ids) >= self.context_len:
             raise ValueError(
                 f"The input ({len(input_ids)} tokens) is longer than the "
                 f"model's context length ({self.context_len} tokens)."
@@ -198,7 +228,9 @@ class TokenizerManager:
                 logprob_start_len,
                 top_logprobs_num,
                 obj.stream,
-                obj.topping_path,
+                topping_path=obj.topping_path,
+                input_embeds=input_embeds,
+                session_params=session_params,
             )
         elif isinstance(obj, EmbeddingReqInput):
             tokenized_obj = TokenizedEmbeddingReqInput(
@@ -210,15 +242,24 @@ class TokenizerManager:
 
         return tokenized_obj
 
+    def _send_one_request(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        tokenized_obj: Union[TokenizedGenerateReqInput, TokenizedEmbeddingReqInput],
+        created_time: Optional[float] = None,
+    ):
+        event = asyncio.Event()
+        state = ReqState([], False, event, obj, created_time=created_time)
+        self.rid_to_state[obj.rid] = state
+        self.send_to_scheduler.send_pyobj(tokenized_obj)
+
     async def _wait_one_response(
         self,
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
     ):
         """Wait for the response of one request."""
-        event = asyncio.Event()
-        state = ReqState([], False, event)
-        self.rid_to_state[obj.rid] = state
+        state = self.rid_to_state[obj.rid]
 
         while True:
             try:
@@ -229,32 +270,31 @@ class TokenizerManager:
                     raise ValueError(f"Abort request {obj.rid}")
                 continue
 
-            if isinstance(obj, GenerateReqInput):
-                out = self.convert_logprob_style(
-                    state.out_list[-1],
-                    obj.return_logprob,
-                    obj.top_logprobs_num,
-                    obj.return_text_in_logprobs,
-                )
-            else:  # isinstance(obj, (EmbeddingReqInput,))
-                out = state.out_list[-1]
+            out = state.out_list[-1]
 
             state.out_list = []
             if state.finished:
                 if self.server_args.log_requests:
-                    # Log requests
-                    logger.info(f"in={obj}, out={out}")
+                    msg = f"Finish: obj={dataclass_to_string_truncated(obj)}, out={dataclass_to_string_truncated(out)}"
+                    logger.info(msg)
                 del self.rid_to_state[obj.rid]
                 yield out
                 break
 
             state.event.clear()
-            yield out
+
+            if obj.stream:
+                yield out
+            else:
+                if request is not None and await request.is_disconnected():
+                    self.abort_request(obj.rid)
+                    raise ValueError(f"Abort request {obj.rid}")
 
     async def _handle_batch_request(
         self,
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
+        created_time: Optional[float] = None,
     ):
         batch_size = obj.batch_size
 
@@ -265,11 +305,18 @@ class TokenizerManager:
             for i in range(batch_size):
                 tmp_obj = obj[i]
                 tokenized_obj = await self._tokenize_one_request(tmp_obj)
-                self.send_to_scheduler.send_pyobj(tokenized_obj)
+                self._send_one_request(tmp_obj, tokenized_obj, created_time)
                 generators.append(self._wait_one_response(tmp_obj, request))
                 rids.append(tmp_obj.rid)
         else:
             # FIXME: When using batch and parallel_sample_num together, the perf is not optimal.
+            if batch_size > 128:
+                logger.warning(
+                    "Sending a single large batch with parallel sampling (n > 1) has not been well optimized. "
+                    "The performance might be better if you just duplicate the requests n times or use "
+                    "many threads to send them one by one with parallel sampling (n > 1)."
+                )
+
             # Tokenize all requests
             objs = [obj[i] for i in range(batch_size)]
             tokenized_objs = await asyncio.gather(
@@ -284,7 +331,7 @@ class TokenizerManager:
                 tokenized_obj.sampling_params = copy.copy(tokenized_obj.sampling_params)
                 tokenized_obj.sampling_params.max_new_tokens = 0
                 tokenized_obj.stream = False
-                self.send_to_scheduler.send_pyobj(tokenized_obj)
+                self._send_one_request(tmp_obj, tokenized_obj, created_time)
                 await self._wait_one_response(tmp_obj, request).__anext__()
 
             # Expand requests, assign new rids for them, and send them
@@ -293,7 +340,7 @@ class TokenizerManager:
                     tmp_obj = copy.copy(objs[i])
                     tokenized_obj = copy.copy(tokenized_objs[i])
                     tokenized_obj.rid = tmp_obj.regenerate_rid()
-                    self.send_to_scheduler.send_pyobj(tokenized_obj)
+                    self._send_one_request(tmp_obj, tokenized_obj, created_time)
                     generators.append(self._wait_one_response(tmp_obj, request))
                     rids.append(tmp_obj.rid)
 
@@ -415,17 +462,17 @@ class TokenizerManager:
         background_tasks.add_task(abort_request)
         return background_tasks
 
-    def create_handle_loop(self):
+    def auto_create_handle_loop(self):
         if not self.to_create_loop:
             return
 
         self.to_create_loop = False
         loop = asyncio.get_event_loop()
-        loop.create_task(self.handle_loop())
+        self.asyncio_tasks.add(loop.create_task(self.handle_loop()))
 
         signal_handler = SignalHandler(self)
         loop.add_signal_handler(signal.SIGTERM, signal_handler.signal_handler)
-        loop.create_task(self.sigterm_watchdog())
+        self.asyncio_tasks.add(loop.create_task(self.sigterm_watchdog()))
 
     async def sigterm_watchdog(self):
         while not self.gracefully_exit:
@@ -449,10 +496,10 @@ class TokenizerManager:
         """The event loop that handles requests"""
 
         while True:
+            print(f"Waiting for object...")
             recv_obj: Union[
                 BatchStrOut, BatchEmbeddingOut, BatchTokenIDOut, UpdateWeightReqOutput
             ] = await self.recv_from_detokenizer.recv_pyobj()
-
             if isinstance(recv_obj, UpdateWeightReqOutput):
                 if self.server_args.dp_size == 1:
                     self.model_update_result.set_result(recv_obj)
@@ -481,25 +528,48 @@ class TokenizerManager:
                 if state is None:
                     continue
 
-                recv_obj.meta_info[i]["id"] = rid
+                meta_info = {
+                    "id": rid,
+                    "finish_reason": recv_obj.finished_reasons[i],
+                    "prompt_tokens": recv_obj.prompt_tokens[i],
+                }
+
+                if getattr(state.obj, "return_logprob", False):
+                    self.convert_logprob_style(
+                        meta_info,
+                        state.obj.top_logprobs_num,
+                        state.obj.return_text_in_logprobs,
+                        recv_obj,
+                        i,
+                    )
+
+                if not isinstance(recv_obj, BatchEmbeddingOut):
+                    meta_info.update(
+                        {
+                            "completion_tokens": recv_obj.completion_tokens[i],
+                            "cached_tokens": recv_obj.cached_tokens[i],
+                        }
+                    )
+
                 if isinstance(recv_obj, BatchStrOut):
                     out_dict = {
                         "text": recv_obj.output_strs[i],
-                        "meta_info": recv_obj.meta_info[i],
+                        "meta_info": meta_info,
                     }
                 elif isinstance(recv_obj, BatchTokenIDOut):
                     out_dict = {
                         "token_ids": recv_obj.output_ids[i],
-                        "meta_info": recv_obj.meta_info[i],
+                        "meta_info": meta_info,
                     }
                 else:
                     assert isinstance(recv_obj, BatchEmbeddingOut)
                     out_dict = {
                         "embedding": recv_obj.embeddings[i],
-                        "meta_info": recv_obj.meta_info[i],
+                        "meta_info": meta_info,
                     }
+                print(out_dict)
                 state.out_list.append(out_dict)
-                state.finished = recv_obj.finished_reason[i] is not None
+                state.finished = recv_obj.finished_reasons[i] is not None
                 state.event.set()
 
     def convert_logprob_style(

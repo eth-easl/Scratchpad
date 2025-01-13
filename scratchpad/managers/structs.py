@@ -8,11 +8,21 @@ from enum import Enum
 
 
 @dataclass
+class SessionParams:
+    id: Optional[str] = None
+    rid: Optional[str] = None
+    offset: Optional[int] = None
+    replace: Optional[bool] = None
+
+
+@dataclass
 class GenerateReqInput:
     # The input prompt. It can be a single prompt or a batch of prompts.
     text: Optional[Union[List[str], str]] = None
-    # The token ids for text; one can either specify text or input_ids.
+    # The token ids for text; one can specify either text or input_ids
     input_ids: Optional[Union[List[List[int]], List[int]]] = None
+    # The embeddings for input_ids; one can specify either text or input_ids or input_embeds.
+    input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
     # The image input. It can be a file name, a url, or base64 encoded string.
     # See also python/sglang/srt/utils.py:load_image.
     image_data: Optional[Union[List[str], str]] = None
@@ -36,11 +46,20 @@ class GenerateReqInput:
     # Topping related
     topping_path: Optional[Union[List[Optional[str]], Optional[str]]] = None
 
+    # Session info for continual prompting
+    session_params: Optional[Union[List[Dict], Dict]] = None
+
     def normalize_batch_and_arguments(self):
-        if (self.text is None and self.input_ids is None) or (
-            self.text is not None and self.input_ids is not None
+        if (
+            self.text is None and self.input_ids is None and self.input_embeds is None
+        ) or (
+            self.text is not None
+            and self.input_ids is not None
+            and self.input_embeds is not None
         ):
-            raise ValueError("Either text or input_ids should be provided.")
+            raise ValueError(
+                "Either text, input_ids or input_embeds should be provided."
+            )
 
         # Derive the batch size
         if self.text is not None:
@@ -50,13 +69,21 @@ class GenerateReqInput:
             else:
                 self.is_single = False
                 self.batch_size = len(self.text)
-        else:
+            self.input_embeds = None
+        elif self.input_ids is not None:
             if isinstance(self.input_ids[0], int):
                 self.is_single = True
                 self.batch_size = 1
             else:
                 self.is_single = False
                 self.batch_size = len(self.input_ids)
+            self.input_embeds = None
+        else:
+            if isinstance(self.input_embeds[0][0], float):
+                self.is_single = True
+                self.batch_size = 1
+            else:
+                self.batch_size = len(self.input_embeds)
 
         # Handle parallel sampling
         # When parallel sampling is used, we always treat the input as a batch.
@@ -192,6 +219,11 @@ class TokenizedGenerateReqInput:
 
     # LoRA related
     topping_path: Optional[str] = None  # None means just use the base model
+    # The input embeds
+    input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
+
+    # Session info for continual prompting
+    session_params: Optional[SessionParams] = None
 
 
 @dataclass
@@ -309,30 +341,63 @@ class TokenizedEmbeddingReqInput:
 class BatchTokenIDOut:
     # The request id
     rids: List[str]
+    # The finish reason
+    finished_reasons: List[BaseFinishReason]
+    # For incremental decoding
     # The version id to sync decode status with in detokenizer_manager
     vids: List[int]
     decoded_texts: List[str]
     decode_ids: List[int]
     read_offsets: List[int]
-    # Only used when `--skip-tokenizer-init`
+    # Only used when `--skip-tokenizer-init` is on
     output_ids: Optional[List[int]]
+    # Detokenization configs
     skip_special_tokens: List[bool]
     spaces_between_special_tokens: List[bool]
-    meta_info: List[Dict]
-    finished_reason: List[BaseFinishReason]
     no_stop_trim: List[bool]
+    # Token counts
+    prompt_tokens: List[int]
+    completion_tokens: List[int]
+    cached_tokens: List[int]
+    # Logprobs
+    input_token_logprobs_val: List[float]
+    input_token_logprobs_idx: List[int]
+    output_token_logprobs_val: List[float]
+    output_token_logprobs_idx: List[int]
+    input_top_logprobs_val: List[List]
+    input_top_logprobs_idx: List[List]
+    output_top_logprobs_val: List[List]
+    output_top_logprobs_idx: List[List]
+    normalized_prompt_logprob: List[float]
 
 
 @dataclass
 class BatchStrOut:
     # The request id
     rids: List[str]
+    # The finish reason
+    finished_reasons: List[dict]
     # The output decoded strings
     output_strs: List[str]
-    # The meta info
-    meta_info: List[Dict]
-    # The finish reason
-    finished_reason: List[BaseFinishReason]
+
+    # Token counts
+    # real input and output tokens can be get from
+    # origin_input_ids and output_ids by enabling --return_token_ids
+    # TODO (Shuai): Rename this to clarify the meaning.
+    prompt_tokens: List[int]
+    completion_tokens: List[int]
+    cached_tokens: List[int]
+
+    # Logprobs
+    input_token_logprobs_val: List[float]
+    input_token_logprobs_idx: List[int]
+    output_token_logprobs_val: List[float]
+    output_token_logprobs_idx: List[int]
+    input_top_logprobs_val: List[List]
+    input_top_logprobs_idx: List[List]
+    output_top_logprobs_val: List[List]
+    output_top_logprobs_idx: List[List]
+    normalized_prompt_logprob: List[float]
 
 
 @dataclass
@@ -444,3 +509,9 @@ class RegisterToppingsReqInput:
             raise ValueError(f"The type should be either 'delta', 'lora' or 'full'")
         if not self.served_name:
             self.served_name = self.model_path_or_name
+
+
+@dataclass
+class UpdateWeightFromDiskReqOutput:
+    success: bool
+    message: str
