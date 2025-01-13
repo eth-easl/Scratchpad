@@ -385,6 +385,7 @@ def generate_chat_conv(
         modalities=[],
         image_token=conv.image_token,
     )
+
     if isinstance(request.messages, str):
         raise ValueError("The messages should be a list of dict.")
     for message in request.messages:
@@ -538,5 +539,18 @@ register_conv_template(
         sep="",
         stop_str=["<|end_of_text|>", "<|eot_id|>"],
         image_token="<|image|>",
+    )
+)
+
+register_conv_template(
+    Conversation(
+        name="qwen2-vl",
+        system_message="You are a helpful assistant.",
+        system_template="<|im_start|>system\n{system_message}",
+        roles=("<|im_start|>user", "<|im_start|>assistant"),
+        sep="<|im_end|>\n",
+        sep_style=SeparatorStyle.ADD_NEW_LINE_SINGLE,
+        stop_str=["<|im_end|>"],
+        image_token="<|vision_start|><|image_pad|><|vision_end|>",
     )
 )

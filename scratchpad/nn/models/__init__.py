@@ -22,6 +22,7 @@ _EMBEDDING_MODELS = {
 
 _MULTIMODAL_MODELS = {
     "MllamaForConditionalGeneration": ("mllama", "MllamaForConditionalGeneration"),
+    "Qwen2VLForConditionalGeneration": ("qwen2", "Qwen2VLForConditionalGeneration"),
 }
 _CONDITIONAL_GENERATION_MODELS = {}
 

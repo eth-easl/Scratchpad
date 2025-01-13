@@ -1,7 +1,7 @@
 import torch
 from transformers import PretrainedConfig
 from scratchpad.utils import logger, envs
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Any
 
 _STR_DTYPE_TO_TORCH_DTYPE = {
     "half": torch.float16,
@@ -69,8 +69,9 @@ def _get_and_verify_max_len(
     hf_config: PretrainedConfig,
     max_model_len: Optional[int],
     disable_sliding_window: bool,
-    sliding_window_len: Optional[int],
+    sliding_window_len: Optional[Union[int, List[Optional[int]]]],
     spec_target_max_model_len: Optional[int] = None,
+    encoder_config: Optional[Any] = None,
 ) -> int:
     """Get and verify the model's maximum length."""
     derived_max_model_len = float("inf")
@@ -85,6 +86,8 @@ def _get_and_verify_max_len(
         "seq_length",
         # Command-R
         "model_max_length",
+        # Whisper
+        "max_target_positions",
         # Others
         "max_sequence_length",
         "max_seq_length",
@@ -101,12 +104,14 @@ def _get_and_verify_max_len(
     # If sliding window is manually disabled, max_length should be less
     # than the sliding window length in the model config.
     if disable_sliding_window and sliding_window_len is not None:
+
+        sliding_window_len_min = get_min_sliding_window(sliding_window_len)
         max_len_key = (
             "sliding_window"
-            if sliding_window_len < derived_max_model_len
+            if sliding_window_len_min < derived_max_model_len
             else max_len_key
         )
-        derived_max_model_len = min(derived_max_model_len, sliding_window_len)
+        derived_max_model_len = min(derived_max_model_len, sliding_window_len_min)
 
     # If none of the keys were found in the config, use a default and
     # log a warning.
@@ -132,15 +137,10 @@ def _get_and_verify_max_len(
 
     rope_scaling = getattr(hf_config, "rope_scaling", None)
     if rope_scaling is not None:
-        if "type" in rope_scaling:
-            rope_type = rope_scaling["type"]
-        elif "rope_type" in rope_scaling:
-            rope_type = rope_scaling["rope_type"]
-        else:
-            raise ValueError("rope_scaling must have a 'type' or 'rope_type' key.")
+        # No need to consider "type" key because of patch_rope_scaling when
+        # loading HF config
+        rope_type = rope_scaling["rope_type"]
 
-        # The correct one should be "longrope", kept "su" here
-        # to be backward compatible
         if rope_type not in ("su", "longrope", "llama3"):
             if disable_sliding_window:
                 # TODO(robertgshaw): Find a model that supports rope_scaling
@@ -151,14 +151,15 @@ def _get_and_verify_max_len(
                     "investigate."
                 )
 
-            if rope_type == "mrope":
-                scaling_factor = 1
-            else:
-                assert "factor" in rope_scaling
-                scaling_factor = rope_scaling["factor"]
+            # NOTE: rope_type == "default" does not define factor
+            # https://github.com/huggingface/transformers/blob/v4.45.2/src/transformers/modeling_rope_utils.py
+            scaling_factor = rope_scaling.get("factor", 1.0)
             if rope_type == "yarn":
                 derived_max_model_len = rope_scaling["original_max_position_embeddings"]
             derived_max_model_len *= scaling_factor
+
+    if encoder_config and "max_seq_length" in encoder_config:
+        derived_max_model_len = encoder_config["max_seq_length"]
 
     # If the user specified a max length, make sure it is smaller than the
     # derived length from the HF model config.
@@ -186,7 +187,7 @@ def _get_and_verify_max_len(
                 f"{model_max_length} in model's config.json). This may lead "
                 "to incorrect model outputs or CUDA errors."
             )
-            if envs.SP_ALLOW_LONG_MAX_MODEL_LEN:
+            if envs.VLLM_ALLOW_LONG_MAX_MODEL_LEN:
                 logger.warning(
                     "%s Make sure the value is correct and within the "
                     "model context size.",
@@ -195,7 +196,7 @@ def _get_and_verify_max_len(
             else:
                 raise ValueError(
                     f"{msg} To allow overriding this maximum, set "
-                    "the env var VLLM_ALLOW_LONG_MAX_MODEL_LEN=1"
+                    "the env var SP_ALLOW_LONG_MAX_MODEL_LEN=1"
                 )
     return int(max_model_len)
 

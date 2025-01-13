@@ -799,6 +799,7 @@ class MRotaryEmbedding(RotaryEmbedding):
         vision_end_token_id: int,
         spatial_merge_size: int,
         context_len: int = 0,
+        seq_len: Optional[int] = None,
     ) -> Tuple[List[List[int]], int]:
         """Get mrope input positions and delta value."""
 
@@ -890,8 +891,8 @@ class MRotaryEmbedding(RotaryEmbedding):
             )
 
         llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
-        llm_positions = llm_positions[:, context_len:]
         mrope_position_delta = (llm_positions.max() + 1 - len(input_tokens)).item()
+        llm_positions = llm_positions[:, context_len:seq_len]
 
         return llm_positions.tolist(), mrope_position_delta
 
@@ -953,16 +954,10 @@ def get_rope(
             head_size, rotary_dim, max_position, base, is_neox_style, dtype
         )
     else:
-        scaling_type = (
-            rope_scaling["type"]
-            if "type" in rope_scaling
-            else rope_scaling["rope_type"]
-        )
-        # The correct one should be "longrope" but keep "su" here
-        # for backward compatible
-        if scaling_type not in {"su", "longrope"}:
-            scaling_factor = rope_scaling.get("factor", 1.0)
+        scaling_type = rope_scaling["rope_type"]
+
         if scaling_type == "llama3":
+            scaling_factor = rope_scaling["factor"]
             low_freq_factor = rope_scaling["low_freq_factor"]
             high_freq_factor = rope_scaling["high_freq_factor"]
             original_max_position = rope_scaling["original_max_position_embeddings"]
@@ -978,7 +973,28 @@ def get_rope(
                 high_freq_factor,
                 original_max_position,
             )
+        elif scaling_type == "default":
+            if "mrope_section" in rope_scaling:
+                rotary_emb = MRotaryEmbedding(
+                    head_size,
+                    rotary_dim,
+                    max_position,
+                    base,
+                    is_neox_style,
+                    dtype,
+                    mrope_section=rope_scaling["mrope_section"],
+                )
+            else:
+                rotary_emb = RotaryEmbedding(
+                    head_size,
+                    rotary_dim,
+                    max_position,
+                    base,
+                    is_neox_style,
+                    dtype,
+                )
         elif scaling_type == "linear":
+            scaling_factor = rope_scaling["factor"]
             rotary_emb = LinearScalingRotaryEmbedding(
                 head_size,
                 rotary_dim,
@@ -989,6 +1005,7 @@ def get_rope(
                 dtype,
             )
         elif scaling_type == "dynamic":
+            scaling_factor = rope_scaling["factor"]
             rotary_emb = DynamicNTKScalingRotaryEmbedding(
                 head_size,
                 rotary_dim,
@@ -999,6 +1016,7 @@ def get_rope(
                 dtype,
             )
         elif scaling_type == "yarn":
+            scaling_factor = rope_scaling["factor"]
             original_max_position = rope_scaling["original_max_position_embeddings"]
             extra_kwargs = {
                 k: v
@@ -1017,6 +1035,7 @@ def get_rope(
                 **extra_kwargs,
             )
         elif scaling_type == "deepseek_yarn":
+            scaling_factor = rope_scaling["factor"]
             original_max_position = rope_scaling["original_max_position_embeddings"]
             # assert max_position == original_max_position * scaling_factor
             extra_kwargs = {
@@ -1042,9 +1061,7 @@ def get_rope(
                 dtype,
                 **extra_kwargs,
             )
-        # The correct one should be "longrope" but keep "su" here
-        # for backward compatible
-        elif scaling_type == "su" or scaling_type == "longrope":
+        elif scaling_type == "longrope":
             short_factor = rope_scaling["short_factor"]
             long_factor = rope_scaling["long_factor"]
             original_max_position = rope_scaling["original_max_position_embeddings"]
@@ -1064,16 +1081,6 @@ def get_rope(
                 short_factor,
                 long_factor,
                 **extra_kwargs,
-            )
-        elif scaling_type == "mrope":
-            rotary_emb = MRotaryEmbedding(
-                head_size,
-                rotary_dim,
-                max_position,
-                base,
-                is_neox_style,
-                dtype,
-                mrope_section=rope_scaling["mrope_section"],
             )
         else:
             raise ValueError(f"Unknown RoPE scaling type {scaling_type}")

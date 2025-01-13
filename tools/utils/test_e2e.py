@@ -13,7 +13,7 @@ json_schema = json.dumps(
         "required": ["name", "population"],
     }
 )
-prompt = "What is in this image? Return a JSON object"
+prompt = "What is in this image?"
 img_url = "https://skyhookcontentful.imgix.net/1hN1i44NxZiF7pxEPWVbvz/6aa0bef25c189b37cfcaa26b677415c1/pixabay-violetta-mattehorn-mountain-switzerland.jpg?auto=compress%2Cformat%2Cenhance%2Credeye&crop=faces%2Ccenter&fit=crop&ar=1%3A1&w=576px&ixlib=react-9.7.0"
 
 stream = True

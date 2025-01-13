@@ -202,7 +202,6 @@ class Scheduler:
                 token_to_kv_pool=self.token_to_kv_pool,
                 disable=server_args.disable_radix_cache,
             )
-        print("self.tree_cache", self.tree_cache)
         self.tree_cache_metrics = {"total": 0, "hit": 0}
         self.policy = SchedulePolicy(self.schedule_policy, self.tree_cache)
 
