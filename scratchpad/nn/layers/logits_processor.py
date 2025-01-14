@@ -108,28 +108,6 @@ class LogitsProcessor(nn.Module):
         ):
             self.final_logit_softcapping = None
 
-    def _get_logits(
-        self,
-        input_ids,
-        hidden_states,
-        weight,
-        logits_metadata: Union[LogitsMetadata, ForwardBatch],
-    ):
-        if isinstance(logits_metadata, ForwardBatch):
-            logits_metadata = LogitsMetadata.from_forward_batch(logits_metadata)
-        assert isinstance(logits_metadata, LogitsMetadata)
-
-        # Get the last hidden states and last logits for the next token prediction
-        if logits_metadata.forward_mode.is_decode():
-            last_index = None
-            last_hidden = hidden_states
-        else:
-            last_index = torch.cumsum(logits_metadata.extend_seq_lens, dim=0) - 1
-            last_hidden = hidden_states[last_index]
-
-        last_logits = torch.matmul(last_hidden, weight.T)
-        return last_logits
-
     def forward(
         self,
         input_ids,
@@ -153,9 +131,7 @@ class LogitsProcessor(nn.Module):
 
         # Compute logits
         if last_logits is None:
-            last_logits = self._get_logits(
-                input_ids, hidden_states, lm_head.weight, logits_metadata
-            )
+            last_logits = self._get_logits(last_hidden, lm_head)
         if (
             not logits_metadata.extend_return_logprob
             or logits_metadata.capture_hidden_mode.need_capture()
