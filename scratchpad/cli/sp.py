@@ -1,6 +1,5 @@
 import typer
 from scratchpad.server import dataclass_to_cli, ServerArgs, launch_server
-from scratchpad.server.args import global_args
 from .handlers import ChatHandler, benchmark_quality
 
 app = typer.Typer()
@@ -13,6 +12,10 @@ def serve(
     args: ServerArgs,
 ):
     """Spin up the server"""
+    from scratchpad.server.args import global_args
+    import multiprocessing as mp
+
+    mp.set_start_method("spawn", force=True)
     typer.echo(f"Serving model: {model}, args: {args}")
     global_args = args
     launch_server(model, args)

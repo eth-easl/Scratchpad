@@ -1,6 +1,6 @@
 import asyncio
 import dataclasses
-from typing import List
+from typing import List, Dict, Union
 
 import uvloop
 import zmq
@@ -63,6 +63,29 @@ class DetokenizerManager:
             )
 
         self.decode_status = LimitedCapacityDict()
+
+    def trim_matched_stop(
+        self, output: Union[str, List[int]], finished_reason: Dict, no_stop_trim: bool
+    ):
+        if no_stop_trim or not finished_reason:
+            return output
+
+        matched = finished_reason.get("matched", None)
+        if not matched:
+            return output
+
+        # TODO(lmzheng): handle the case where multiple stop strs are hit
+
+        # Trim stop str.
+        if isinstance(matched, str) and isinstance(output, str):
+            pos = output.find(matched)
+            return output[:pos] if pos != -1 else output
+
+        # Trim stop token.
+        if isinstance(matched, int) and isinstance(output, list):
+            assert len(output) > 0
+            return output[:-1]
+        return output
 
     def event_loop(self):
         """The event loop that handles requests"""
@@ -131,7 +154,7 @@ class DetokenizerManager:
             for i in range(bs):
                 s = self.decode_status[recv_obj.rids[i]]
                 new_text = read_texts[i][len(surr_texts[i]) :]
-                if recv_obj.finished_reason[i] is None:
+                if recv_obj.finished_reasons[i] is None:
                     # Streaming chunk: update the decode status
                     if len(new_text) > 0 and not new_text.endswith("�"):
                         s.decoded_text = s.decoded_text + new_text
@@ -141,20 +164,30 @@ class DetokenizerManager:
                     else:
                         new_text = find_printable_text(new_text)
 
-                output_strs.append(s.decoded_text + new_text)
-
-                # Trim stop str. TODO(lmzheng): handle the case where multiple stop strs are hit
-                if isinstance(recv_obj.finished_reason[i], FINISH_MATCHED_STR):
-                    pos = output_strs[i].find(recv_obj.finished_reason[i].matched)
-                    if pos != -1:
-                        output_strs[i] = output_strs[i][:pos]
-
+                output_strs.append(
+                    self.trim_matched_stop(
+                        s.decoded_text + new_text,
+                        recv_obj.finished_reasons[i],
+                        recv_obj.no_stop_trim[i],
+                    )
+                )
             self.send_to_tokenizer.send_pyobj(
                 BatchStrOut(
                     rids=recv_obj.rids,
+                    finished_reasons=recv_obj.finished_reasons,
                     output_strs=output_strs,
-                    meta_info=recv_obj.meta_info,
-                    finished_reason=recv_obj.finished_reason,
+                    prompt_tokens=recv_obj.prompt_tokens,
+                    completion_tokens=recv_obj.completion_tokens,
+                    cached_tokens=recv_obj.cached_tokens,
+                    input_token_logprobs_val=recv_obj.input_token_logprobs_val,
+                    input_token_logprobs_idx=recv_obj.input_token_logprobs_idx,
+                    output_token_logprobs_val=recv_obj.output_token_logprobs_val,
+                    output_token_logprobs_idx=recv_obj.output_token_logprobs_idx,
+                    input_top_logprobs_val=recv_obj.input_top_logprobs_val,
+                    input_top_logprobs_idx=recv_obj.input_top_logprobs_idx,
+                    output_top_logprobs_val=recv_obj.output_top_logprobs_val,
+                    output_top_logprobs_idx=recv_obj.output_top_logprobs_idx,
+                    normalized_prompt_logprob=recv_obj.normalized_prompt_logprob,
                 )
             )
 

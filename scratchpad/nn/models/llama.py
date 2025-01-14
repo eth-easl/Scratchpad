@@ -20,6 +20,7 @@ from scratchpad.nn.layers.linear import (
     RowParallelLinear,
 )
 from scratchpad.nn.layers.logits_processor import LogitsProcessor, LogitsProcessorOutput
+from scratchpad.nn.layers.pooler import Pooler, PoolingType
 from scratchpad.nn.quantization.base_config import QuantizationConfig
 from scratchpad.nn.attention.radix_attention import RadixAttention
 from scratchpad.nn.utils import apply_torchao_config_
@@ -283,8 +284,14 @@ class LlamaForCausalLM(nn.Module):
         self.quant_config = quant_config
         self.torchao_config = global_args.torchao_config
         self.model = LlamaModel(config, quant_config=quant_config)
-        self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
+        if self.config.tie_word_embeddings:
+            self.lm_head = self.model.embed_tokens
+        else:
+            self.lm_head = ParallelLMHead(
+                config.vocab_size, config.hidden_size, quant_config=quant_config
+            )
         self.logits_processor = LogitsProcessor(config)
+        self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
 
     @torch.no_grad()
     def forward(
@@ -293,25 +300,35 @@ class LlamaForCausalLM(nn.Module):
         positions: torch.Tensor,
         input_metadata: ForwardBatch,
         input_embeds: torch.Tensor = None,
+        get_embedding: bool = False,
     ) -> LogitsProcessorOutput:
         hidden_states = self.model(input_ids, positions, input_metadata, input_embeds)
-        return self.logits_processor(
-            input_ids, hidden_states, self.lm_head.weight, input_metadata
-        )
+        if not get_embedding:
+            return self.logits_processor(
+                input_ids, hidden_states, self.lm_head, input_metadata
+            )
+        else:
+            return self.pooler(hidden_states, input_metadata)
 
     def get_hidden_dim(self, module_name):
         if module_name in ["q_proj", "o_proj", "qkv_proj"]:
             return self.config.hidden_size, self.config.hidden_size
-        elif module_name in ["kv_proj"]:
+        elif module_name in ["kv_proj", "k_proj", "v_proj"]:
             return self.config.hidden_size, self.config.hidden_size // (
                 self.config.num_attention_heads // self.config.num_key_value_heads
             )
-        elif module_name == "gate_up_proj":
+        elif module_name in ["gate_up_proj", "up_proj", "gate_proj"]:
             return self.config.hidden_size, self.config.intermediate_size
         elif module_name == "down_proj":
             return self.config.intermediate_size, self.config.hidden_size
+        elif module_name == "lm_head":
+            return self.config.vocab_size, self.config.hidden_size
+        elif module_name == "embed_tokens":
+            return self.config.vocab_size, self.config.hidden_size
         else:
-            raise NotImplementedError()
+            raise NotImplementedError(
+                f"get_hidden_dim for {module_name} is not implemented"
+            )
 
     def get_module_name(self, name):
         params_mapping = {
@@ -380,19 +397,23 @@ class LlamaForCausalLM(nn.Module):
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                # Skip loading kv_scale from ckpts towards new design.
+                if name.endswith(".kv_scale") and name not in params_dict:
+                    continue
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
 
-        if (
-            hasattr(self.config, "tie_word_embeddings")
-            and self.config.tie_word_embeddings
-        ):
-            # Tie output embedding layer to input embedding layer, to solve issues where lm_head.weight is missing
-            param = self.lm_head.weight
-            weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            weight_loader(param, self.model.embed_tokens.weight)
-        apply_torchao_config_(self, params_dict, set(["proj.weight"]))
+    def get_embed_and_head(self):
+        return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def set_embed_and_head(self, embed, head):
+        del self.model.embed_tokens.weight
+        del self.lm_head.weight
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 
 class Phi3ForCausalLM(LlamaForCausalLM):

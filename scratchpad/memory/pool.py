@@ -80,7 +80,7 @@ class BaseTokenToKVPool:
     ):
         self.size = size
         self.dtype = dtype
-        if dtype == torch.float8_e5m2:
+        if dtype == torch.float8_e5m2 or dtype == torch.float8_e4m3fn:
             # NOTE: Store as torch.uint8 because Tensor index_put is not implemented for torch.float8_e5m2
             self.store_dtype = torch.uint8
         else:
@@ -155,25 +155,52 @@ class MHATokenToKVPool(BaseTokenToKVPool):
         device: str,
     ):
         super().__init__(size, dtype, device)
+        self.head_num = head_num
+        self.head_dim = head_dim
+        self.layer_num = layer_num
+        self._create_buffers()
 
+    def _create_buffers(self):
         # [size, head_num, head_dim] for each layer
         # The padded slot 0 is used for writing dummy outputs from padded tokens.
         self.k_buffer = [
             torch.empty(
-                (size + 1, head_num, head_dim),
+                (self.size + 1, self.head_num, self.head_dim),
                 dtype=self.store_dtype,
-                device=device,
+                device=self.device,
             )
-            for _ in range(layer_num)
+            for _ in range(self.layer_num)
         ]
         self.v_buffer = [
             torch.empty(
-                (size + 1, head_num, head_dim),
+                (self.size + 1, self.head_num, self.head_dim),
                 dtype=self.store_dtype,
-                device=device,
+                device=self.device,
             )
-            for _ in range(layer_num)
+            for _ in range(self.layer_num)
         ]
+
+    def _clear_buffers(self):
+        del self.k_buffer
+        del self.v_buffer
+
+    def get_flat_data(self, indices):
+        # prepare a large chunk of contiguous data for efficient transfer
+        flatten = torch.stack(
+            [
+                torch.stack([self.k_buffer[i][indices] for i in range(self.layer_num)]),
+                torch.stack([self.v_buffer[i][indices] for i in range(self.layer_num)]),
+            ]
+        )
+        return flatten
+
+    def transfer(self, indices, flat_data):
+        # transfer prepared data from host to device
+        flat_data = flat_data.to(device=self.device, non_blocking=False)
+        k_data, v_data = flat_data[0], flat_data[1]
+        for i in range(self.layer_num):
+            self.k_buffer[i][indices] = k_data[i]
+            self.v_buffer[i][indices] = v_data[i]
 
     def get_key_buffer(self, layer_id: int):
         if self.store_dtype != self.dtype:
@@ -194,11 +221,13 @@ class MHATokenToKVPool(BaseTokenToKVPool):
         loc: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
+        k_scale: float = 1.0,
+        v_scale: float = 1.0,
     ):
         layer_id = layer.layer_id
         if cache_k.dtype != self.dtype:
-            cache_k = cache_k.to(self.dtype)
-            cache_v = cache_v.to(self.dtype)
+            cache_k = (cache_k / k_scale).to(self.dtype)
+            cache_v = (cache_v / v_scale).to(self.dtype)
         if self.store_dtype != self.dtype:
             self.k_buffer[layer_id][loc] = cache_k.view(self.store_dtype)
             self.v_buffer[layer_id][loc] = cache_v.view(self.store_dtype)

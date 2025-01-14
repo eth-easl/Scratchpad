@@ -3,9 +3,12 @@ from dataclasses import dataclass
 import torch
 import numpy as np
 from typing import List, TYPE_CHECKING, Optional
-
+import triton
+import triton.language as tl
 from scratchpad.memory.pool import ReqToTokenPool, BaseTokenToKVPool
 from scratchpad.nn.layers.rotary_embedding import MRotaryEmbedding
+from scratchpad.utils import maybe_torch_compile
+from .speculative.spec_info import SpecInfo, SpeculativeAlgorithm
 
 if TYPE_CHECKING:
     from scratchpad.nn.attention.backend import AttentionBackend
@@ -16,13 +19,22 @@ if TYPE_CHECKING:
 
 @dataclass
 class ForwardMode(IntEnum):
-    # Extend a sequence. The KV cache of the first part of the sequence is already computed (e.g., system prompt).
-
+    # Extend a sequence. The KV cache of the beginning part of the sequence is already computed (e.g., system prompt).
     EXTEND = auto()
     # Decode one token.
     DECODE = auto()
-    # Contains both PREFILL and EXTEND.
+    # Contains both EXTEND and DECODE when doing chunked prefill.
     MIXED = auto()
+    # No sequence to forward. For data parallel attention, some workers wil be IDLE if no sequence are allocated.
+    IDLE = auto()
+
+    # Used in speculative decoding: verify a batch in the target model.
+    TARGET_VERIFY = auto()
+    # Used in speculative decoding: extend a batch in the draft model.
+    DRAFT_EXTEND = auto()
+
+    # A dummy first batch to start the pipeline for overlap scheduler.
+    # It is now used for triggering the sampling_info_done event for the first prefill batch.
 
     def is_extend(self):
         # print(f"self {self}, {ForwardMode.EXTEND}")
@@ -35,6 +47,39 @@ class ForwardMode(IntEnum):
 
     def is_mixed(self):
         return self == 3
+
+    def is_idle(self):
+        return self == 4
+
+    def is_target_verify(self):
+        return self == 5
+
+    def is_draft_extend(self):
+        return self == 6
+
+    def is_cuda_graph(self):
+        return self.is_decode() or self.is_target_verify() or self.is_idle()
+
+    def is_dummy_first(self):
+        return False
+
+    def is_decode_or_idle(self):
+        return self.is_decode() or self.is_idle()
+
+
+class CaptureHiddenMode(IntEnum):
+    NULL = auto()
+    FULL = auto()
+    LAST = auto()
+
+    def need_capture(self):
+        return self != CaptureHiddenMode.NULL
+
+    def is_full(self):
+        return self == CaptureHiddenMode.FULL
+
+    def is_last(self):
+        return self == CaptureHiddenMode.LAST
 
 
 @dataclass
@@ -81,8 +126,11 @@ class ForwardBatch:
     encoder_lens_cpu: Optional[List[int]] = None
     encoder_out_cache_loc: Optional[torch.Tensor] = None
 
-    # For LoRA
-    lora_paths: Optional[List[str]] = None
+    # For Toppings
+    topping_paths: Optional[List[str]] = None
+
+    # For input embeddings
+    input_embeds: Optional[torch.tensor] = None
 
     # Sampling info
     sampling_info: "SamplingBatchInfo" = None
@@ -91,6 +139,16 @@ class ForwardBatch:
     req_to_token_pool: ReqToTokenPool = None
     token_to_kv_pool: BaseTokenToKVPool = None
     attn_backend: "AttentionBackend" = None
+
+    # For DP attention
+    global_num_tokens: Optional[List[int]] = None
+    gathered_buffer: Optional[torch.Tensor] = None
+    can_run_dp_cuda_graph: bool = False
+
+    # spec info
+    spec_info: SpecInfo = None
+    spec_algorithm: SpeculativeAlgorithm = None
+    capture_hidden_mode: CaptureHiddenMode = None
 
     # For Qwen2-VL
     mrope_positions: torch.Tensor = None
@@ -173,31 +231,56 @@ class ForwardBatch:
             seq_lens_sum=batch.seq_lens_sum,
             return_logprob=batch.return_logprob,
             top_logprobs_nums=batch.top_logprobs_nums,
-            lora_paths=batch.lora_paths,
+            topping_paths=batch.topping_paths,
             sampling_info=batch.sampling_info,
+            spec_algorithm=batch.spec_algorithm,
+            spec_info=batch.spec_info,
+            capture_hidden_mode=batch.capture_hidden_mode,
+            input_embeds=batch.input_embeds,
         )
 
-        # Init position information
-        if not ret.forward_mode.is_decode():
-            ret.positions = torch.concat(
-                [
-                    torch.arange(prefix_len, prefix_len + extend_len, device=device)
-                    for prefix_len, extend_len in zip(
-                        batch.extend_prefix_lens, batch.extend_seq_lens
-                    )
-                ],
-                axis=0,
+        if ret.global_num_tokens is not None:
+            max_len = max(ret.global_num_tokens)
+            ret.gathered_buffer = torch.zeros(
+                (max_len * model_runner.tp_size, model_runner.model_config.hidden_size),
+                dtype=model_runner.dtype,
+                device=device,
             )
-            ret.extend_num_tokens = batch.extend_num_tokens
+
+        if ret.forward_mode.is_idle():
+            ret.positions = torch.empty((0,), device=device)
+            return ret
+
+        # Override the positions with spec_info
+        if (
+            ret.spec_info is not None
+            and getattr(ret.spec_info, "positions", None) is not None
+        ):
+            ret.positions = ret.spec_info.positions
+
+        # Init position information
+        if ret.forward_mode.is_decode():
+            if ret.positions is None:
+                ret.positions = clamp_position(batch.seq_lens)
+        else:
             ret.extend_seq_lens = torch.tensor(
                 batch.extend_seq_lens, dtype=torch.int32
             ).to(device, non_blocking=True)
-
             ret.extend_prefix_lens = torch.tensor(
                 batch.extend_prefix_lens, dtype=torch.int32
             ).to(device, non_blocking=True)
-            ret.extend_start_loc = torch.zeros_like(ret.extend_seq_lens)
-            ret.extend_start_loc[1:] = torch.cumsum(ret.extend_seq_lens[:-1], dim=0)
+            if model_runner.server_args.attention_backend != "torch_native":
+                ret.extend_num_tokens = batch.extend_num_tokens
+                positions, ret.extend_start_loc = compute_position_triton(
+                    ret.extend_prefix_lens, ret.extend_seq_lens, ret.extend_num_tokens
+                )
+            else:
+                positions, ret.extend_start_loc = compute_position_torch(
+                    ret.extend_prefix_lens, ret.extend_seq_lens
+                )
+            if ret.positions is None:
+                ret.positions = positions
+            ret.extend_prefix_lens_cpu = batch.extend_prefix_lens
             ret.extend_seq_lens_cpu = batch.extend_seq_lens
             ret.extend_logprob_start_lens_cpu = batch.extend_logprob_start_lens
 
@@ -210,7 +293,80 @@ class ForwardBatch:
         ret.attn_backend = model_runner.attn_backend
 
         # Init lora information
-        if model_runner.server_args.lora_paths is not None:
-            model_runner.lora_manager.prepare_lora_batch(ret)
-
+        if model_runner.server_args.enable_toppings:
+            model_runner.topping_manager.prepare_topping_batch(ret)
         return ret
+
+
+def compute_position_triton(
+    extend_prefix_lens: torch.Tensor, extend_seq_lens: torch.Tensor, extend_seq_lens_sum
+):
+    """Compute positions. It is a fused version of `compute_position_torch`."""
+    batch_size = extend_seq_lens.shape[0]
+    positions = torch.empty(
+        extend_seq_lens_sum, dtype=torch.int64, device=extend_seq_lens.device
+    )
+    extend_start_loc = torch.empty(
+        batch_size, dtype=torch.int32, device=extend_seq_lens.device
+    )
+
+    # Launch kernel
+    compute_position_kernel[(batch_size,)](
+        positions,
+        extend_start_loc,
+        extend_prefix_lens,
+        extend_seq_lens,
+    )
+
+    return positions, extend_start_loc
+
+
+@triton.jit
+def compute_position_kernel(
+    positions,
+    extend_start_loc,
+    extend_prefix_lens,
+    extend_seq_lens,
+):
+    BLOCK_SIZE: tl.constexpr = 512
+    pid = tl.program_id(0)
+
+    prefix_len = tl.load(extend_prefix_lens + pid)
+    seq_len = tl.load(extend_seq_lens + pid)
+
+    # TODO: optimize this?
+    cumsum_start = 0
+    for i in range(pid):
+        cumsum_start += tl.load(extend_seq_lens + i)
+
+    num_loop = tl.cdiv(seq_len, BLOCK_SIZE)
+    for i in range(num_loop):
+        offset = tl.arange(0, BLOCK_SIZE) + i * BLOCK_SIZE
+        tl.store(
+            positions + cumsum_start + offset,
+            prefix_len + offset,
+            mask=offset < seq_len,
+        )
+    tl.store(extend_start_loc + pid, cumsum_start)
+
+
+def compute_position_torch(
+    extend_prefix_lens: torch.Tensor, extend_seq_lens: torch.Tensor
+):
+    positions = torch.concat(
+        [
+            torch.arange(
+                prefix_len, prefix_len + extend_len, device=extend_prefix_lens.device
+            )
+            for prefix_len, extend_len in zip(extend_prefix_lens, extend_seq_lens)
+        ],
+        axis=0,
+    )
+    extend_start_loc = torch.zeros_like(extend_seq_lens)
+    extend_start_loc[1:] = torch.cumsum(extend_seq_lens[:-1], dim=0)
+    return positions.to(torch.int64), extend_start_loc
+
+
+@maybe_torch_compile(dynamic=True)
+def clamp_position(seq_lens):
+    return torch.clamp((seq_lens - 1), min=0).to(torch.int64)

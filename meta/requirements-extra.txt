@@ -1,4 +1,5 @@
 gguf
-pillow
+matplotlib
 prompt_toolkit
 openai
+faiss-cpu

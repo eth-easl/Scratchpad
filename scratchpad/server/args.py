@@ -1,8 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Union
-from scratchpad.utils import Singleton
-from scratchpad.utils import logger
+from scratchpad.utils.logger import logger
 import tempfile
 
 
@@ -63,6 +62,7 @@ class ServerArgs:
     num_continue_decode_steps: int = 10
     retract_decode_steps: int = 20
     mem_fraction_static: float = 0.8
+    enable_dp_attention: bool = False
     # constrained
     constrained_json_whitespace_pattern: Optional[str] = None
     # tokenization
@@ -71,9 +71,6 @@ class ServerArgs:
     enable_precache_with_tracing = True
     enable_parallel_encoding = True
 
-    # toppings config
-    lora_paths: Optional[str] = None
-    max_loras_per_batch: int = 1
     # logging stats
     enable_stats_logging: bool = True
 
@@ -83,7 +80,7 @@ class ServerArgs:
     disable_flashinfer: bool = False
     disable_flashinfer_sampling: bool = False
     disable_radix_cache: bool = False
-    disable_regex_jump_forward: bool = False
+    disable_jump_forward: bool = False
     disable_cuda_graph: bool = False
     disable_cuda_graph_padding: bool = False
     disable_disk_cache: bool = False
@@ -91,11 +88,13 @@ class ServerArgs:
     disable_mla: bool = False
     enable_mixed_chunk: bool = False
     enable_torch_compile: bool = False
+    enable_dp_attention: bool = False
     max_torch_compile_bs: int = 32
     torchao_config: str = ""
     enable_p2p_check: bool = False
     flashinfer_workspace_size: int = 384 * 1024 * 1024
     triton_attention_reduce_in_fp32: bool = False
+    triton_attention_num_kv_splits: int = 8
     log_requests: bool = False
     show_time_cost: bool = False
     disable_penalizer: bool = False
@@ -107,6 +106,15 @@ class ServerArgs:
     enable_overlap_schedule: bool = False
     enable_double_sparsity: bool = False
     disable_nan_detection: bool = False
+    # Topping config
+    enable_toppings: bool = False
+    max_toppings_per_batch: int = 4
+    init_number_of_deltas: int = 1
+    init_number_of_loras: int = 1
+    max_lora_ranks: int = 64
+    # comma separated list of toppings, format: type:identifier:served_name
+    init_toppings: Optional[str] = None
+    allow_toppings_registration: bool = False
 
     def translate_auto(self):
         if self.served_model_name == "auto":

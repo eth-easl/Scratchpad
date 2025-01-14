@@ -32,6 +32,7 @@ class TpModelWorker:
         dp_rank: Optional[int] = 0,
     ):
         # Parse args
+        logger.info(f"Initalizing model worker on GPU {gpu_id}, tp_rank: {tp_rank}")
         self.tp_rank = tp_rank
         self.server_args = server_args
         # Init model and tokenizer
@@ -40,6 +41,7 @@ class TpModelWorker:
             server_args.trust_remote_code,
             context_length=server_args.context_length,
             model_override_args=server_args.json_model_override_args,
+            is_embedding=server_args.is_embedding,
         )
         self.model_runner = ModelRunner(
             model_config=self.model_config,
@@ -120,24 +122,6 @@ class TpModelWorker:
             self.random_seed,
         )
 
-    def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):
-        forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
-        logits_output = self.model_runner.forward(forward_batch)
-        next_token_ids = self.model_runner.sample(logits_output, model_worker_batch)
-        return logits_output, next_token_ids
-
-    def forward_batch_embedding(self, model_worker_batch: ModelWorkerBatch):
-        forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
-        logits_output = self.model_runner.forward(forward_batch)
-        embeddings = logits_output.embeddings.tolist()
-        return embeddings
-
-    def update_weights(self, recv_req: UpdateWeightReqInput):
-        success, message = self.model_runner.update_weights(
-            recv_req.model_path, recv_req.load_format
-        )
-        return success, message
-
     def expand_memory_pool(self, increments: int):
         """
         Expand memory pool by `increments`.
@@ -187,3 +171,6 @@ class TpModelWorker:
             recv_req.model_path, recv_req.load_format
         )
         return success, message
+
+    def register_topping(self, topping):
+        self.model_runner.topping_manager.register_topping(topping)

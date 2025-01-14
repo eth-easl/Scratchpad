@@ -5,3 +5,5 @@ pyrightconfig.json
 .local
 .vscode
 .zed
+.data
+*.ipynb

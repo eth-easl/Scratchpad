@@ -5,7 +5,7 @@ from tools.simulator.utils import (
     roofline_analyze,
     get_linear_layers,
 )
-from tools.simulator.hardware_params import hardware_params
+from tools.simulator.config.hardware_params import hardware_params
 import humanize
 
 

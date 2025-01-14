@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
 
 
+class BaseGrammarObject:
+    pass
+
+
 class XGrammarJump:
     pass
 

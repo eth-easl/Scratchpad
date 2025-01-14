@@ -44,6 +44,13 @@ def get_physical_device_capability(device_id: int = 0) -> Tuple[int, int]:
     return pynvml.nvmlDeviceGetCudaComputeCapability(handle)
 
 
+@with_nvml_context
+def get_gpu_utilization(device_id: int = 0) -> float:
+    handle = pynvml.nvmlDeviceGetHandleByIndex(device_id)
+    util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+    return util.gpu
+
+
 @lru_cache(maxsize=8)
 @with_nvml_context
 def get_physical_device_name(device_id: int = 0) -> str:

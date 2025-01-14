@@ -8,5 +8,5 @@ if [ -z "$version" ]; then
     exit 1
 fi
 echo "Building image for $arch, version $version"
-$buildtool build -f docker/Dockerfile.$arch-cuda . -t ghcr.io/xiaozheyao/scratchpad:${version}dev-$arch --build-arg ARCH=$arch
+DOCKER_BUILDKIT=0 $buildtool build -f docker/Dockerfile.$arch-cuda . -t ghcr.io/xiaozheyao/scratchpad:${version}dev-$arch --build-arg ARCH=$arch
 $buildtool push ghcr.io/xiaozheyao/scratchpad:${version}dev-$arch

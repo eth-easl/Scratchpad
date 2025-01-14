@@ -2,6 +2,7 @@ import os
 import zmq
 import zmq.asyncio
 import torch
+import dataclasses
 from functools import lru_cache
 from typing import Optional, Dict, List, Any
 import socket
@@ -13,6 +14,7 @@ import numpy as np
 import psutil
 import torch.distributed as dist
 import pickle
+import torch.nn as nn
 from . import envs, logger
 
 show_time_cost = False
@@ -139,10 +141,10 @@ def update_environment_variables(envs: Dict[str, str]):
 
 
 def find_nccl_library() -> str:
-    if torch.version.cuda is not None:
+    if os.environ.get("SP_NCCL_SO_PATH", None):
+        so_file = os.path.join(os.environ["SP_NCCL_SO_PATH"], "libnccl.so.2")
+    elif torch.version.cuda is not None:
         so_file = "libnccl.so.2"
-    elif torch.version.hip is not None:
-        so_file = "librccl.so.1"
     else:
         raise ValueError("NCCL only supports CUDA and ROCm backends.")
     logger.info(f"Found nccl from library {so_file}")
@@ -409,3 +411,50 @@ def get_zmq_socket(context: zmq.Context, socket_type: zmq.SocketType, endpoint: 
         raise ValueError(f"Unsupported socket type: {socket_type}")
 
     return socket
+
+
+# source: https://github.com/vllm-project/vllm/blob/93b38bea5dd03e1b140ca997dfaadef86f8f1855/vllm/lora/utils.py#L9
+def replace_submodule(
+    model: nn.Module, module_name: str, new_module: nn.Module
+) -> nn.Module:
+    """Replace a submodule in a model with a new module."""
+    parent = model.get_submodule(".".join(module_name.split(".")[:-1]))
+    target_name = module_name.split(".")[-1]
+    setattr(parent, target_name, new_module)
+    return new_module
+
+
+def dataclass_to_string_truncated(data, max_length=2048):
+    if isinstance(data, str):
+        if len(data) > max_length:
+            half_length = max_length // 2
+            return f'"{data[:half_length]} ... {data[-half_length:]}"'
+        else:
+            return f'"{data}"'
+    elif isinstance(data, (list, tuple)):
+        if len(data) > max_length:
+            half_length = max_length // 2
+            return str(data[:half_length]) + " ... " + str(data[-half_length:])
+        else:
+            return str(data)
+    elif isinstance(data, dict):
+        return (
+            "{"
+            + ", ".join(
+                f"{k}: {dataclass_to_string_truncated(v, max_length)}"
+                for k, v in data.items()
+            )
+            + "}"
+        )
+    elif dataclasses.is_dataclass(data):
+        fields = dataclasses.fields(data)
+        return (
+            f"{data.__class__.__name__}("
+            + ", ".join(
+                f"{f.name}={dataclass_to_string_truncated(getattr(data, f.name), max_length)}"
+                for f in fields
+            )
+            + ")"
+        )
+    else:
+        return str(data)

@@ -8,6 +8,9 @@ LABEL org.opencontainers.image.architecture=arm64
 ARG CUDA_VERSION=12.4.1
 ARG PYTHON_VERSION=3.10
 ENV DEBIAN_FRONTEND=noninteractive
+ENV TRITEIA_COMPUTE_CAP=90
+ENV TORCH_CUDA_ARCH_LIST="9.0"
+ENV FLASHINFER_ENABLE_AOT="1"
 
 RUN apt update && apt upgrade -y
 
@@ -15,9 +18,16 @@ WORKDIR /scratchpad
 
 COPY . /scratchpad
 
-RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_aarch64.whl
-RUN pip install https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/triteia-0.1.0-cp310-cp310-linux_aarch64.whl
+RUN git clone -b v0.1.6 https://github.com/flashinfer-ai/flashinfer.git --recursive && \
+    cd flashinfer/python && \
+    pip install --no-build-isolation --verbose --editable .
+
+RUN git clone https://github.com/eth-easl/triteia.git && \
+    cd triteia && \
+    git submodule update --init --recursive && \
+    pip install -e .
 RUN pip install -r meta/requirements-extra.txt
 RUN pip install .
+
 # todo(xiaozhe): figure out why pynvml is installed in the first place. We should use nvidia-ml-py instead.
 RUN pip uninstall pynvml -y

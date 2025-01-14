@@ -174,6 +174,9 @@ class ModelConfig:
         # parallel size so each GPU has at least one KV head.
         return max(1, total_num_kv_heads // tensor_parallel_size)
 
+    def __repr__(self):
+        return f"ModelConfig(path={self.path}, trust_remote_code={self.trust_remote_code}, revision={self.revision}, context_length={self.context_len}, model_override_args={self.model_override_args}, is_generation={self.is_generation})"
+
 
 def get_hf_text_config(config: PretrainedConfig):
     """Get the "sub" config relevant to llm for multi modal models.

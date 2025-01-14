@@ -3,8 +3,7 @@ import argparse
 from argparse import Namespace
 import asyncio
 import requests
-import numpy as np
-from typing import List, Tuple, AsyncGenerator, Optional, Callable, Dict
+from typing import List, Optional, Callable, Dict
 from tqdm.asyncio import tqdm
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from tools.benchmark.common import (
@@ -161,7 +160,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-prompts",
         type=int,
-        default=1000,
+        default=100,
         help="Number of prompts to process.",
     )
     parser.add_argument(

@@ -4,3 +4,6 @@ from .utils import *
 from .hf import *
 from .modality import *
 from . import envs
+from .exceptions import *
+from .compile import *
+from .lock import *
