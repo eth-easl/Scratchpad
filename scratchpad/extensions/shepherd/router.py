@@ -14,7 +14,7 @@ class Router:
         embeddings = self.encoder(self.routes[0].utterances)
         self.index = faiss.IndexFlatL2(embeddings.shape[1])
         self.utterance_to_route = {}
-        print(f"len(self.routes): {len(self.routes)}")
+        logger.info(f"len(self.routes): {len(self.routes)}")
         for route in self.routes:
             min_utterance_id = len(self.utterance_to_route)
             self.utterance_to_route.update(
@@ -28,6 +28,8 @@ class Router:
     def __call__(self, prompt, **kwargs):
         embedding = self.encoder([prompt])
         D, I = self.index.search(embedding, 1)
+        if I.size == 0:
+            raise ValueError("No nearest route found")
         nearest_route = self.utterance_to_route[int(I[0][0])]
         logger.info(f"Nearest route: {nearest_route.name}, D={D[0][0]:.2f}")
         prefered_llm = nearest_route.model_preferences[0]

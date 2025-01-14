@@ -25,6 +25,10 @@ class ToppingConfig:
             config_name = "adapter_config.json"
         elif self.type == ToppingType.delta:
             config_name = "delta_config.json"
+        else:
+            raise ValueError(
+                f"Invalid ToppingType, Expected one of ['lora', 'delta'], got {self.type}"
+            )
         with open(os.path.join(weights_dir, config_name), "r") as f:
             config = json.load(f)
         return config
