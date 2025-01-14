@@ -94,6 +94,7 @@ class ServerArgs:
     enable_p2p_check: bool = False
     flashinfer_workspace_size: int = 384 * 1024 * 1024
     triton_attention_reduce_in_fp32: bool = False
+    triton_attention_num_kv_splits: int = 8
     log_requests: bool = False
     show_time_cost: bool = False
     disable_penalizer: bool = False
