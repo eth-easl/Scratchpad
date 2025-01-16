@@ -10,8 +10,11 @@ class Router:
         self._build_index()
 
     def _build_index(self):
+        logger.info(f"Building index starts")
         start = timer()
         embeddings = self.encoder(self.routes[0].utterances)
+
+        print(embeddings.shape[1])
         self.index = faiss.IndexFlatL2(embeddings.shape[1])
         self.utterance_to_route = {}
         logger.info(f"len(self.routes): {len(self.routes)}")
@@ -22,6 +25,7 @@ class Router:
             )
             embeddings = self.encoder(route.utterances)
             self.index.add(embeddings)
+
         end = timer()
         logger.info(f"Index build finished in {end-start:.2f}s")
 

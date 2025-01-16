@@ -1,14 +1,16 @@
 import json
 from typing import List
+import datasets
 from scratchpad.utils.client import LLM
 from scratchpad.extensions.shepherd import Route, Router
+import random
 
 answer_mapping = ["A", "B", "C", "D"]
 
 model_mappings = {
     "meta-llama/Llama-3.2-1B-Instruct": LLM(
         model="meta-llama/Llama-3.2-1B-Instruct",
-        base_url="http://localhost:8080/v1",
+        base_url="http://localhost:8081/v1",
         api_key="test",
     ),
     "meta-llama/Llama-3.2-3B-Instruct": LLM(
@@ -18,7 +20,7 @@ model_mappings = {
     ),
     "meta-llama/Llama-3.1-8B-Instruct": LLM(
         model="meta-llama/Llama-3.1-8B-Instruct",
-        base_url="http://localhost:8081/v1",
+        base_url="http://localhost:8083/v1",
         api_key="test",
     ),
     "meta-llama/Llama-3.3-70B-Instruct": LLM(
@@ -37,20 +39,11 @@ def create_route_from_knn_builder(jsonl_path: str) -> List[Route]:
         correct_utts = [
             row for row in data if row["output"][model] == answer_mapping[row["answer"]]
         ]
-        correct_utts = correct_utts[:25]
-        choices = ["A", "B", "C", "D"]
-        reprompt = [
-            f"{row['question']}\n"
-            + "\n".join(
-                [
-                    f"{choice}. {answer}"
-                    for choice, answer in zip(choices, row["choices"])
-                ]
-            )
-            + "\nAnswer:"
-            for row in correct_utts
-        ]
-        print(f"Correct utterances for model {model}: {reprompt[0]}")
+        correct_utts = random.sample(correct_utts, 100)
+        reprompt = [build_prompt(row)["prompt"] for row in correct_utts]
+
+        # remove correct_utts from entire data
+        data = [row for row in data if row not in correct_utts]
         routes.append(
             Route(
                 name=model,
@@ -71,3 +64,36 @@ def calculate_llms_accuracy(data):
                 correct += 1
         accuracies[model] = correct / len(data)
     return accuracies
+
+
+def build_prompt(row):
+    """ """
+    user_prompt = (
+        f"{row['question']}\n"
+        + "\n".join(
+            [
+                f"{choice}. {answer}"
+                for choice, answer in zip(answer_mapping, row["choices"])
+            ]
+        )
+        + "\nAnswer:"
+    )
+    row["prompt"] = user_prompt
+    return row
+
+
+def construct_ds(test_ratio: float = 0.2, seed=42):
+    random.seed(seed)
+    dataset = datasets.load_dataset("cais/mmlu", "all")["test"]
+    dataset = dataset.shuffle(seed=seed)
+    results = dataset.train_test_split(test_size=test_ratio)
+    train, test = results["train"], results["test"]
+    train = train.map(lambda x: build_prompt(x))
+    test = test.map(lambda x: build_prompt(x))
+    return train, test
+
+
+def load_test_set():
+    with open(".local/shepherd/llm_responses_tests.jsonl", "r") as f:
+        data = [json.loads(line) for line in f]
+    return data
