@@ -31,28 +31,7 @@ def main(args):
     results = []
     train, test = construct_ds(test_ratio=0.2, seed=42)
 
-    for row in tqdm(train):
-        subject = row["subject"]
-        llm_answers = {}
-        for llm in llms:
-            llm.set_system_prompt(
-                f"The following are multiple choice questions (with answers) about {subject}. Answer the question with one of the choices A, B, C, or D only, without any additional information or explanation."
-            )
-            response = llm(row["prompt"], max_tokens=1, temperature=0.001)
-            llm_answers[llm.model] = response
-        results.append(
-            {
-                "subject": subject,
-                "question": row["question"],
-                "choices": row["choices"],
-                "answer": row["answer"],
-                "output": llm_answers,
-            }
-        )
-    with open(f".local/shepherd/llm_responses_train.jsonl", "w") as f:
-        for result in results:
-            f.write(json.dumps(result) + "\n")
-
+    results = []
     for row in tqdm(test):
         subject = row["subject"]
         llm_answers = {}

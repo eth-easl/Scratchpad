@@ -23,7 +23,6 @@ routes = create_route_from_knn_builder(".local/shepherd/llm_responses_train.json
 router = Router(encoder, routes)
 
 print(f"Router created")
-choices = ["A", "B", "C", "D"]
 results = []
 # dataset = [row for row in dataset if row["subject"] == subject]
 

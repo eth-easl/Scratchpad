@@ -2,7 +2,7 @@ import json
 from typing import List
 import datasets
 from scratchpad.utils.client import LLM
-from scratchpad.extensions.shepherd import Route, Router
+from scratchpad.extensions.shepherd import Route
 import random
 
 answer_mapping = ["A", "B", "C", "D"]
@@ -27,23 +27,33 @@ model_mappings = {
         model="meta-llama/Llama-3.3-70B-Instruct",
     ),
 }
+# cheapest pricing from openrouter.ai for bf16, per million tokens
+pricings = {
+    "meta-llama/Llama-3.2-1B-Instruct": 0.01,
+    "meta-llama/Llama-3.2-3B-Instruct": 0.015,
+    "meta-llama/Llama-3.1-8B-Instruct": 0.025,
+    "meta-llama/Llama-3.3-70B-Instruct": 0.39,
+}
 
 
-def create_route_from_knn_builder(jsonl_path: str) -> List[Route]:
+def create_route_from_knn_builder(jsonl_path: str, downsample_factor=10) -> List[Route]:
     with open(jsonl_path, "r") as f:
         data = [json.loads(line) for line in f]
     models = data[0]["output"].keys()
     routes = []
     for model in models:
         # find correct answers for each model
+        print(f"available data: {len(data)}")
         correct_utts = [
             row for row in data if row["output"][model] == answer_mapping[row["answer"]]
         ]
-        correct_utts = random.sample(correct_utts, 100)
-        reprompt = [build_prompt(row)["prompt"] for row in correct_utts]
-
         # remove correct_utts from entire data
         data = [row for row in data if row not in correct_utts]
+        correct_utts = random.sample(
+            correct_utts, len(correct_utts) // downsample_factor
+        )
+        reprompt = [build_prompt(row)["prompt"] for row in correct_utts]
+
         routes.append(
             Route(
                 name=model,
@@ -87,6 +97,7 @@ def construct_ds(test_ratio: float = 0.2, seed=42):
     dataset = datasets.load_dataset("cais/mmlu", "all")["test"]
     dataset = dataset.shuffle(seed=seed)
     results = dataset.train_test_split(test_size=test_ratio)
+
     train, test = results["train"], results["test"]
     train = train.map(lambda x: build_prompt(x))
     test = test.map(lambda x: build_prompt(x))
@@ -94,6 +105,6 @@ def construct_ds(test_ratio: float = 0.2, seed=42):
 
 
 def load_test_set():
-    with open(".local/shepherd/llm_responses_tests.jsonl", "r") as f:
+    with open(".local/shepherd/llm_responses_test.jsonl", "r") as f:
         data = [json.loads(line) for line in f]
     return data
