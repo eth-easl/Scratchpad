@@ -521,18 +521,15 @@ class TokenizerManager:
             assert isinstance(
                 recv_obj, (BatchStrOut, BatchEmbeddingOut, BatchTokenIDOut)
             ), f"Unexpected obj received: {type(recv_obj)}"
-
             for i, rid in enumerate(recv_obj.rids):
                 state = self.rid_to_state.get(rid, None)
                 if state is None:
                     continue
-
                 meta_info = {
                     "id": rid,
                     "finish_reason": recv_obj.finished_reasons[i],
                     "prompt_tokens": recv_obj.prompt_tokens[i],
                 }
-
                 if getattr(state.obj, "return_logprob", False):
                     self.convert_logprob_style(
                         meta_info,
@@ -562,6 +559,7 @@ class TokenizerManager:
                     }
                 else:
                     assert isinstance(recv_obj, BatchEmbeddingOut)
+
                     out_dict = {
                         "embedding": recv_obj.embeddings[i],
                         "meta_info": meta_info,

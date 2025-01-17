@@ -404,12 +404,12 @@ class BatchStrOut:
 class BatchEmbeddingOut:
     # The request id
     rids: List[str]
+    # The finish reason
+    finished_reasons: List[BaseFinishReason]
     # The output embedding
     embeddings: List[List[float]]
-    # The meta info
-    meta_info: List[Dict]
-    # The finish reason
-    finished_reason: List[BaseFinishReason]
+    # Token counts
+    prompt_tokens: List[int]
 
 
 class ProfileReq(Enum):
