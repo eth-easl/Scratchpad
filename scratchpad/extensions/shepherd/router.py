@@ -1,18 +1,23 @@
+import os
 import faiss
 import numpy as np
+from typing import Optional
 from collections import Counter
-from scratchpad.utils import logger
 from timeit import default_timer as timer
+from scratchpad.utils import logger
+
+from .route import Route
 
 
 class Router:
-    def __init__(self, encoder, routes):
+    def __init__(self, encoder, routes, index_location: Optional[str] = None):
         self.routes = routes
         self.encoder = encoder
-        self._build_index()
         self.stats = {k.name: 0 for k in self.routes}
+        self.index_location = index_location
+        self._build_index(persistent=True if index_location else False)
 
-    def _build_index(self):
+    def _build_index(self, persistent=False):
         logger.info(f"Building index starts")
         start = timer()
         embeddings = self.encoder(self.routes[0].utterances)
@@ -30,6 +35,11 @@ class Router:
             )
         end = timer()
         logger.info(f"Index build finished in {end-start:.2f}s")
+        if persistent:
+            logger.info(f"Saving index to {self.index_location}")
+            faiss.write_index(
+                self.index, os.path.join(self.index_location, "index.faiss")
+            )
 
     def __call__(self, prompt, **kwargs):
         embedding = self.encoder([prompt])

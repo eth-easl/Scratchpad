@@ -26,7 +26,7 @@ routes = create_route_from_knn_builder(
 with open(".local/shepherd/llm_responses_test.jsonl") as f:
     data = [json.loads(line) for line in f]
 
-router = Router(encoder, routes)
+router = Router(encoder, routes, index_location=".local/shepherd")
 router_data = []
 results = []
 
