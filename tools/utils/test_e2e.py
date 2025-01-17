@@ -68,20 +68,24 @@ def end_to_end(args):
         }
     else:
         response_format = None
+    try:
+        response = client.chat.completions.create(
+            model=args.model,
+            messages=messages,
+            response_format=response_format,
+            stream=args.stream,
+            max_tokens=12,
+        )
+        print(response)
+        if args.stream:
+            for chunk in response:
+                if len(chunk.choices) > 0 and chunk.choices[0].delta.content:
+                    print(chunk.choices[0].delta.content, end="", flush=True)
+        else:
 
-    response = client.chat.completions.create(
-        model=args.model,
-        messages=messages,
-        response_format=response_format,
-        stream=args.stream,
-        max_tokens=128,
-    )
-    if args.stream:
-        for chunk in response:
-            if len(chunk.choices) > 0 and chunk.choices[0].delta.content:
-                print(chunk.choices[0].delta.content, end="", flush=True)
-    else:
-        print(response.choices[0].message.content)
+            print(response.choices[0].message.content)
+    except Exception as e:
+        print(e)
 
 
 if __name__ == "__main__":
