@@ -15,6 +15,49 @@ class ModelCard(BaseModel):
     root: Optional[str] = None
 
 
+class FunctionResponse(BaseModel):
+    """Function response."""
+
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    """Tool call response."""
+
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionResponse
+
+
+class Function(BaseModel):
+    """Function descriptions."""
+
+    description: Optional[str] = Field(default=None, examples=[None])
+    name: str
+    parameters: Optional[object] = None
+
+
+class Tool(BaseModel):
+    """Function wrapper."""
+
+    type: str = Field(default="function", examples=["function"])
+    function: Function
+
+
+class ToolChoiceFuncName(BaseModel):
+    """The name of tool choice function."""
+
+    name: str
+
+
+class ToolChoice(BaseModel):
+    """The tool choice definition."""
+
+    function: ToolChoiceFuncName
+    type: Literal["function"] = Field(default="function", examples=["function"])
+
+
 class ModelList(BaseModel):
     """Model list consists of model cards."""
 
@@ -252,12 +295,22 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
     user: Optional[str] = None
-
-    # Extra parameters for SRT backend only and will be ignored by OpenAI models.
+    tools: Optional[List[Tool]] = Field(default=None, examples=[None])
+    tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = Field(
+        default="auto", examples=["none"]
+    )
+    # Extra parameters
     regex: Optional[str] = None
     min_tokens: Optional[int] = 0
     repetition_penalty: Optional[float] = 1.0
     stop_token_ids: Optional[List[int]] = Field(default_factory=list)
+    skip_special_tokens: bool = True
+    session_params: Optional[Dict] = None
+    regex: Optional[str] = None
+    ebnf: Optional[str] = None
+    top_k: Optional[int] = None
+    ignore_eos: bool = False
+    no_stop_trim: bool = False
 
 
 class ChatMessage(BaseModel):
