@@ -1306,7 +1306,7 @@ def run_scheduler_process(
     pipe_writer: multiprocessing.connection.Connection,
 ):
     try:
-        setproctitle.setproctitle(f"SP:scheduler")
+        setproctitle.setproctitle(f"sp:scheduler")
         faulthandler.enable()
         loggers = [PrometheusStatLogger(1, {"server_id": server_args.server_id}, 4096)]
         scheduler = Scheduler(

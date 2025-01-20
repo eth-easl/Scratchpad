@@ -1,13 +1,16 @@
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict, Any
 
 _SAMPLING_EPS = 1e-6
 
 
 class SamplingParams:
+    """
+    Sampling parameters.
+    """
+
     def __init__(
         self,
         max_new_tokens: int = 128,
-        min_new_tokens: int = 0,
         stop: Optional[Union[str, List[str]]] = None,
         stop_token_ids: Optional[List[int]] = None,
         temperature: float = 1.0,
@@ -17,13 +20,16 @@ class SamplingParams:
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         repetition_penalty: float = 1.0,
-        ignore_eos: bool = False,
-        skip_special_tokens: bool = True,
+        min_new_tokens: int = 0,
         spaces_between_special_tokens: bool = True,
-        regex: Optional[str] = None,
         n: int = 1,
         json_schema: Optional[str] = None,
+        regex: Optional[str] = None,
+        ebnf: Optional[str] = None,
         no_stop_trim: bool = False,
+        ignore_eos: bool = False,
+        skip_special_tokens: bool = True,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.temperature = temperature
         self.top_p = top_p
@@ -45,7 +51,9 @@ class SamplingParams:
         self.regex = regex
         self.n = n
         self.json_schema = json_schema
+        self.ebnf = ebnf
         self.no_stop_trim = no_stop_trim
+        self.custom_params = custom_params
 
         # Process some special cases
         if self.temperature < _SAMPLING_EPS:
@@ -96,8 +104,13 @@ class SamplingParams:
                     f"min_new_tokens must be in (0, max_new_tokens({self.max_new_tokens})], got "
                     f"{self.min_new_tokens}."
                 )
-        if self.regex is not None and self.json_schema is not None:
-            raise ValueError("regex and json_schema cannot be both set.")
+        grammars = [
+            self.json_schema,
+            self.regex,
+            self.ebnf,
+        ]  # since mutually exclusive, only one can be set
+        if sum(x is not None for x in grammars) > 1:
+            raise ValueError("Only one of regex, json_schema, or ebnf can be set.")
 
     def normalize(self, tokenizer):
         # Process stop strings
@@ -116,17 +129,3 @@ class SamplingParams:
                 else:
                     stop_str_max_len = max(stop_str_max_len, len(stop_str))
             self.stop_str_max_len = stop_str_max_len
-
-    def to_srt_kwargs(self):
-        return {
-            "max_new_tokens": self.max_new_tokens,
-            "stop": self.stop_strs,
-            "stop_token_ids": list(self.stop_token_ids),
-            "temperature": self.temperature,
-            "top_p": self.top_p,
-            "top_k": self.top_k,
-            "frequency_penalty": self.frequency_penalty,
-            "presence_penalty": self.presence_penalty,
-            "ignore_eos": self.ignore_eos,
-            "regex": self.regex,
-        }
