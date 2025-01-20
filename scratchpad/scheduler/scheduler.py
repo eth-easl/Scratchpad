@@ -1,19 +1,20 @@
 import os
+import faulthandler
 import zmq
 import time
 import torch
 import warnings
+import setproctitle
 import threading
-import traceback
+from concurrent import futures
 import multiprocessing
 from collections import deque
 from dataclasses import asdict
 from functools import cached_property
 from typing import List, Optional, TYPE_CHECKING
 from types import SimpleNamespace
-
 from scratchpad.config.model_config import ModelConfig
-from scratchpad.constrained.grammar import GrammarCache
+from scratchpad.constrained.base_backend import create_grammar_backend
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -225,19 +226,14 @@ class Scheduler:
         )
 
         # Init the FSM cache for constrained generation
-        self.grammar_cache = None
+        self.grammar_queue: List[Req] = []
         if not server_args.skip_tokenizer_init:
-            self.grammar_cache = GrammarCache(
-                server_args.tokenizer_path,
-                {
-                    "tokenizer_mode": server_args.tokenizer_mode,
-                    "trust_remote_code": server_args.trust_remote_code,
-                },
-                skip_tokenizer_init=server_args.skip_tokenizer_init,
-                whitespace_patterns=server_args.constrained_json_whitespace_pattern,
-                backend="outlines",
-                allow_jump=not server_args.disable_jump_forward,
+            logger.info("Initializing grammar backend")
+            self.grammar_backend = create_grammar_backend(
+                server_args, self.tokenizer, self.model_config.vocab_size
             )
+        else:
+            self.grammar_backend = None
 
         # Init new token estimation
         assert (
@@ -431,22 +427,6 @@ class Scheduler:
             # By default, only return the logprobs for output tokens
             req.logprob_start_len = len(recv_req.input_ids) - 1
 
-        # Init regex FSM or BNF
-        if (
-            req.sampling_params.json_schema is not None
-            or req.sampling_params.regex is not None
-        ):
-            assert self.grammar_cache is not None
-            if req.sampling_params.json_schema is not None:
-                req.grammar = self.grammar_cache.query(
-                    ("json", req.sampling_params.json_schema),
-                    self.model_config.vocab_size,
-                )
-            elif req.sampling_params.regex is not None:
-                req.grammar = self.grammar_cache.query(
-                    ("regex", req.sampling_params.regex), self.model_config.vocab_size
-                )
-
         # Truncate prompts that are too long
         if len(req.origin_input_ids) > self.max_req_input_len:
             logger.error(
@@ -454,7 +434,7 @@ class Scheduler:
                 "the max context length. Truncated!!!"
             )
             return False
-            req.origin_input_ids = req.origin_input_ids[: self.max_req_input_len]
+            # req.origin_input_ids = req.origin_input_ids[: self.max_req_input_len]
 
         req.sampling_params.max_new_tokens = min(
             (
@@ -465,7 +445,29 @@ class Scheduler:
             self.max_req_len - len(req.origin_input_ids) - 1,
         )
 
-        self.waiting_queue.append(req)
+        # Init grammar cache for this request
+        add_to_grammar_queue = False
+        if (
+            req.sampling_params.json_schema is not None
+            or req.sampling_params.regex is not None
+            or req.sampling_params.ebnf is not None
+        ):
+            assert self.grammar_backend is not None
+            if req.sampling_params.json_schema is not None:
+                key = ("json", req.sampling_params.json_schema)
+            elif req.sampling_params.regex is not None:
+                key = ("regex", req.sampling_params.regex)
+            elif req.sampling_params.ebnf is not None:
+                key = ("ebnf", req.sampling_params.ebnf)
+            req.grammar = self.grammar_backend.get_cached_value(key)
+            if not req.grammar:
+                req.grammar = self.grammar_backend.get_future_value(key)
+                add_to_grammar_queue = True
+
+        if add_to_grammar_queue:
+            self.grammar_queue.append(req)
+        else:
+            self.waiting_queue.append(req)
         return True
 
     def log_stats(self, stats):
@@ -570,6 +572,8 @@ class Scheduler:
         return self.running_batch
 
     def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
+        if self.grammar_queue:
+            self.move_ready_grammar_requests()
         # Handle the cases where prefill is not allowed
         if (
             self.batch_is_full or len(self.waiting_queue) == 0
@@ -707,6 +711,7 @@ class Scheduler:
             self.model_config,
             self.enable_overlap,
             self.spec_algorithm,
+            self.server_args.enable_custom_logit_processor,
         )
         new_batch.prepare_for_extend()
 
@@ -1182,6 +1187,46 @@ class Scheduler:
                 BatchEmbeddingOut(rids, finished_reasons, embeddings, prompt_tokens)
             )
 
+    def get_idle_batch(self):
+        idle_batch = ScheduleBatch.init_new(
+            [],
+            self.req_to_token_pool,
+            self.token_to_kv_pool,
+            self.tree_cache,
+            self.model_config,
+            self.enable_overlap,
+            self.spec_algorithm,
+        )
+        idle_batch.prepare_for_idle()
+        return idle_batch
+
+    def move_ready_grammar_requests(self):
+        """Move requests whose grammar objects are ready from grammar_queue to waiting_queue."""
+        num_ready_reqs = 0
+        for req in self.grammar_queue:
+            try:
+                req.grammar = req.grammar.result(timeout=0.05)
+                num_ready_reqs += 1
+            except futures._base.TimeoutError:
+                break
+
+        if self.tp_size > 1:
+            # Sync across TP ranks to make sure they have the same number of ready requests
+            tensor = torch.tensor(num_ready_reqs, dtype=torch.int32)
+            torch.distributed.all_reduce(
+                tensor, op=torch.distributed.ReduceOp.MAX, group=self.tp_cpu_group
+            )
+            num_ready_reqs_max = tensor.item()
+            for i in range(num_ready_reqs, num_ready_reqs_max):
+                self.grammar_queue[i].grammar = self.grammar_queue[i].grammar.result()
+            num_ready_reqs = num_ready_reqs_max
+
+        self.waiting_queue.extend(self.grammar_queue[:num_ready_reqs])
+        self.grammar_queue = self.grammar_queue[num_ready_reqs:]
+
+    def flush_cache_wrapped(self, recv_req: FlushCacheReq):
+        self.flush_cache()
+
     def flush_cache(self):
         """Flush the memory pool and cache."""
         if len(self.waiting_queue) == 0 and (
@@ -1261,6 +1306,8 @@ def run_scheduler_process(
     pipe_writer: multiprocessing.connection.Connection,
 ):
     try:
+        setproctitle.setproctitle(f"SP:scheduler")
+        faulthandler.enable()
         loggers = [PrometheusStatLogger(1, {"server_id": server_args.server_id}, 4096)]
         scheduler = Scheduler(
             server_args, gpu_id, tp_rank, dp_rank=None, loggers=loggers

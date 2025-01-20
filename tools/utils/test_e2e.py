@@ -74,7 +74,7 @@ def end_to_end(args):
             messages=messages,
             response_format=response_format,
             stream=args.stream,
-            max_tokens=12,
+            max_tokens=128,
         )
         print(response)
         if args.stream:
