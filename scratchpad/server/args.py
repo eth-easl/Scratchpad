@@ -62,9 +62,11 @@ class ServerArgs:
     num_continue_decode_steps: int = 10
     retract_decode_steps: int = 20
     mem_fraction_static: float = 0.8
+
     enable_dp_attention: bool = False
     # constrained
     constrained_json_whitespace_pattern: Optional[str] = None
+    enable_custom_logit_processor: bool = False
     # tokenization
     skip_special_tokens_in_output = True
     spaces_between_special_tokens_in_out = True
@@ -74,9 +76,14 @@ class ServerArgs:
     # logging stats
     enable_stats_logging: bool = True
 
-    # debugging
+    # backend
     attention_backend: Optional[str] = None
     sampling_backend: Optional[str] = None
+    grammar_backend: str = "xgrammar"  # or outlines
+
+    # debugging
+
+    enable_nan_detection: bool = True
     disable_flashinfer: bool = False
     disable_flashinfer_sampling: bool = False
     disable_radix_cache: bool = False
@@ -142,6 +149,11 @@ class ServerArgs:
         except:
             logger.warning("Failed to parse json_model_override_args")
             self.json_model_override_args = {}
+
+        if self.grammar_backend not in ["xgrammar", "outlines"]:
+            raise ValueError(
+                f"Invalid grammar_backend: {self.grammar_backend}, Expect one of ['xgrammar', 'outlines']"
+            )
 
     def update(self, args):
         for k, v in args.items():

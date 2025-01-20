@@ -4,10 +4,9 @@ import triton.language as tl
 from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple, Union, TYPE_CHECKING, Set
 
-from scratchpad.constrained import RegexGuide
-from scratchpad.constrained.jump_forward import JumpForwardMap
+from scratchpad.constrained.base_backend import BaseGrammarObject
+
 from scratchpad.memory.base_prefix_cache import BasePrefixCache
-from scratchpad.constrained.grammar import Grammar, BaseGrammarObject
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.pool import BaseTokenToKVPool, ReqToTokenPool
 from scratchpad.model_executor.forward_info import ForwardMode, CaptureHiddenMode
@@ -479,6 +478,9 @@ class ScheduleBatch:
     spec_algorithm: SpeculativeAlgorithm = None
     spec_info: Optional[SpecInfo] = None
 
+    # Enable custom logit processor
+    enable_custom_logit_processor: bool = False
+
     @classmethod
     def init_new(
         cls,
@@ -489,6 +491,7 @@ class ScheduleBatch:
         model_config: ModelConfig,
         enable_overlap: bool,
         spec_algorithm: SpeculativeAlgorithm,
+        enable_custom_logit_processor: bool,
     ):
         return cls(
             reqs=reqs,
@@ -502,6 +505,7 @@ class ScheduleBatch:
             has_grammar=any(req.grammar for req in reqs),
             device=req_to_token_pool.device,
             spec_algorithm=spec_algorithm,
+            enable_custom_logit_processor=enable_custom_logit_processor,
         )
 
     def batch_size(self):
@@ -852,9 +856,10 @@ class ScheduleBatch:
 
         for i, req in enumerate(self.reqs):
             if req.grammar is not None:
-                jump_helper = req.grammar.try_jump(req.tokenizer)
-                if jump_helper.can_jump():
-                    suffix_ids = jump_helper.suffix_ids
+                jump_helper = req.grammar.try_jump_forward(req.tokenizer)
+                if jump_helper:
+                    suffix_ids, _ = jump_helper
+
                     # Current ids, for cache and revert
                     cur_all_ids = tuple(req.origin_input_ids + req.output_ids)[:-1]
                     cur_output_ids = req.output_ids
@@ -870,6 +875,8 @@ class ScheduleBatch:
                         next_state,
                     ) = req.grammar.jump_forward_str_state(jump_helper)
 
+                    # Make the incrementally decoded text part of jump_forward_str
+                    # so that the UTF-8 will not corrupt
                     jump_forward_str = new_text + jump_forward_str
                     if not req.jump_forward_and_retokenize(
                         jump_forward_str, next_state
@@ -1088,6 +1095,7 @@ class ScheduleBatch:
             return_logprob=self.return_logprob,
             decoding_reqs=self.decoding_reqs,
             spec_algorithm=self.spec_algorithm,
+            enable_custom_logit_processor=self.enable_custom_logit_processor,
         )
 
     def __str__(self):

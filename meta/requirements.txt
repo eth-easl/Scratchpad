@@ -20,3 +20,7 @@ einops
 pillow
 tenacity
 orjson
+xgrammar>=0.1.10
+nvidia-cuda-nvrtc-cu12
+cuda-python
+setproctitle
