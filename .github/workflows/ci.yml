@@ -21,6 +21,8 @@ jobs:
         bash docker/build_image.sh dev docker no-upload
 
     - name: Run tests in Docker container
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         # Run your test suite inside the Docker container
         # Replace this with your actual test command
