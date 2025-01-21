@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple, Union, Any, Awaitable
+from typing import Dict, List, Optional, Tuple, Union, Any, Awaitable, TYPE_CHECKING
 import dataclasses
 import asyncio
 import sys
@@ -12,7 +12,6 @@ import fastapi
 from fastapi import BackgroundTasks
 import uvloop
 from scratchpad.sampling.sampling_params import SamplingParams
-from scratchpad.server.args import ServerArgs
 from .structs import (
     AbortReq,
     BatchEmbeddingOut,
@@ -44,6 +43,8 @@ from scratchpad.config.model_config import ModelConfig
 from .image_processor import get_dummy_image_processor, get_image_processor
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+if TYPE_CHECKING:
+    from scratchpad.server.args import ServerArgs
 
 
 @dataclasses.dataclass
@@ -68,7 +69,7 @@ class TokenizerManager:
 
     def __init__(
         self,
-        server_args: ServerArgs,
+        server_args: "ServerArgs",
     ):
         # Parse args
         self.server_args = server_args
@@ -150,7 +151,7 @@ class TokenizerManager:
                 "This model does not appear to be an embedding model by default. "
                 "Please add `--is-embedding` when launching the server or try another model."
             )
-
+        print(type(obj))
         obj.normalize_batch_and_arguments()
 
         if self.server_args.log_requests:

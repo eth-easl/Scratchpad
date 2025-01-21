@@ -1,8 +1,8 @@
 import os
 import re
 import torch
-from typing import List
-from scratchpad.server.args import ServerArgs
+from typing import List, TYPE_CHECKING
+
 from scratchpad.utils import logger
 from scratchpad.config.topping_config import ToppingType
 from scratchpad.model_executor.forward_info import ForwardBatch
@@ -11,6 +11,10 @@ from scratchpad.memory.topping_pool import ToppingMemPool
 from scratchpad.config.topping_config import ToppingConfig
 from scratchpad.nn.toppings import LoRAAdapter, DeltaAdapter, get_topping_layer
 from scratchpad.utils import replace_submodule
+
+if TYPE_CHECKING:
+    from scratchpad.server.args import ServerArgs
+
 
 num_replicated_lora = os.environ.get("SPB_NUM_REPLICATED_LORA", 1)
 num_replicated_delta = os.environ.get("SPB_NUM_REPLICATED_DELTA", 1)
@@ -72,7 +76,7 @@ def get_stacked_name(name):
 class ToppingsManager:
     def __init__(
         self,
-        server_args: ServerArgs,
+        server_args: "ServerArgs",
         base_model,
         base_hf_config,
         load_config,

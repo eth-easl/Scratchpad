@@ -1,17 +1,17 @@
 import zmq
 import zmq.asyncio
-from scratchpad.server.args import ServerArgs
 from .engine_state import EngineStates
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .structs import MemoryPoolControlReqInput, RegisterToppingsReqInput
+    from scratchpad.server.args import ServerArgs
 
 
 class SystemController:
     """SystemController is a process that controls the internal of Scratchpad"""
 
-    def __init__(self, server_args: ServerArgs):
+    def __init__(self, server_args: "ServerArgs"):
         self.server_args = server_args
         context = zmq.asyncio.Context(2)
         self.send_to_scheduler = context.socket(zmq.PUSH)

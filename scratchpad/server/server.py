@@ -10,8 +10,7 @@ from fastapi import FastAPI, Request, File, Form, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from scratchpad.managers import TokenizerManager, run_detokenizer_process
-from scratchpad.scheduler.scheduler import run_scheduler_process
+
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -32,10 +31,10 @@ from scratchpad.server.controller import (
 )
 from scratchpad.server.middlewares import add_api_key_middleware
 from scratchpad.server.openai_api.protocol import ModelCard, ModelList, ErrorResponse
+from scratchpad.server.controller import get_controller
+from scratchpad.managers.structs import GenerateReqInput
 
 from .args import ServerArgs
-from .protocol import GenerateReqInput
-from scratchpad.server.controller import get_controller
 
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
@@ -235,6 +234,8 @@ def launch_server(model_name, args: "ServerArgs"):
         tp_size_per_node * args.node_rank,
         tp_size_per_node * (args.node_rank + 1),
     )
+    # TODO(xiaozhe): avoid circular import
+    from scratchpad.scheduler.scheduler import run_scheduler_process
 
     for tp_rank in tp_rank_range:
         reader, writer = mp.Pipe(duplex=False)
@@ -252,6 +253,8 @@ def launch_server(model_name, args: "ServerArgs"):
         # so they can just wait here.
         while True:
             pass
+    from scratchpad.managers import TokenizerManager, run_detokenizer_process
+
     detoken_proc = mp.Process(
         target=run_detokenizer_process,
         args=(args,),

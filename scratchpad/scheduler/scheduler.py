@@ -36,8 +36,6 @@ from scratchpad.memory.radix_cache import RadixCache
 from scratchpad.server.args import ServerArgs, global_args
 from scratchpad.utils import (
     broadcast_pyobj,
-    is_generation_model,
-    is_multimodal_model,
     kill_parent_process,
     set_random_seed,
     get_processor,
@@ -45,7 +43,6 @@ from scratchpad.utils import (
     get_exception_traceback,
     logger,
     get_zmq_socket,
-    RequestRejectedException,
 )
 from ..managers.tp_worker import TpModelWorker
 from ..managers.structs import (

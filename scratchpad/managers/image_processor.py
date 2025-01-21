@@ -3,12 +3,10 @@ import concurrent.futures
 import multiprocessing as mp
 import os
 from abc import ABC, abstractmethod
-from typing import List, Optional, Union
+from typing import List, Optional, Union, TYPE_CHECKING
 
 import numpy as np
 import transformers
-import requests
-from PIL import Image
 from scratchpad.utils import (
     get_processor,
     expand2square,
@@ -17,12 +15,14 @@ from scratchpad.utils import (
     get_exception_traceback,
     logger,
 )
-from scratchpad.server.args import ServerArgs
+
+if TYPE_CHECKING:
+    from scratchpad.server.args import ServerArgs
 
 global global_processor
 
 
-def init_global_processor(server_args: ServerArgs):
+def init_global_processor(server_args: "ServerArgs"):
     """Init the global processor for multi modal models."""
     global global_processor
     transformers.logging.set_verbosity_error()
@@ -352,7 +352,7 @@ class Qwen2VLImageProcessor(BaseImageProcessor):
 
 
 def get_image_processor(
-    hf_config, server_args: ServerArgs, processor
+    hf_config, server_args: "ServerArgs", processor
 ) -> BaseImageProcessor:
     if "MllamaForConditionalGeneration" in hf_config.architectures:
         return MllamaImageProcessor(hf_config, server_args, processor)
