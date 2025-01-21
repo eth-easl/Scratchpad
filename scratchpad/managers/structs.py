@@ -1,10 +1,12 @@
-import copy
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union
-from scratchpad.scheduler.schedule_batch import BaseFinishReason
+from typing import Dict, List, Optional, Union, TYPE_CHECKING
+
 from scratchpad.sampling.sampling_params import SamplingParams
 from enum import Enum
+
+if TYPE_CHECKING:
+    from scratchpad.scheduler.schedule_batch import BaseFinishReason
 
 
 @dataclass
@@ -48,6 +50,111 @@ class GenerateReqInput:
 
     # Session info for continual prompting
     session_params: Optional[Union[List[Dict], Dict]] = None
+
+    def post_init(self):
+        if (self.text is None and self.input_ids is None) or (
+            self.text is not None and self.input_ids is not None
+        ):
+            raise ValueError("Either text or input_ids should be provided.")
+
+        if (
+            isinstance(self.sampling_params, dict)
+            and self.sampling_params.get("n", 1) != 1
+        ):
+            is_single = False
+        else:
+            if self.text is not None:
+                is_single = isinstance(self.text, str)
+            else:
+                is_single = isinstance(self.input_ids[0], int)
+        self.is_single = is_single
+
+        if is_single:
+            if self.sampling_params is None:
+                self.sampling_params = {}
+            if self.rid is None:
+                self.rid = uuid.uuid4().hex
+            if self.return_logprob is None:
+                self.return_logprob = False
+            if self.logprob_start_len is None:
+                self.logprob_start_len = -1
+            if self.top_logprobs_num is None:
+                self.top_logprobs_num = 0
+        else:
+            parallel_sample_num_list = []
+            if isinstance(self.sampling_params, dict):
+                parallel_sample_num = self.sampling_params.get("n", 1)
+            elif isinstance(self.sampling_params, list):
+                for sp in self.sampling_params:
+                    parallel_sample_num = sp.get("n", 1)
+                    parallel_sample_num_list.append(parallel_sample_num)
+                parallel_sample_num = max(parallel_sample_num_list)
+                all_equal = all(
+                    element == parallel_sample_num
+                    for element in parallel_sample_num_list
+                )
+                if parallel_sample_num > 1 and (not all_equal):
+                    # TODO cope with the case that the parallel_sample_num is different for different samples
+                    raise ValueError(
+                        "The parallel_sample_num should be the same for all samples in sample params."
+                    )
+            else:
+                parallel_sample_num = 1
+            self.parallel_sample_num = parallel_sample_num
+
+            if parallel_sample_num != 1:
+                # parallel sampling +1 represents the original prefill stage
+                num = parallel_sample_num + 1
+                if isinstance(self.text, list):
+                    # suppot batch operation
+                    self.batch_size = len(self.text)
+                    num = num * len(self.text)
+                elif isinstance(self.input_ids, list) and isinstance(
+                    self.input_ids[0], list
+                ):
+                    self.batch_size = len(self.input_ids)
+                    num = num * len(self.input_ids)
+                else:
+                    self.batch_size = 1
+            else:
+                # support select operation
+                num = len(self.text) if self.text is not None else len(self.input_ids)
+                self.batch_size = num
+
+            if self.image_data is None:
+                self.image_data = [None] * num
+
+            elif not isinstance(self.image_data, list):
+                self.image_data = [self.image_data] * num
+            elif isinstance(self.image_data, list):
+                # multi-image with n > 1
+                self.image_data = self.image_data * num
+
+            if self.sampling_params is None:
+                self.sampling_params = [{}] * num
+            elif not isinstance(self.sampling_params, list):
+                self.sampling_params = [self.sampling_params] * num
+
+            if self.rid is None:
+                self.rid = [uuid.uuid4().hex for _ in range(num)]
+            else:
+                if not isinstance(self.rid, list):
+                    raise ValueError("The rid should be a list.")
+
+            if self.return_logprob is None:
+                self.return_logprob = [False] * num
+            elif not isinstance(self.return_logprob, list):
+                self.return_logprob = [self.return_logprob] * num
+
+            if self.logprob_start_len is None:
+                self.logprob_start_len = [-1] * num
+            elif not isinstance(self.logprob_start_len, list):
+                self.logprob_start_len = [self.logprob_start_len] * num
+
+            if self.top_logprobs_num is None:
+                self.top_logprobs_num = [0] * num
+            elif not isinstance(self.top_logprobs_num, list):
+                self.top_logprobs_num = [self.top_logprobs_num] * num
 
     def normalize_batch_and_arguments(self):
         if (
@@ -342,7 +449,7 @@ class BatchTokenIDOut:
     # The request id
     rids: List[str]
     # The finish reason
-    finished_reasons: List[BaseFinishReason]
+    finished_reasons: List["BaseFinishReason"]
     # For incremental decoding
     # The version id to sync decode status with in detokenizer_manager
     vids: List[int]
@@ -405,7 +512,7 @@ class BatchEmbeddingOut:
     # The request id
     rids: List[str]
     # The finish reason
-    finished_reasons: List[BaseFinishReason]
+    finished_reasons: List["BaseFinishReason"]
     # The output embedding
     embeddings: List[List[float]]
     # Token counts

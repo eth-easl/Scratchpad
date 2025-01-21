@@ -1,10 +1,8 @@
 import torch
 import triton
 import triton.language as tl
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union, TYPE_CHECKING, Set
-
-from scratchpad.constrained.base_backend import BaseGrammarObject
 
 from scratchpad.memory.base_prefix_cache import BasePrefixCache
 from scratchpad.memory.chunk_cache import ChunkCache
@@ -19,12 +17,12 @@ from scratchpad.model_executor.speculative.spec_info import (
     SpeculativeAlgorithm,
     SpecInfo,
 )
-from scratchpad.server.args import global_args
 
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
 
 if TYPE_CHECKING:
     from scratchpad.managers.toppings_manager import ToppingsManager
+    from scratchpad.constrained.base_backend import BaseGrammarObject
 
 
 class BaseFinishReason:
@@ -232,7 +230,7 @@ class Req:
         self.embedding = None
 
         # Constrained decoding
-        self.grammar: Optional[BaseGrammarObject] = None
+        self.grammar: Optional["BaseGrammarObject"] = None
 
         # The number of cached tokens, that were already cached in the KV cache
         self.cached_tokens = 0

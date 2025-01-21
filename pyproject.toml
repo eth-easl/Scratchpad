@@ -1,6 +1,6 @@
 [project]
 name = "scratchpad"
-version = "0.0.1"
+version = "0.1.14"
 description = "scratchpad"
 authors = [{ name = "Xiaozhe Yao", email = "askxzyao@gmail.com" }]
 requires-python = ">=3.10"

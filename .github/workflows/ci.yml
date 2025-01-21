@@ -9,9 +9,6 @@ on:
 jobs:
   build:
     runs-on: rtx3090x1
-    strategy:
-      matrix:
-        python-version: [3.10]
 
     steps:
     - uses: actions/checkout@v2
@@ -21,13 +18,13 @@ jobs:
 
     - name: Build Docker image
       run: |
-        bash docker/build_image.sh dev docker
+        bash docker/build_image.sh dev docker no-upload
 
     - name: Run tests in Docker container
       run: |
         # Run your test suite inside the Docker container
         # Replace this with your actual test command
-        docker run scratchpad-dev:latest python -m pytest tests/
+        docker run scratchpad-dev:latest python -m pytest -s tests/
 
     - name: Docker image cleanup
       if: always()

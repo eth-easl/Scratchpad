@@ -1,6 +1,5 @@
-import typing
-
 import torch
+from typing import List
 
 from ..orchestrator import _BatchedPenalizer, _TokenIDs
 
@@ -31,9 +30,12 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
         padded_stop_token_ids = torch.nn.utils.rnn.pad_sequence(
             sequences=[
                 torch.tensor(
-                    data=list(
-                        req.sampling_params.stop_token_ids
-                        | {req.tokenizer.eos_token_id}
+                    data=(
+                        list(
+                            (req.sampling_params.stop_token_ids or set())
+                            | (req.tokenizer.additional_stop_token_ids or set())
+                            | {req.tokenizer.eos_token_id}
+                        )
                     ),
                     dtype=torch.int64,
                     device=self.orchestrator.device,
@@ -67,10 +69,6 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
         )
 
     def _teardown(self):
-        del self.min_new_tokens
-        del self.stop_token_penalties
-        del self.len_output_tokens
-
         self.min_new_tokens = None
         self.stop_token_penalties = None
         self.len_output_tokens = None
@@ -86,9 +84,7 @@ class BatchedMinNewTokensPenalizer(_BatchedPenalizer):
         logits[mask] += self.stop_token_penalties[mask]
         return logits
 
-    def _filter(
-        self, indices_to_keep: typing.List[int], indices_tensor_to_keep: torch.Tensor
-    ):
+    def _filter(self, indices_to_keep: List[int], indices_tensor_to_keep: torch.Tensor):
         self.min_new_tokens = self.min_new_tokens[indices_tensor_to_keep]
         self.stop_token_penalties = self.stop_token_penalties[indices_tensor_to_keep]
         self.len_output_tokens = self.len_output_tokens[indices_tensor_to_keep]
