@@ -261,10 +261,10 @@ class Scheduler:
         t.start()
 
         # Init profiler
-        if os.getenv("SGLANG_TORCH_PROFILER_DIR", "") == "":
+        if os.getenv("SP_TORCH_PROFILER_DIR", "") == "":
             self.profiler = None
         else:
-            self.torch_profiler_trace_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR")
+            self.torch_profiler_trace_dir = os.getenv("SP_TORCH_PROFILER_DIR")
             logger.info(
                 "Profiling enabled. Traces will be saved to: %s",
                 self.torch_profiler_trace_dir,
@@ -276,6 +276,7 @@ class Scheduler:
                 ],
                 with_stack=True,
             )
+        logger.info(f"Scheduler initialized.")
 
     def watchdog_thread(self):
         self.watchdog_last_forward_ct = 0

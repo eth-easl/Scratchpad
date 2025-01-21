@@ -6,7 +6,7 @@ requests
 uvicorn
 zmq
 huggingface_hub
-transformers
+transformers==4.46.3
 outlines==0.0.46
 uvloop
 nvidia-ml-py
