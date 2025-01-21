@@ -34,6 +34,7 @@ from .conversation import (
     register_conv_template,
 )
 from scratchpad.managers.structs import EmbeddingReqInput, GenerateReqInput
+from scratchpad.constrained.func_calls import TOOLS_TAG_LIST, parse_tool_response
 from .protocol import (
     BatchRequest,
     BatchResponse,
@@ -61,6 +62,8 @@ from .protocol import (
     LogProbs,
     TopLogprob,
     UsageInfo,
+    ToolCall,
+    FunctionResponse,
 )
 from scratchpad.server.controller import model_to_topping
 from scratchpad.utils import logger
@@ -832,6 +835,21 @@ def v1_chat_generate_request(
         #  - image_data: None or a list of image strings (URLs or base64 strings).
         #    None skips any image processing in GenerateReqInput.
         if not isinstance(request.messages, str):
+            tools = None
+            if request.tools and request.tool_choice != "none":
+                request.skip_special_tokens = False
+                if request.stream:
+                    logger.warning("Streaming is not supported with tools.")
+                    request.stream = False
+                if not isinstance(request.tool_choice, str):
+                    tools = [
+                        item.function.model_dump()
+                        for item in request.tools
+                        if item.function.name == request.tool_choice.function.name
+                    ]
+                else:
+                    tools = [item.function.model_dump() for item in request.tools]
+
             # Apply chat template and its stop strings.
             if chat_template_name is None:
                 openai_compatible_messages = []
@@ -856,6 +874,7 @@ def v1_chat_generate_request(
                     openai_compatible_messages,
                     tokenize=True,
                     add_generation_prompt=True,
+                    tools=tools,
                 )
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
@@ -942,7 +961,7 @@ def v1_chat_generate_request(
     return adapted_request, all_requests
 
 
-def v1_chat_generate_response(request, ret, to_file=False):
+def v1_chat_generate_response(request, ret, to_file=False, cache_report=False):
     choices = []
 
     for idx, ret_item in enumerate(ret):
@@ -957,11 +976,15 @@ def v1_chat_generate_response(request, ret, to_file=False):
                 output_top_logprobs=ret_item["meta_info"]["output_top_logprobs"],
             )
             token_logprobs = []
-            for token, logprob in zip(logprobs.tokens, logprobs.token_logprobs):
+            for token_idx, (token, logprob) in enumerate(
+                zip(logprobs.tokens, logprobs.token_logprobs)
+            ):
                 token_bytes = list(token.encode("utf-8"))
                 top_logprobs = []
                 if logprobs.top_logprobs:
-                    for top_token, top_logprob in logprobs.top_logprobs[0].items():
+                    for top_token, top_logprob in logprobs.top_logprobs[
+                        token_idx
+                    ].items():
                         top_token_bytes = list(top_token.encode("utf-8"))
                         top_logprobs.append(
                             TopLogprob(
@@ -983,27 +1006,70 @@ def v1_chat_generate_response(request, ret, to_file=False):
         else:
             choice_logprobs = None
 
+        finish_reason = ret_item["meta_info"]["finish_reason"]
+
+        tool_calls = None
+        text = ret_item["text"]
+
+        if isinstance(request, list):
+            tool_choice = request[idx].tool_choice
+            tools = request[idx].tools
+        else:
+            tool_choice = request.tool_choice
+            tools = request.tools
+
+        if tool_choice != "none" and any([i in text for i in TOOLS_TAG_LIST]):
+            if finish_reason == "stop":
+                finish_reason = "tool_calls"
+            try:
+                text, call_info_list = parse_tool_response(text, tools)  # noqa
+                tool_calls = [
+                    ToolCall(
+                        id=str(call_info[0]),
+                        function=FunctionResponse(
+                            name=call_info[1], arguments=call_info[2]
+                        ),
+                    )
+                    for call_info in call_info_list
+                ]
+            except Exception as e:
+                logger.error(f"Exception: {e}")
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    "Failed to parse fc related info to json format!",
+                )
+
         if to_file:
             # to make the choice data json serializable
             choice_data = {
                 "index": 0,
-                "message": {"role": "assistant", "content": ret_item["text"]},
+                "message": {
+                    "role": "assistant",
+                    "content": ret_item["text"] if tool_calls is None else None,
+                    "tool_calls": tool_calls,
+                },
                 "logprobs": choice_logprobs,
-                "finish_reason": (
-                    ret_item["meta_info"]["finish_reason"]["type"]
-                    if ret_item["meta_info"]["finish_reason"]
-                    else ""
+                "finish_reason": (finish_reason["type"] if finish_reason else ""),
+                "matched_stop": (
+                    finish_reason["matched"]
+                    if finish_reason and "matched" in finish_reason
+                    else None
                 ),
             }
         else:
             choice_data = ChatCompletionResponseChoice(
                 index=idx,
-                message=ChatMessage(role="assistant", content=ret_item["text"]),
+                message=ChatMessage(
+                    role="assistant",
+                    content=ret_item["text"] if tool_calls is None else None,
+                    tool_calls=tool_calls,
+                ),
                 logprobs=choice_logprobs,
-                finish_reason=(
-                    ret_item["meta_info"]["finish_reason"]["type"]
-                    if ret_item["meta_info"]["finish_reason"]
-                    else ""
+                finish_reason=(finish_reason["type"] if finish_reason else ""),
+                matched_stop=(
+                    finish_reason["matched"]
+                    if finish_reason and "matched" in finish_reason
+                    else None
                 ),
             )
 
@@ -1039,6 +1105,7 @@ def v1_chat_generate_response(request, ret, to_file=False):
             ret[i]["meta_info"]["prompt_tokens"] for i in range(0, len(ret), request.n)
         )
         completion_tokens = sum(item["meta_info"]["completion_tokens"] for item in ret)
+        cached_tokens = sum(item["meta_info"].get("cached_tokens", 0) for item in ret)
         response = ChatCompletionResponse(
             id=ret[0]["meta_info"]["id"],
             model=request.model,
@@ -1047,6 +1114,9 @@ def v1_chat_generate_response(request, ret, to_file=False):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                prompt_tokens_details=(
+                    {"cached_tokens": cached_tokens} if cache_report else None
+                ),
             ),
         )
         return response

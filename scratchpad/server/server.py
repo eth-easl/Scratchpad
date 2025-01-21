@@ -7,6 +7,7 @@ from http import HTTPStatus
 import multiprocessing as mp
 from dataclasses import asdict
 from fastapi import FastAPI, Request, File, Form, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from scratchpad.managers import TokenizerManager, run_detokenizer_process
@@ -30,7 +31,7 @@ from scratchpad.server.controller import (
     mount_controller,
 )
 from scratchpad.server.middlewares import add_api_key_middleware
-from scratchpad.server.openai_api.protocol import ModelCard, ModelList
+from scratchpad.server.openai_api.protocol import ModelCard, ModelList, ErrorResponse
 
 from .args import ServerArgs
 from .protocol import GenerateReqInput
@@ -52,6 +53,16 @@ tokenizer_manager = None
 server_args = None
 
 
+def get_model_cards():
+    served_model_names = [tokenizer_manager.served_model_name]
+    model_cards = []
+    for served_model_name in served_model_names:
+        model_cards.append(ModelCard(id=served_model_name, root=None))
+    for extra_model in get_controller().get_toppings():
+        model_cards.append(ModelCard(id=extra_model, root=served_model_name))
+    return model_cards
+
+
 @app.get("/system_info")
 async def system_info():
     return JSONResponse(status_code=200, content={"system_info": asdict(server_args)})
@@ -63,6 +74,10 @@ async def health() -> Response:
 
 
 async def generate_request(obj: GenerateReqInput, request: Request):
+    if obj.model not in [x.id for x in get_model_cards()]:
+        return ErrorResponse(
+            message=f"Model {obj.model} not found", code=404, type="MODEL_NOT_FOUND"
+        )
     """Handle a generate request."""
     if obj.stream:
 
@@ -96,11 +111,55 @@ app.put("/generate")(generate_request)
 
 @app.post("/v1/completions")
 async def openai_v1_completions(raw_request: Request):
+    model = await raw_request.json()
+    model = model.get("model", None)
+    if model is None:
+        return JSONResponse(
+            content=jsonable_encoder(
+                ErrorResponse(
+                    message=f"Model is not specified",
+                    code=401,
+                    type="MODEL_NOT_SPECIFIED",
+                )
+            ),
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if model not in [x.id for x in get_model_cards()]:
+        return JSONResponse(
+            content=jsonable_encoder(
+                ErrorResponse(
+                    message=f"Model {model} not found", code=404, type="MODEL_NOT_FOUND"
+                )
+            ),
+            status_code=HTTPStatus.NOT_FOUND,
+        )
     return await v1_completions(tokenizer_manager, raw_request)
 
 
 @app.post("/v1/chat/completions")
 async def openai_v1_chat_completions(raw_request: Request):
+    model = await raw_request.json()
+    model = model.get("model", None)
+    if model is None:
+        return JSONResponse(
+            content=jsonable_encoder(
+                ErrorResponse(
+                    message=f"Model is not specified",
+                    code=401,
+                    type="MODEL_NOT_SPECIFIED",
+                )
+            ),
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    if model not in [x.id for x in get_model_cards()]:
+        return JSONResponse(
+            content=jsonable_encoder(
+                ErrorResponse(
+                    message=f"Model {model} not found", code=404, type="MODEL_NOT_FOUND"
+                )
+            ),
+            status_code=HTTPStatus.NOT_FOUND,
+        )
     return await v1_chat_completions(tokenizer_manager, raw_request)
 
 
@@ -113,13 +172,7 @@ async def openai_v1_embeddings(raw_request: Request):
 @app.get("/v1/models")
 def available_models():
     """Show available models."""
-    served_model_names = [tokenizer_manager.served_model_name]
-    model_cards = []
-    for served_model_name in served_model_names:
-        model_cards.append(ModelCard(id=served_model_name, root=None))
-    for extra_model in get_controller().get_toppings():
-        model_cards.append(ModelCard(id=extra_model, root=served_model_name))
-    return ModelList(data=model_cards)
+    return ModelList(data=get_model_cards())
 
 
 @app.post("/v1/files")

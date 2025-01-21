@@ -536,49 +536,27 @@ class ModelRunner:
     def sample(
         self, logits_output: LogitsProcessorOutput, forward_batch: ForwardBatch
     ) -> torch.Tensor:
-        # Put CPU-heavy tasks here. They will be overlapped with the forward pass.
+        # Apply logit bias
         sampling_info = forward_batch.sampling_info
-        sampling_info.update_regex_vocab_mask()
-        sampling_info.update_penalties()
-        logits = self.apply_logits_bias(logits_output.next_token_logits, sampling_info)
+        if sampling_info.sampling_info_done:
+            # Overlap mode: the function update_regex_vocab_mask was executed
+            # in process_batch_result of the last batch.
+            if sampling_info.grammars:
+                sampling_info.sampling_info_done.wait()
+        else:
+            # Normal mode: Put CPU-heavy tasks here. They will be overlapped with the forward pass.
+            sampling_info.update_regex_vocab_mask()
+            sampling_info.update_penalties()
+        sampling_info.apply_logits_bias(logits_output.next_token_logits)
 
-        # Sample the next tokens.
-        next_token_ids = self.sampler(logits, sampling_info)
+        # Sample the next tokens
+        next_token_ids = self.sampler(
+            logits_output,
+            sampling_info,
+            forward_batch.return_logprob,
+            forward_batch.top_logprobs_nums,
+        )
         return next_token_ids
-
-    def apply_logits_bias(self, logits: torch.Tensor, sampling_info: SamplingBatchInfo):
-        # Apply logit_bias
-        if sampling_info.logit_bias is not None:
-            logits.add_(sampling_info.logit_bias)
-
-        # min-token, presence, frequency
-        if sampling_info.linear_penalties is not None:
-            logits.add_(sampling_info.linear_penalties)
-
-        # repetition
-        if sampling_info.scaling_penalties is not None:
-            logits = torch.where(
-                logits > 0,
-                logits / sampling_info.scaling_penalties,
-                logits * sampling_info.scaling_penalties,
-            )
-
-        # Apply regex vocab_mask
-        if sampling_info.vocab_mask is not None:
-            logits = logits.masked_fill(sampling_info.vocab_mask, float("-inf"))
-
-        return logits
-
-    def expand_kv_pool(self, increments):
-        if self.server_args.use_heterogeneous_pool and isinstance(
-            self.token_to_kv_pool, HeterogeneousMHATokenToKVPool
-        ):
-            try:
-                self.token_to_kv_pool.expand(increments, self.gpu_id)
-                self.reconfigure_post_mempool_adjuts()
-                self.max_total_num_tokens += increments
-            except Exception as e:
-                pass
 
     @property
     def model_is_mrope(self) -> bool:
