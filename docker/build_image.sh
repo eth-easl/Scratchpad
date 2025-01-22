@@ -2,7 +2,7 @@
 arch=$(uname -m)
 version=$1
 buildtool=$2
-upload=$3
+anno=$3
 # if version is not provided, raise error
 if [ -z "$version" ]; then
     echo "Please provide version number"
@@ -11,7 +11,7 @@ fi
 echo "Building image for $arch, version $version"
 DOCKER_BUILDKIT=0 $buildtool build -f docker/Dockerfile.$arch-cuda . -t ghcr.io/xiaozheyao/scratchpad:${version}dev-$arch --build-arg ARCH=$arch
 
-if [ "$upload" = "upload" ]; then
+if [ "$anno" = "upload" ]; then
     echo "Uploading image to ghcr.io"
     $buildtool push ghcr.io/xiaozheyao/scratchpad:${version}dev-$arch
 fi

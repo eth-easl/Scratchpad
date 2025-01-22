@@ -458,3 +458,7 @@ def dataclass_to_string_truncated(data, max_length=2048):
         )
     else:
         return str(data)
+
+
+def kill_all_scratchpad_processes():
+    os.system("ps aux | grep 'sp' | awk '{print $2}' |xargs kill -9")

@@ -152,7 +152,6 @@ class Conversation:
                     ret += f"{message.strip()}<|eot_id|>"
                 else:
                     ret += f"<|start_header_id|>{role}<|end_header_id|>\n\n"
-            # print(ret)
             return ret
         elif self.sep_style == SeparatorStyle.LLAMA2:
             seps = [self.sep, self.sep2]

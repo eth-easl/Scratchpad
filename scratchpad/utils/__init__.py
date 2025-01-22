@@ -7,3 +7,5 @@ from . import envs
 from .exceptions import *
 from .compile import *
 from .lock import *
+from .client.utils import *
+from .client.req import *
