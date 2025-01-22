@@ -25,7 +25,7 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         mkdir -p shared
-        docker run -v "$PWD/shared:/shared" --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -e HF_TOKEN=$HF_TOKEN ghcr.io/xiaozheyao/scratchpad:devdev-x86_64 python -m pytest --cache-clear --cov=app tests/ > /shared/pytest-coverage.txt
+        docker run -v "$PWD/shared:/shared" --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -e HF_TOKEN=$HF_TOKEN ghcr.io/xiaozheyao/scratchpad:devdev-x86_64 /bin/bash -c "python -m pytest --cache-clear --cov=app tests/ > /shared/pytest-coverage.txt"
 
     - name: Comment coverage
       uses: coroo/pytest-coverage-commentator@v1.0.2
