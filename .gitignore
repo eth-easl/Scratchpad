@@ -7,3 +7,4 @@ pyrightconfig.json
 .zed
 .data
 *.ipynb
+.coverage

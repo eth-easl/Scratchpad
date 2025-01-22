@@ -34,4 +34,5 @@ filterwarnings = [
 ]
 markers = [
     "slow: lower-importance tests that take an excessive amount of time",
+    "gpu: tests that require GPU",
 ]

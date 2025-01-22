@@ -151,7 +151,6 @@ class TokenizerManager:
                 "This model does not appear to be an embedding model by default. "
                 "Please add `--is-embedding` when launching the server or try another model."
             )
-        print(type(obj))
         obj.normalize_batch_and_arguments()
 
         if self.server_args.log_requests:

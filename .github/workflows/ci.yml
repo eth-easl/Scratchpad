@@ -18,15 +18,19 @@ jobs:
 
     - name: Build Docker image
       run: |
-        bash docker/build_image.sh dev docker no-upload
+        bash docker/build_image.sh dev docker test
 
     - name: Run tests in Docker container
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        # Run your test suite inside the Docker container
-        # Replace this with your actual test command
-        docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -e HF_TOKEN=$HF_TOKEN ghcr.io/xiaozheyao/scratchpad:devdev-x86_64 python -m pytest -s tests/
+        mkdir -p shared
+        docker run -v "$PWD/shared:/shared" --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -e HF_TOKEN=$HF_TOKEN ghcr.io/xiaozheyao/scratchpad:devdev-x86_64 "python -m pytest --cache-clear --cov=app -s tests/ > /shared/pytest-coverage.txt "
+
+    - name: Comment coverage
+      uses: coroo/pytest-coverage-commentator@v1.0.2
+      with:
+        pytest-coverage: shared/pytest-coverage.txt
 
     - name: Docker image cleanup
       if: always()
