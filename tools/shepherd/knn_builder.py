@@ -51,22 +51,22 @@ def prepare_data(dataset):
 
 
 def main(args):
-    train, test = construct_ds(test_ratio=0.2, seed=42)
-    with open(f".local/shepherd/llm_train.jsonl", "w") as f:
+    train, test = construct_ds(test_ratio=0.1, seed=42)
+    with open(f".local/shepherd/llm_train_91.jsonl", "w") as f:
         for row in train:
             f.write(json.dumps(row) + "\n")
-    with open(f".local/shepherd/llm_test.jsonl", "w") as f:
+    with open(f".local/shepherd/llm_test_91.jsonl", "w") as f:
         for row in test:
             f.write(json.dumps(row) + "\n")
 
     train_results = prepare_data(train)
     test_results = prepare_data(test)
 
-    with open(f".local/shepherd/llm_responses_test.jsonl", "w") as f:
+    with open(f".local/shepherd/llm_responses_test_91.jsonl", "w") as f:
         for result in test_results:
             f.write(json.dumps(result) + "\n")
     print(f"Finish writing test results to .local/shepherd/llm_responses_test.jsonl")
-    with open(f".local/shepherd/llm_responses_train.jsonl", "w") as f:
+    with open(f".local/shepherd/llm_responses_train_91.jsonl", "w") as f:
         for result in train_results:
             f.write(json.dumps(result) + "\n")
     print(f"Finish writing train results to .local/shepherd/llm_responses_train.jsonl")

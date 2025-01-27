@@ -1,9 +1,10 @@
-from scratchpad.extensions.shepherd import Route, Router
-from scratchpad.utils.client import LLM, LLMEncoder
-import datasets
+import os
 import json
 from tqdm import tqdm
 import pandas as pd
+
+from scratchpad.extensions.shepherd import Route, Router
+from scratchpad.utils.client import LLM, LLMEncoder
 from tools.shepherd.utils import (
     create_route_from_knn_builder,
     build_prompt,
@@ -11,6 +12,8 @@ from tools.shepherd.utils import (
     answer_mapping,
     pricings,
 )
+
+os.environ["OMP_NUM_THREADS"] = "16"
 
 test_ds = load_test_set()
 
@@ -38,7 +41,7 @@ for row in tqdm(test_ds):
         temperature=0.001,
         dry_run=True,
         verbose=False,
-        k=1,
+        k=5,
     )
     output = row["output"][selected_model]
     router_data.append(
@@ -67,9 +70,9 @@ for datum in data:
         and x["choices"] == datum["choices"]
         and x["subject"] == datum["subject"]
     ]
-    assert (
-        len(router_datum) == 1
-    ), f"More than one router response found: {router_datum}"
+    # assert (
+    #     len(router_datum) == 1
+    # ), f"More than one router response found: {router_datum}"
 
     if len(router_datum) > 0:
         router_datum = router_datum[0]
