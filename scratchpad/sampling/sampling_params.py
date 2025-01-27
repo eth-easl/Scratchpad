@@ -35,7 +35,11 @@ class SamplingParams:
         self.top_p = top_p
         self.top_k = top_k
         self.min_p = min_p
+        if frequency_penalty is None:
+            frequency_penalty = 0.0
         self.frequency_penalty = frequency_penalty
+        if presence_penalty is None:
+            presence_penalty = 0.0
         self.presence_penalty = presence_penalty
         self.repetition_penalty = repetition_penalty
         self.stop_strs = stop

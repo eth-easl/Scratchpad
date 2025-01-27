@@ -1,7 +1,7 @@
 import os
-from scratchpad.utils import logger
+import numpy as np
 from collections import Counter
-
+from scratchpad.utils import logger
 from ._base import RoutingPolicy
 
 try:
