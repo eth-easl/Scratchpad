@@ -553,3 +553,28 @@ register_conv_template(
         image_token="<|vision_start|><|image_pad|><|vision_end|>",
     )
 )
+
+register_conv_template(
+    Conversation(
+        name="deepseek-v3",
+        system_message="You are a helpful assistant.",
+        system_template="{system_message}",
+        roles=("<｜User｜>", "<｜Assistant｜>"),
+        sep_style=SeparatorStyle.DEEPSEEK_CHAT,
+        sep="",
+        stop_str=["<｜end▁of▁sentence｜>"],
+    )
+)
+
+register_conv_template(
+    Conversation(
+        name="deepseek-r1",
+        system_message="You are a helpful assistant.",
+        system_template="{system_message}",
+        roles=("<｜User｜>", "<｜Assistant｜>"),
+        sep_style=SeparatorStyle.DEEPSEEK_CHAT,
+        sep="",
+        stop_str=["<｜end▁of▁sentence｜>"],
+    )
+)
+
