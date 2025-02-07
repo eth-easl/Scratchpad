@@ -13,7 +13,6 @@ except ImportError:
 
 class NearestNeighborPolicy(RoutingPolicy):
     def build(self):
-
         super().build()
         self.index = faiss.IndexFlatL2(self.embeddings[0].shape[1])
         for i, embedding in enumerate(self.embeddings):

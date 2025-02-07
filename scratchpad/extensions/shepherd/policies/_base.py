@@ -1,5 +1,6 @@
 import os
-from typing import List
+import torch
+from typing import List, Optional
 from safetensors import safe_open
 from safetensors.numpy import save_file
 
@@ -19,7 +20,11 @@ class RoutingPolicy:
         self.index_location = ".local/shepherd/index"
 
     def build(
-        self, write_embeddings=True, downsample_factor=1, force_build_embeddings=False
+        self,
+        write_embeddings=True,
+        downsample_factor=1,
+        force_build_embeddings=False,
+        penalty: Optional[torch.Tensor] = None,
     ):
         if force_build_embeddings or not self.load_embeddings(self.embeddings_location):
             self.embeddings = [self.encoder(route.utterances) for route in self.routes]

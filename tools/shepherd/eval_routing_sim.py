@@ -23,13 +23,21 @@ encoder = LLMEncoder(
     api_key="test",
 )
 routes = create_route_from_knn_builder(
-    ".local/shepherd/llm_responses_train.jsonl", downsample_factor=1
+    ".local/shepherd/llm_responses_train.jsonl",
+    downsample_factor=1,
+    cascade=False,
 )
 
 with open(".local/shepherd/llm_responses_test.jsonl") as f:
     data = [json.loads(line) for line in f]
 
-router = Router(encoder, routes, index_location=".local/shepherd", policy="learned")
+router = Router(
+    encoder,
+    routes,
+    index_location=".local/shepherd",
+    policy="learned",
+    cost=pricings,
+)
 router_data = []
 results = []
 
@@ -54,6 +62,7 @@ for row in tqdm(test_ds):
             "output": output,
         }
     )
+print(f"Stats: {router.stats}")
 
 for datum in data:
     res = {
@@ -70,17 +79,11 @@ for datum in data:
         and x["choices"] == datum["choices"]
         and x["subject"] == datum["subject"]
     ]
-    # assert (
-    #     len(router_datum) == 1
-    # ), f"More than one router response found: {router_datum}"
-
     if len(router_datum) > 0:
         router_datum = router_datum[0]
         res["router_selected_model"] = router_datum["selected_model"]
         res["router_response"] = router_datum["output"]
     results.append(res)
-
-print(f"router: {router.stats}")
 
 df = pd.DataFrame(results)
 df.to_csv(".local/shepherd/router_results.csv", index=False)
