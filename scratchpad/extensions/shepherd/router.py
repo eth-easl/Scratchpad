@@ -5,7 +5,7 @@ from scratchpad.utils import logger
 from scratchpad.utils.client import LLMEncoder
 
 from .route import Route
-from .routing_policy import NearestNeighborPolicy
+from .policies import LearnedRoutingPolicy, NearestNeighborPolicy
 
 
 class Router:
@@ -20,8 +20,12 @@ class Router:
         self.encoder = encoder
         self.stats = {k.name: 0 for k in self.routes}
         self.index_location = index_location
+
         if policy == "nearest_neighbor":
             self.policy = NearestNeighborPolicy(routes, encoder)
+        elif policy == "learned":
+            self.policy = LearnedRoutingPolicy(routes, encoder)
+
         self._build_index(persistent=True if index_location else False)
 
     def _build_index(self, persistent=False, write_embeddings=False):

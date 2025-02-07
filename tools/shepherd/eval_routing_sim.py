@@ -29,7 +29,7 @@ routes = create_route_from_knn_builder(
 with open(".local/shepherd/llm_responses_test.jsonl") as f:
     data = [json.loads(line) for line in f]
 
-router = Router(encoder, routes, index_location=".local/shepherd")
+router = Router(encoder, routes, index_location=".local/shepherd", policy="learned")
 router_data = []
 results = []
 
@@ -78,14 +78,13 @@ for datum in data:
         router_datum = router_datum[0]
         res["router_selected_model"] = router_datum["selected_model"]
         res["router_response"] = router_datum["output"]
-
     results.append(res)
 
 print(f"router: {router.stats}")
 
 df = pd.DataFrame(results)
 df.to_csv(".local/shepherd/router_results.csv", index=False)
-print(df.head())
+
 models = list(pricings.keys()) + ["router_response"]
 for model in models:
     df[f"{model}_correct"] = df[model] == df["answer"]
