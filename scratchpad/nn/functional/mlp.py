@@ -94,10 +94,10 @@ def train_mlp_classifier_with_penalty(
             optimizer.zero_grad()
             output = net(X[i : i + batch_size])
             loss = criterion(output, y[i : i + batch_size])
-            # loss += 0.1 * torch.mean(penalty[i : i + batch_size])
+            loss += 0.1 * torch.mean(penalty[i : i + batch_size])
+            loss.backward()
             optimizer.step()
         logger.info(f"Epoch {epoch}, Loss: {loss.item():.4f}")
-
     return net
 
 

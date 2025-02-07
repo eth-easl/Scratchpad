@@ -26,11 +26,13 @@ class RoutingPolicy:
         force_build_embeddings=False,
         penalty: Optional[torch.Tensor] = None,
     ):
+        need_rewrite_embeddings = True
         if force_build_embeddings or not self.load_embeddings(self.embeddings_location):
             self.embeddings = [self.encoder(route.utterances) for route in self.routes]
         else:
             logger.info(f"Embeddings loaded from {self.embeddings_location}")
-        if write_embeddings:
+            need_rewrite_embeddings = False
+        if write_embeddings and need_rewrite_embeddings:
             logger.info(f"Writing embeddings to {self.index_location}")
             self.write_embeddings(self.embeddings_location)
 

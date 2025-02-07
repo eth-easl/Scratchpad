@@ -15,28 +15,32 @@ class LearnedRoutingPolicy(RoutingPolicy):
         self.index = create_mlp_network(
             in_features=self.embeddings[0].shape[1],
             out_features=len(self.routes),
-            layers=8,
-            hidden_dims=[2048, 1024, 512, 256, 256, 128, 128, 128],
+            layers=10,
+            hidden_dims=[2048, 1024, 512, 256, 256, 128, 128, 128, 64, 32],
         )
-        # handle dataset imbalance
-        minimal_samples = min([embedding.shape[0] for embedding in self.embeddings])
-        # balanced_embeddings = [x[:minimal_samples] for x in self.embeddings]
-        balanced_embeddings = self.embeddings
-
-        X = torch.cat([torch.Tensor(x) for x in balanced_embeddings])
+        samples = []
+        for route in self.routes:
+            samples.extend(route.utterances_ids)
+        samples = set(samples)
+        len_samples = 11233
+        X = torch.zeros(len_samples, self.embeddings[0].shape[1])
         penalties = []
-        for i, embedding in enumerate(balanced_embeddings):
+        for i, embedding in enumerate(self.embeddings):
             penalties.extend([penalty[i]] * embedding.shape[0])
         penalty = torch.tensor(penalties)
-        # create one-hot encoding for y, each y might have multiple labels activated
 
         y = torch.zeros((X.shape[0], len(self.routes)))
-        for i, embedding in enumerate(balanced_embeddings):
-            print(embedding.shape)
-            print(self.routes[i].utterances)
-        print(y.shape)
-        print(y[0:3])
-        exit(0)
+        print(f"{[x.shape for x in self.embeddings]}")
+        for idx, route in enumerate(self.routes):
+            print(f"len utterances: {len(route.utterances)}")
+            for uid, utts in enumerate(route.utterances):
+                utt_id = route.utterances_ids[uid]
+                X[utt_id] = torch.Tensor(self.embeddings[idx][uid])
+                y[utt_id, self.routes.index(route)] = 1
+
+        print(X[0:4])
+        print(y[0:4])
+
         if penalty is None:
             train_mlp_classifier(
                 self.index,
@@ -52,9 +56,9 @@ class LearnedRoutingPolicy(RoutingPolicy):
                 X,
                 y,
                 penalty,
-                lr=0.0001,
-                batch_size=512,
-                epochs=200,
+                lr=1e-5,
+                batch_size=1024,
+                epochs=5000,
             )
 
     def __call__(self, prompt, **kwargs):

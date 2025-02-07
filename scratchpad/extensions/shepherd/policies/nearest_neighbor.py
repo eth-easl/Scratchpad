@@ -36,7 +36,6 @@ class NearestNeighborPolicy(RoutingPolicy):
         if len(route_counts) > 1 and list(route_counts.values()).count(count) > 1:
             # Find all routes that have the same highest count
             tied_routes = [route for route, c in route_counts.items() if c == count]
-
             # For tied routes, select the one with the minimum average distance
             route_avg_distances = {}
             for route in tied_routes:

@@ -50,14 +50,16 @@ def create_route_from_knn_builder(
     for model in models:
         # find correct answers for each model
         correct_utts = [
-            row for row in data if row["output"][model] == answer_mapping[row["answer"]]
+            (idx, row)
+            for idx, row in enumerate(data)
+            if row["output"][model] == answer_mapping[row["answer"]]
         ]
         if cascade:
             data = [row for row in data if row not in correct_utts]
         correct_utts = random.sample(
             correct_utts, len(correct_utts) // downsample_factor
         )
-        reprompt = [build_prompt(row)["prompt"] for row in correct_utts]
+        reprompt = [(row[0], build_prompt(row[1])["prompt"]) for row in correct_utts]
         routes.append(
             Route(
                 name=model,
