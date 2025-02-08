@@ -27,14 +27,10 @@ class Router:
             self.policy = NearestNeighborPolicy(routes, encoder)
         elif policy == "learned":
             self.policy = LearnedRoutingPolicy(routes, encoder)
-
         self.penalty = cost
-        if self.penalty:
-            self.penalty = torch.Tensor(
-                [self.penalty[route.name] for route in self.routes]
-            )
-            # normalize penalty
-            self.penalty = self.penalty / self.penalty.sum()
+        self.penalty = [self.penalty.get(k.name, 0) for k in self.routes]
+        self.penalty = torch.tensor(self.penalty, dtype=torch.float32)
+        print(self.penalty.shape)
         self._build_index(persistent=True if index_location else False)
 
     def _build_index(self, persistent=False, write_embeddings=False):

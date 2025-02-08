@@ -6,6 +6,7 @@ from scratchpad.nn.functional.mlp import (
     train_mlp_classifier,
     train_mlp_classifier_with_penalty,
 )
+from scratchpad.utils import logger
 from ._base import RoutingPolicy
 
 
@@ -24,22 +25,14 @@ class LearnedRoutingPolicy(RoutingPolicy):
         samples = set(samples)
         len_samples = 11233
         X = torch.zeros(len_samples, self.embeddings[0].shape[1])
-        penalties = []
-        for i, embedding in enumerate(self.embeddings):
-            penalties.extend([penalty[i]] * embedding.shape[0])
-        penalty = torch.tensor(penalties)
-
+        logger.info(f"Policy penalty: {penalty}")
         y = torch.zeros((X.shape[0], len(self.routes)))
-        print(f"{[x.shape for x in self.embeddings]}")
         for idx, route in enumerate(self.routes):
-            print(f"len utterances: {len(route.utterances)}")
+            logger.info(f"len utterances for {route.name}: {len(route.utterances)}")
             for uid, utts in enumerate(route.utterances):
                 utt_id = route.utterances_ids[uid]
                 X[utt_id] = torch.Tensor(self.embeddings[idx][uid])
                 y[utt_id, self.routes.index(route)] = 1
-
-        print(X[0:4])
-        print(y[0:4])
 
         if penalty is None:
             train_mlp_classifier(

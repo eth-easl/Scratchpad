@@ -76,8 +76,8 @@ def train_mlp_classifier_with_penalty(
     Args:
         net: torch.nn.Module
         X: torch.Tensor (batch_size, in_features)
-        y: torch.Tensor (batch_size, 1)
-        penalty: torch.Tensor (batch_size, 1)
+        y: one-hot encoded tensor. (batch_size, out_features)
+        penalty: torch.Tensor (out_features,)
         epochs: Optional, int, default=100
         lr: Optional, float, default=0.01
         batch_size: Optional, int, default=32
@@ -86,15 +86,14 @@ def train_mlp_classifier_with_penalty(
     idx = torch.randperm(X.size(0))
     X = X[idx]
     y = y[idx]
-    penalty = penalty[idx]
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr)
     for epoch in range(epochs):
         for i in range(0, len(X), batch_size):
             optimizer.zero_grad()
             output = net(X[i : i + batch_size])
-            loss = criterion(output, y[i : i + batch_size])
-            loss += 0.1 * torch.mean(penalty[i : i + batch_size])
+            penalty_loss = 2 * torch.mean(penalty[output.argmax(dim=1)])
+            loss = criterion(output, y[i : i + batch_size]) + penalty_loss
             loss.backward()
             optimizer.step()
         logger.info(f"Epoch {epoch}, Loss: {loss.item():.4f}")
