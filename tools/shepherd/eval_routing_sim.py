@@ -6,7 +6,7 @@ import pandas as pd
 from scratchpad.extensions.shepherd import Route, Router
 from scratchpad.utils.client import LLM, LLMEncoder
 from tools.shepherd.utils import (
-    create_route_from_knn_builder,
+    create_route_from_file,
     build_prompt,
     load_test_set,
     answer_mapping,
@@ -22,7 +22,7 @@ encoder = LLMEncoder(
     base_url="http://localhost:8080/v1",
     api_key="test",
 )
-routes = create_route_from_knn_builder(
+routes = create_route_from_file(
     ".local/shepherd/llm_responses_train.jsonl",
     downsample_factor=1,
     cascade=False,
@@ -37,6 +37,8 @@ router = Router(
     index_location=".local/shepherd",
     policy="learned",
     cost=pricings,
+    layers=8,
+    hidden_dims=[2048, 1024, 256, 128, 128, 128, 64, 32],
 )
 router_data = []
 results = []

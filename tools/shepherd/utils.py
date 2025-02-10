@@ -1,11 +1,12 @@
 import json
+import copy
 import torch
 import random
 import datasets
 from typing import List
 
 from scratchpad.utils.client import LLM
-from scratchpad.extensions.shepherd import Route
+from scratchpad.extensions.shepherd import Route, create_route_from_results
 
 answer_mapping = ["A", "B", "C", "D"]
 
@@ -40,34 +41,17 @@ penalty = torch.tensor([pricings[model] for model in model_mappings.keys()])
 penalty = penalty / penalty.sum()
 
 
-def create_route_from_knn_builder(
+def create_route_from_file(
     jsonl_path: str, downsample_factor=1, cascade=True
 ) -> List[Route]:
-    with open(jsonl_path, "r") as f:
-        data = [json.loads(line) for line in f]
-    models = data[0]["output"].keys()
-    routes = []
-    for model in models:
-        # find correct answers for each model
-        correct_utts = [
-            (idx, row)
-            for idx, row in enumerate(data)
-            if row["output"][model] == answer_mapping[row["answer"]]
-        ]
-        if cascade:
-            data = [row for row in data if row not in correct_utts]
-        correct_utts = random.sample(
-            correct_utts, len(correct_utts) // downsample_factor
-        )
-        reprompt = [(row[0], build_prompt(row[1])["prompt"]) for row in correct_utts]
-        routes.append(
-            Route(
-                name=model,
-                utterances=reprompt,
-                model_preferences=[model_mappings[model]],
-            )
-        )
-    return routes
+    return create_route_from_results(
+        jsonl_path,
+        answer_mapping=answer_mapping,
+        model_mapping=model_mappings,
+        build_prompt=build_prompt,
+        downsample_factor=downsample_factor,
+        cascade=cascade,
+    )
 
 
 def calculate_llms_accuracy(data):

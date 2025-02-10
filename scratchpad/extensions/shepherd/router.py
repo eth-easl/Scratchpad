@@ -17,6 +17,7 @@ class Router:
         policy: str = "nearest_neighbor",  # ["nearest_neighbor", "learned"]
         index_location: Optional[str] = None,
         cost: Optional[dict] = None,
+        **kwargs,
     ):
         self.routes = routes
         self.encoder = encoder
@@ -30,12 +31,12 @@ class Router:
         self.penalty = cost
         self.penalty = [self.penalty.get(k.name, 0) for k in self.routes]
         self.penalty = torch.tensor(self.penalty, dtype=torch.float32)
-        print(self.penalty.shape)
-        self._build_index(persistent=True if index_location else False)
 
-    def _build_index(self, persistent=False, write_embeddings=False):
+        self._build_index(persistent=True if index_location else False, **kwargs)
+
+    def _build_index(self, persistent=False, write_embeddings=False, **kwargs):
         logger.info(f"Building index starts")
-        self.policy.build(penalty=self.penalty)
+        self.policy.build(penalty=self.penalty, **kwargs)
 
     def __call__(self, prompt, **kwargs):
         prefered_llm = self.policy(prompt)

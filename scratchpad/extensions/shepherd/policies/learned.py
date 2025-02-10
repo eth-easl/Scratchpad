@@ -11,20 +11,39 @@ from ._base import RoutingPolicy
 
 
 class LearnedRoutingPolicy(RoutingPolicy):
-    def build(self, penalty: Optional[torch.Tensor] = None):
-        super().build()
+    def build(self, penalty: Optional[torch.Tensor] = None, **kwargs):
+        super().build(force_build_embeddings=True)
+        hidden_dims = kwargs.get(
+            "hidden_dims", [2048, 1024, 512, 256, 256, 128, 128, 128, 64, 32]
+        )
+        layers = kwargs.get("layers", 10)
+        learning_rate = kwargs.get("lr", 1e-5)
+        batch_size = kwargs.get("batch_size", 1024)
+        epochs = kwargs.get("epochs", 5000)
+
+        assert (
+            len(hidden_dims) == layers
+        ), f"Number of hidden dims should be equal to number of layers"
+
+        logger.info(
+            f"Building MLP network with {layers} layers and hidden dims: {hidden_dims}"
+        )
+
         self.index = create_mlp_network(
             in_features=self.embeddings[0].shape[1],
             out_features=len(self.routes),
-            layers=10,
-            hidden_dims=[2048, 1024, 512, 256, 256, 128, 128, 128, 64, 32],
+            layers=layers,
+            hidden_dims=hidden_dims,
         )
         samples = []
         for route in self.routes:
             samples.extend(route.utterances_ids)
+
         samples = set(samples)
-        len_samples = 11233
+        len_samples = len(samples)
+        print(f"len samples: {len_samples}")
         X = torch.zeros(len_samples, self.embeddings[0].shape[1])
+
         logger.info(f"Policy penalty: {penalty}")
         y = torch.zeros((X.shape[0], len(self.routes)))
         for idx, route in enumerate(self.routes):
@@ -39,9 +58,9 @@ class LearnedRoutingPolicy(RoutingPolicy):
                 self.index,
                 X,
                 y,
-                lr=0.0001,
-                batch_size=512,
-                epochs=200,
+                lr=learning_rate,
+                batch_size=batch_size,
+                epochs=epochs,
             )
         else:
             train_mlp_classifier_with_penalty(
@@ -49,9 +68,9 @@ class LearnedRoutingPolicy(RoutingPolicy):
                 X,
                 y,
                 penalty,
-                lr=1e-5,
-                batch_size=1024,
-                epochs=5000,
+                lr=learning_rate,
+                batch_size=batch_size,
+                epochs=epochs,
             )
 
     def __call__(self, prompt, **kwargs):

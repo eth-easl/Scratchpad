@@ -12,3 +12,7 @@ class Route:
 
     def __repr__(self):
         return f"Route(name={self.name}, #utts={len(self.utterances)}, model_preferences={self.model_preferences})"
+
+    def add_utterances(self, utterances: List[Tuple]):
+        self.utterances.extend([utt[1] for utt in utterances])
+        self.utterances_ids.extend([utt[0] for utt in utterances])
