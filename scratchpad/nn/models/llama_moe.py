@@ -183,7 +183,7 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
-            input_metadata=input_metadata,
+            forward_batch=input_metadata,
         )
 
         # Fully Connected
