@@ -39,7 +39,7 @@ class RoutingPolicy:
         for i, route in enumerate(self.routes):
             min_utterance_id = len(self.utterance_to_route)
             self.utterance_to_route.update(
-                {min_utterance_id + i: route for i in range(len(route.utterances))}
+                {min_utterance_id + j: route for j in range(len(route.utterances))}
             )
 
     def __call__(self, *args, **kwds):
