@@ -51,7 +51,7 @@ def plot_cost_accuracy(results):
 
 
 def plot(args):
-    print(args)
+    logging.info(args)
     df = pd.read_csv(args.result_file)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     results = []
