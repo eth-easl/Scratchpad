@@ -15,8 +15,6 @@ from tools.shepherd.utils import (
 
 os.environ["OMP_NUM_THREADS"] = "16"
 
-test_ds = load_test_set()
-
 encoder = LLMEncoder(
     model="meta-llama/Llama-3.2-1B-Instruct",
     base_url="http://localhost:8080/v1",
@@ -43,7 +41,7 @@ router = Router(
 router_data = []
 results = []
 
-for row in tqdm(test_ds):
+for row in tqdm(data):
     user_prompt = build_prompt(row)["prompt"]
     selected_model, response = router(
         user_prompt,

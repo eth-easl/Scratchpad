@@ -86,6 +86,12 @@ def train_mlp_classifier_with_penalty(
     idx = torch.randperm(X.size(0))
     X = X[idx]
     y = y[idx]
+    # move to cuda
+    X = X.cuda()
+    y = y.cuda()
+    net = net.cuda()
+    penalty = penalty.cuda()
+
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(net.parameters(), lr=lr)
     for epoch in range(epochs):
@@ -97,7 +103,7 @@ def train_mlp_classifier_with_penalty(
             loss.backward()
             optimizer.step()
         logger.info(f"Epoch {epoch}, Loss: {loss.item():.4f}")
-    return net
+    return net.cpu()
 
 
 if __name__ == "__main__":

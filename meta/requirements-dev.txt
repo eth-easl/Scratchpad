@@ -9,3 +9,5 @@ pytest
 pre-commit
 pytest-cov
 coverage
+matplotlib
+seaborn

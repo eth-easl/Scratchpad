@@ -12,7 +12,7 @@ from ._base import RoutingPolicy
 
 class LearnedRoutingPolicy(RoutingPolicy):
     def build(self, penalty: Optional[torch.Tensor] = None, **kwargs):
-        super().build(force_build_embeddings=True)
+        super().build(force_build_embeddings=False)
         hidden_dims = kwargs.get(
             "hidden_dims", [2048, 1024, 512, 256, 256, 128, 128, 128, 64, 32]
         )

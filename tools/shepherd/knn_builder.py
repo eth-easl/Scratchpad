@@ -5,7 +5,6 @@ from scratchpad.utils.client import LLM
 
 from tools.shepherd.utils import construct_ds
 
-
 local_1b = LLM(
     model="meta-llama/Llama-3.2-1B-Instruct",
     base_url="http://localhost:8081/v1",
@@ -66,6 +65,7 @@ def main(args):
         for result in test_results:
             f.write(json.dumps(result) + "\n")
     print(f"Finish writing test results to .local/shepherd/llm_responses_test.jsonl")
+
     with open(f".local/shepherd/llm_responses_train_91.jsonl", "w") as f:
         for result in train_results:
             f.write(json.dumps(result) + "\n")

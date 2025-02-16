@@ -98,8 +98,3 @@ def load_test_set():
     with open(".local/shepherd/llm_responses_test.jsonl", "r") as f:
         data = [json.loads(line) for line in f]
     return data
-
-
-def create_trainset_from_jsonl(filename: str):
-    with open(filename, "r") as f:
-        data = [json.loads(line) for line in f]
