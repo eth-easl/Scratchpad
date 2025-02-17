@@ -31,6 +31,7 @@ WEIGHT_LOADER_V2_SUPPORTED = [
     "GPTQMarlinLinearMethod",
     "Fp8LinearMethod",
     "MarlinLinearMethod",
+    "TritelaLinearMethod"
 ]
 
 
@@ -1055,7 +1056,9 @@ class RowParallelLinear(LinearBase):
         self.tp_size = get_tensor_model_parallel_world_size()
         self.input_size_per_partition = divide(input_size, self.tp_size)
         assert self.quant_method is not None
-
+        # print(f"input_size_per_partition={self.input_size_per_partition},output_partition_sizes={[self.output_size]},input_size={self.input_size}, output_size={self.output_size}")
+        # print(f"QUANT_METHOD {self.quant_method.__class__.__name__}, is_v2 = {self.quant_method.__class__.__name__ in WEIGHT_LOADER_V2_SUPPORTED}")
+        # print(f"input_size = {input_size} | input_size_per_partition = {self.input_size_per_partition}")
         self.quant_method.create_weights(
             layer=self,
             input_size_per_partition=self.input_size_per_partition,
@@ -1089,9 +1092,11 @@ class RowParallelLinear(LinearBase):
             self.register_parameter("bias", None)
 
     def weight_loader(self, param: Parameter, loaded_weight: torch.Tensor):
+        # print("LOADER V1 ENTRY")
         tp_rank = get_tensor_model_parallel_rank()
         tp_size = get_tensor_model_parallel_world_size()
         input_dim = getattr(param, "input_dim", None)
+        # print(f"input_dim: {input_dim}")
 
         # Special case for GGUF
         is_gguf_weight = getattr(param, "is_gguf_weight", False)
@@ -1107,21 +1112,24 @@ class RowParallelLinear(LinearBase):
             param.materialize(tuple(weight_shape), dtype=loaded_weight.dtype)
 
         param_data = param.data
+        # print(f"PARAM SHAPE: {param_data.shape}")
+        # print(f"WEIGHT SHAPE: {loaded_weight.shape}")
         if input_dim is not None:
             shard_size = param_data.shape[input_dim]
             start_idx = tp_rank * shard_size
+            # print(f"RANK {tp_rank} START {start_idx}, {shard_size}")
             loaded_weight = loaded_weight.narrow(input_dim, start_idx, shard_size)
 
         # Special case for loading scales off disk, which often do not
         # have a shape (such as in the case of AutoFP8).
         if len(loaded_weight.shape) == 0:
             loaded_weight = loaded_weight.reshape(1)
-
+        # print(tp_rank, param_data.shape, loaded_weight.shape)
         assert param_data.shape == loaded_weight.shape
         param_data.copy_(loaded_weight)
 
     def weight_loader_v2(self, param: BasevLLMParameter, loaded_weight: torch.Tensor):
-
+        # print("LOADER V2 ENTRY")
         # Special case for loading scales off disk, which often do not
         # have a shape (such as in the case of AutoFP8).
         if len(loaded_weight.shape) == 0:
@@ -1163,20 +1171,23 @@ class RowParallelLinear(LinearBase):
         s += f", reduce_results={self.reduce_results}"
         return s
 
-class TritelaLinear(LinearBase):
-    def __init__(
-        self, 
-        input_size, 
-        output_size, 
-        skip_bias_add = False, 
-        params_dtype = None, 
-        quant_config = None, 
-        prefix = ""
+class TritelaLinear(LinearMethodBase):
+    
+    def create_weights(
+        self,
+        layer: torch.nn.Module,
+        input_size_per_partition: int,
+        output_partition_sizes: List[int],
+        input_size: int,
+        output_size: int,
+        params_dtype: torch.dtype,
+        **extra_weight_attrs,
     ):
-        super().__init__(
-            input_size, output_size, skip_bias_add, params_dtype, quant_config, prefix
-        )
-        self.layer = sparse_low_precision_linear(input_size, output_size)
+        self.layer = sparse_low_precision_linear(input_size_per_partition, sum(output_partition_sizes))
+        layer.register_parameter("qweight", self.layer.qweight)
+        layer.register_parameter("scales", self.layer.scales)
+        layer.register_parameter("meta", self.layer.meta)
+        layer.register_parameter("workspace", self.layer.workspace)
         
     def forward(self, x):
         return self.layer(x)        

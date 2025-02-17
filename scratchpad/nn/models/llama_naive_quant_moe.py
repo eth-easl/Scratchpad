@@ -44,14 +44,14 @@ class LlamaMLP(nn.Module):
             hidden_size,
             [intermediate_size] * 2,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.gate_up_proj",
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
             hidden_size,
             bias=False,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.down_proj",
         )
         if hidden_act != "silu":
@@ -80,25 +80,26 @@ class LlamaCompressedMLP(nn.Module):
         super().__init__()
         self.intermediate_size = intermediate_size
         self.hidden_size = hidden_size
-        self.gate_up_proj = sparse_low_precision_linear(
+        self.gate_up_proj = MergedColumnParallelLinear(
             hidden_size,
-            intermediate_size * 2,
+            [intermediate_size] * 2,
+            bias=False,
+            quant_config=quant_config,
         )
-        self.down_proj = sparse_low_precision_linear(
+        self.down_proj = RowParallelLinear(
             intermediate_size,
             hidden_size,
+            bias=False,
+            quant_config=quant_config,
         )
-
+        self.act_fn = SiluAndMul()
+    
     def forward(self, x):
-        # assert not x.isnan().any()
-        x = self.gate_up_proj(x)
-        # assert not gate_up.isnan().any()
-        d = x.shape[-1] // 2
-        x = F.silu(x[..., :d]) * x[..., d:]
-        # assert not x.isnan().any()
-        x = self.down_proj(x)
-        # assert not x.isnan().any()
+        gate_up, _ = self.gate_up_proj(x)
+        x = self.act_fn(gate_up)
+        x, _ = self.down_proj(x)
         return x
+
 
 
 class LlamaMoE(nn.Module):
@@ -193,7 +194,7 @@ class LlamaDecoderLayer(nn.Module):
             rope_scaling=rope_scaling,
             rope_is_neox_style=rope_is_neox_style,
             max_position_embeddings=max_position_embeddings,
-            quant_config=quant_config,
+            quant_config=None,
             prefix=f"{prefix}.self_attn",
         )
         self.moe = LlamaMoE(
@@ -291,6 +292,7 @@ class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
         cache_config: Optional[CacheConfig] = None,
     ) -> None:
         super().__init__()
+        print(f"QUANT_CONFIG: {quant_config}")
         self.config = config
         self.quant_config = quant_config
         self.torchao_config = global_args.torchao_config
@@ -366,13 +368,14 @@ class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
             (".gate_up_proj", ".up_proj", 1),
         ]
         params_dict = dict(self.named_parameters())
-
+        # print(params_dict.keys())
         name_transformations = [
             ("down_proj.0", "down_proj"),
             ("gate_up_proj.0", "gate_up_proj"),
             ("mlp.EXPERT_ID", "base_mlp"),
         ]
         for name, loaded_weight in weights:
+            print(name)
             assert not loaded_weight.isnan().any()
             # continue
             if "rotary_emb.inv_freq" in name or "projector" in name:
@@ -411,6 +414,7 @@ class LlamaNaiveQuantisedMoEForCausalLM(nn.Module):
                         name = name.replace(transformation[0], transformation[1])
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                print(f"{type(param)}, {weight_loader}")
                 weight_loader(param, loaded_weight)
 
         if (

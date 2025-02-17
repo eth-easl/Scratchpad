@@ -98,6 +98,7 @@ def safetensors_weights_iterator(
         disable=not enable_tqdm,
         bar_format=_BAR_FORMAT,
     ):
+        print(st_file)
         with safe_open(st_file, framework="pt") as f:
             for name in f.keys():  # noqa: SIM118
                 param = f.get_tensor(name)
@@ -127,8 +128,9 @@ def get_architecture_class_name(model_config: ModelConfig) -> str:
 def get_quant_config(
     model_config: ModelConfig, load_config: LoadConfig
 ) -> QuantizationConfig:
-
     quant_cls = get_quantization_config(model_config.quantization)
+    print(model_config)
+    print(quant_cls)
 
     # GGUF doesn't have config file
     if model_config.quantization == "gguf":
