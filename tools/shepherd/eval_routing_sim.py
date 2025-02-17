@@ -1,36 +1,47 @@
-from scratchpad.extensions.shepherd import Route, Router
-from scratchpad.utils.client import LLM, LLMEncoder
-import datasets
+import os
 import json
 from tqdm import tqdm
 import pandas as pd
+
+from scratchpad.extensions.shepherd import Route, Router
+from scratchpad.utils.client import LLM, LLMEncoder
 from tools.shepherd.utils import (
-    create_route_from_knn_builder,
+    create_route_from_file,
     build_prompt,
     load_test_set,
     answer_mapping,
     pricings,
 )
 
-test_ds = load_test_set()
+os.environ["OMP_NUM_THREADS"] = "16"
 
 encoder = LLMEncoder(
     model="meta-llama/Llama-3.2-1B-Instruct",
     base_url="http://localhost:8080/v1",
     api_key="test",
 )
-routes = create_route_from_knn_builder(
-    ".local/shepherd/llm_responses_train.jsonl", downsample_factor=1
+routes = create_route_from_file(
+    ".local/shepherd/llm_responses_train.jsonl",
+    downsample_factor=1,
+    cascade=False,
 )
 
 with open(".local/shepherd/llm_responses_test.jsonl") as f:
     data = [json.loads(line) for line in f]
 
-router = Router(encoder, routes, index_location=".local/shepherd")
+router = Router(
+    encoder,
+    routes,
+    index_location=".local/shepherd",
+    policy="learned",
+    cost=pricings,
+    layers=8,
+    hidden_dims=[2048, 1024, 256, 128, 128, 128, 64, 32],
+)
 router_data = []
 results = []
 
-for row in tqdm(test_ds):
+for row in tqdm(data):
     user_prompt = build_prompt(row)["prompt"]
     selected_model, response = router(
         user_prompt,
@@ -38,7 +49,7 @@ for row in tqdm(test_ds):
         temperature=0.001,
         dry_run=True,
         verbose=False,
-        k=1,
+        k=5,
     )
     output = row["output"][selected_model]
     router_data.append(
@@ -51,6 +62,7 @@ for row in tqdm(test_ds):
             "output": output,
         }
     )
+print(f"Stats: {router.stats}")
 
 for datum in data:
     res = {
@@ -67,22 +79,15 @@ for datum in data:
         and x["choices"] == datum["choices"]
         and x["subject"] == datum["subject"]
     ]
-    assert (
-        len(router_datum) == 1
-    ), f"More than one router response found: {router_datum}"
-
     if len(router_datum) > 0:
         router_datum = router_datum[0]
         res["router_selected_model"] = router_datum["selected_model"]
         res["router_response"] = router_datum["output"]
-
     results.append(res)
-
-print(f"router: {router.stats}")
 
 df = pd.DataFrame(results)
 df.to_csv(".local/shepherd/router_results.csv", index=False)
-print(df.head())
+
 models = list(pricings.keys()) + ["router_response"]
 for model in models:
     df[f"{model}_correct"] = df[model] == df["answer"]

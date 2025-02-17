@@ -5,7 +5,6 @@ from scratchpad.utils.client import LLM
 
 from tools.shepherd.utils import construct_ds
 
-
 local_1b = LLM(
     model="meta-llama/Llama-3.2-1B-Instruct",
     base_url="http://localhost:8081/v1",
@@ -27,12 +26,9 @@ remote_70b = LLM(
 llms = [local_1b, local_3b, local_8b, remote_70b]
 
 
-def main(args):
+def prepare_data(dataset):
     results = []
-    train, test = construct_ds(test_ratio=0.2, seed=42)
-
-    results = []
-    for row in tqdm(test):
+    for row in tqdm(dataset):
         subject = row["subject"]
         llm_answers = {}
         for llm in llms:
@@ -50,9 +46,30 @@ def main(args):
                 "output": llm_answers,
             }
         )
-    with open(f".local/shepherd/llm_responses_tests.jsonl", "w") as f:
-        for result in results:
+    return results
+
+
+def main(args):
+    train, test = construct_ds(test_ratio=0.1, seed=42)
+    with open(f".local/shepherd/llm_train_91.jsonl", "w") as f:
+        for row in train:
+            f.write(json.dumps(row) + "\n")
+    with open(f".local/shepherd/llm_test_91.jsonl", "w") as f:
+        for row in test:
+            f.write(json.dumps(row) + "\n")
+
+    train_results = prepare_data(train)
+    test_results = prepare_data(test)
+
+    with open(f".local/shepherd/llm_responses_test_91.jsonl", "w") as f:
+        for result in test_results:
             f.write(json.dumps(result) + "\n")
+    print(f"Finish writing test results to .local/shepherd/llm_responses_test.jsonl")
+
+    with open(f".local/shepherd/llm_responses_train_91.jsonl", "w") as f:
+        for result in train_results:
+            f.write(json.dumps(result) + "\n")
+    print(f"Finish writing train results to .local/shepherd/llm_responses_train.jsonl")
 
 
 if __name__ == "__main__":
