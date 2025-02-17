@@ -17,7 +17,7 @@ RUN apt update && apt upgrade -y
 WORKDIR /scratchpad
 
 COPY . /scratchpad
-RUN pip  install pybind11 && \
+RUN pip  install pybind11 pre-commit && \
     git clone --recursive https://github.com/mlc-ai/xgrammar.git && cd xgrammar && \
     pre-commit install && \
     mkdir build && cd build && cmake .. -G Ninja && ninja && \
