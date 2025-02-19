@@ -7,3 +7,7 @@ sphinx-copybutton
 sphinx-rtd-theme
 pytest
 pre-commit
+pytest-cov
+coverage
+matplotlib
+seaborn

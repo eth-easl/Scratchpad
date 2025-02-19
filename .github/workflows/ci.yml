@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ dev, main ]
+  pull_request:
+    branches: [ dev, main ]
+
+jobs:
+  build:
+    runs-on: rtx3090x1
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      run: |
+        bash docker/build_image.sh dev docker test
+
+    - name: Run tests in Docker container
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        mkdir -p shared
+        docker run -v "$PWD/shared:/shared" -v "$PWD/shared/.local:/scratchpad/.local"  --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -e HF_TOKEN=$HF_TOKEN -e PYTHONPATH=/scratchpad ghcr.io/xiaozheyao/scratchpad:devdev-x86_64 /bin/bash -c "cd /scratchpad; python -m pytest --cache-clear --cov=scratchpad tests/ > /shared/pytest-coverage.txt"
+
+    - name: Comment coverage
+      uses: coroo/pytest-coverage-commentator@v1.0.2
+      with:
+        pytest-coverage: shared/pytest-coverage.txt

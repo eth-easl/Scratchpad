@@ -17,6 +17,11 @@ RUN apt update && apt upgrade -y
 WORKDIR /scratchpad
 
 COPY . /scratchpad
+RUN pip  install pybind11 pre-commit && \
+    git clone --recursive https://github.com/mlc-ai/xgrammar.git && cd xgrammar && \
+    pre-commit install && \
+    mkdir build && cd build && cmake .. -G Ninja && ninja && \
+    cd ../python && python3 -m pip install .
 
 RUN git clone -b v0.1.6 https://github.com/flashinfer-ai/flashinfer.git --recursive && \
     cd flashinfer/python && \
@@ -27,6 +32,7 @@ RUN git clone https://github.com/eth-easl/triteia.git && \
     git submodule update --init --recursive && \
     pip install -e .
 RUN pip install -r meta/requirements-extra.txt
+RUN pip install -r meta/requirements-dev.txt
 RUN pip install .
 
 # todo(xiaozhe): figure out why pynvml is installed in the first place. We should use nvidia-ml-py instead.

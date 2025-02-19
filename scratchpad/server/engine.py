@@ -1,13 +1,10 @@
-import asyncio
-from typing import List, Union, Optional, Dict
-import multiprocessing as mp
-from scratchpad.managers import TokenizerManager, run_detokenizer_process
-from scratchpad.scheduler.scheduler import run_scheduler_process
-from scratchpad.server.metrics import PrometheusStatLogger
 import gc
 import torch
+import asyncio
+import multiprocessing as mp
+from typing import List, Union, Optional, Dict
+from scratchpad.managers.structs import GenerateReqInput
 from .args import ServerArgs
-from .protocol import GenerateReqInput
 
 
 class AsyncLLMEngine:
@@ -15,12 +12,15 @@ class AsyncLLMEngine:
         args.model_path = model_name
         args.translate_auto()
         self.args = args
+        from scratchpad.managers import TokenizerManager
+
         self.tokenizer_manager = TokenizerManager(args)
         self.processes: List[mp.Process] = []
         self.loop = asyncio.get_event_loop()
         self._launch()
 
     def _launch(self):
+        mp.set_start_method("spawn", force=True)
         scheduler_procs = []
         scheduler_pipe_readers = []
         tp_size_per_node = self.args.tp_size // self.args.nnodes
@@ -28,13 +28,14 @@ class AsyncLLMEngine:
             tp_size_per_node * self.args.node_rank,
             tp_size_per_node * (self.args.node_rank + 1),
         )
-        # loggers = [PrometheusStatLogger(1, {"server_id": self.args.server_id}, 4096)]
+        from scratchpad.scheduler.scheduler import run_scheduler_process
+
         for tp_rank in tp_rank_range:
             reader, writer = mp.Pipe(duplex=False)
             gpu_id = tp_rank % tp_size_per_node
             proc = mp.Process(
                 target=run_scheduler_process,
-                args=(self.args, gpu_id, tp_rank, writer, []),
+                args=(self.args, gpu_id, tp_rank, writer),
             )
             proc.start()
             scheduler_procs.append(proc)
@@ -45,6 +46,8 @@ class AsyncLLMEngine:
             # so they can just wait here.
             while True:
                 pass
+        from scratchpad.managers import run_detokenizer_process
+
         detoken_proc = mp.Process(
             target=run_detokenizer_process,
             args=(self.args,),
@@ -69,7 +72,7 @@ class AsyncLLMEngine:
         return_logprob: Optional[Union[List[bool], bool]] = False,
         logprob_start_len: Optional[Union[List[int], int]] = None,
         top_logprobs_num: Optional[Union[List[int], int]] = None,
-        lora_path: Optional[List[Optional[str]]] = None,
+        topping_path: Optional[List[Optional[str]]] = None,
     ):
         obj = GenerateReqInput(
             text=prompt,
@@ -77,7 +80,7 @@ class AsyncLLMEngine:
             return_logprob=return_logprob,
             logprob_start_len=logprob_start_len,
             top_logprobs_num=top_logprobs_num,
-            lora_path=lora_path,
+            topping_path=topping_path,
         )
         task = self.loop.create_task(self.generate_request(obj))
         return self.loop.run_until_complete(task)
@@ -110,7 +113,6 @@ class AsyncLLMEngine:
             proc.terminate()
         for proc in self.processes:
             proc.join()
-        self.tokenizer_manager.shutdown()
         gc.collect()
         torch.cuda.empty_cache()
         del self

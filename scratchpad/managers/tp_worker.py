@@ -1,6 +1,3 @@
-import json
-
-from attr import s
 from scratchpad.utils import (
     broadcast_pyobj,
     is_multimodal_model,

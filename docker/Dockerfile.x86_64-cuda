@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/pytorch:24.05-py3 AS base
+FROM nvcr.io/nvidia/pytorch:24.09-py3 AS base
 
 LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
 LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
@@ -25,5 +25,6 @@ RUN git clone https://github.com/eth-easl/triteia.git && \
     git submodule update --init --recursive && \
     pip install -e .
 RUN pip install -r meta/requirements-extra.txt
+RUN pip install -r meta/requirements-dev.txt
 RUN pip install .
 RUN pip uninstall pynvml -y

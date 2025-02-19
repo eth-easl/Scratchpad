@@ -1,6 +1,8 @@
+import pytest
 import unittest
-from scratchpad.server import AsyncLLMEngine, ServerArgs
 from tests.e2e.hf_utils import clm_generate
+from scratchpad.server.engine import AsyncLLMEngine
+from scratchpad.server.args import ServerArgs
 
 
 class TestGenerationResultWithHF(unittest.TestCase):
@@ -42,12 +44,14 @@ class TestGenerationResultWithHF(unittest.TestCase):
         self.assertEqual(hf_outputs[:32], sp_outputs[:32])
         del engine
 
+    @pytest.mark.gpu
     def test_llama_1b(self):
         model_identifiers = ["meta-llama/Llama-3.2-1B-Instruct"]
         prompts = ["Alan Turing is"]
         for model_id in model_identifiers:
             for attention_backend in self.attention_backends:
                 for sampling_backend in self.sampling_backends:
+                    print(f"Running {model_id} with {attention_backend}")
                     self.run_generation(
                         model_id, prompts, attention_backend, sampling_backend
                     )

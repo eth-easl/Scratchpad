@@ -1,6 +1,6 @@
 import asyncio
 import dataclasses
-from typing import List, Dict, Union
+from typing import List, Dict, Union, TYPE_CHECKING
 
 import uvloop
 import zmq
@@ -13,8 +13,6 @@ from .structs import (
     BatchTokenIDOut,
     UpdateWeightReqOutput,
 )
-from scratchpad.scheduler.schedule_batch import FINISH_MATCHED_STR
-from scratchpad.server.args import ServerArgs
 from scratchpad.utils import (
     find_printable_text,
     get_exception_traceback,
@@ -22,6 +20,10 @@ from scratchpad.utils import (
     kill_parent_process,
     get_zmq_socket,
 )
+
+if TYPE_CHECKING:
+    from scratchpad.server.args import ServerArgs
+
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -42,7 +44,7 @@ class DetokenizerManager:
 
     def __init__(
         self,
-        server_args: ServerArgs,
+        server_args: "ServerArgs",
     ):
         # Init inter-process communication
         context = zmq.Context(2)
@@ -95,14 +97,7 @@ class DetokenizerManager:
 
             if isinstance(recv_obj, BatchEmbeddingOut):
                 # If it is embedding model, no detokenization is needed.
-                self.send_to_tokenizer.send_pyobj(
-                    BatchEmbeddingOut(
-                        rids=recv_obj.rids,
-                        embeddings=recv_obj.embeddings,
-                        meta_info=recv_obj.meta_info,
-                        finished_reason=recv_obj.finished_reason,
-                    )
-                )
+                self.send_to_tokenizer.send_pyobj(recv_obj)
                 continue
             elif isinstance(recv_obj, UpdateWeightReqOutput):
                 # If it is a weight update request, no detokenization is needed.
@@ -206,7 +201,7 @@ class LimitedCapacityDict(OrderedDict):
 
 
 def run_detokenizer_process(
-    server_args: ServerArgs,
+    server_args: "ServerArgs",
 ):
     try:
         manager = DetokenizerManager(server_args)
