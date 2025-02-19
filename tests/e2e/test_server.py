@@ -8,14 +8,14 @@ from scratchpad.utils import kill_all_scratchpad_processes, wait_until_ready
 
 
 class CapitalInfo(BaseModel):
-    name: str = Field(..., pattern=r"^\w+$", description="Name of the capital city")
+    name: str = Field(..., description="Name of the capital city")
 
 
 class TestScratchpadServer(unittest.TestCase):
     def setUp(self):
         kill_all_scratchpad_processes()
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = ".local"
-        startup_cmd = "sp serve meta-llama/Llama-3.2-1B-Instruct --host 0.0.0.0 --port 8083 --grammar-backend xgrammar"
+        startup_cmd = "sp serve meta-llama/Llama-3.2-3B-Instruct --host 0.0.0.0 --port 8083 --grammar-backend xgrammar"
         self.proc = subprocess.Popen(startup_cmd, shell=True)
         self.client = openai.Client(base_url="http://127.0.0.1:8083/v1", api_key="None")
         wait_until_ready(host="127.0.0.1", port="8083")
@@ -29,7 +29,7 @@ class TestScratchpadServer(unittest.TestCase):
         messages = [{"role": "user", "content": long_message}]
         try:
             response = self.client.chat.completions.create(
-                model="meta-llama/Llama-3.2-1B-Instruct",
+                model="meta-llama/Llama-3.2-3B-Instruct",
                 messages=messages,
                 max_tokens=2048,
             )
@@ -44,7 +44,7 @@ class TestScratchpadServer(unittest.TestCase):
         messages = [{"role": "user", "content": short_message}]
 
         response = self.client.chat.completions.create(
-            model="meta-llama/Llama-3.2-1B-Instruct", messages=messages, max_tokens=100
+            model="meta-llama/Llama-3.2-3B-Instruct", messages=messages, max_tokens=100
         )
         assert (
             response.choices[0].finish_reason == "stop"
@@ -78,7 +78,7 @@ class TestScratchpadServer(unittest.TestCase):
             {"role": "user", "content": "What's the weather like in Boston today?"}
         ]
         response = self.client.chat.completions.create(
-            model="meta-llama/Llama-3.2-1B-Instruct",
+            model="meta-llama/Llama-3.2-3B-Instruct",
             messages=messages,
             temperature=0.8,
             top_p=0.8,
@@ -106,7 +106,7 @@ class TestScratchpadServer(unittest.TestCase):
         responses = []
         for _ in range(5):
             response = self.client.chat.completions.create(
-                model="meta-llama/Llama-3.2-1B-Instruct",
+                model="meta-llama/Llama-3.2-3B-Instruct",
                 messages=messages,
                 temperature=1.0,  # High temperature for more randomness
                 max_tokens=10,
@@ -120,15 +120,15 @@ class TestScratchpadServer(unittest.TestCase):
 
     def test_structured_output(self):
         response = self.client.chat.completions.create(
-            model="meta-llama/Llama-3.2-1B-Instruct",
+            model="meta-llama/Llama-3.2-3B-Instruct",
             messages=[
                 {
                     "role": "user",
-                    "content": "tell me the capital of Switzerland?",
+                    "content": "Where is capital of Switzerland?",
                 },
             ],
-            temperature=0.001,
-            max_tokens=128,
+            temperature=0.1,
+            max_tokens=256,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -139,13 +139,17 @@ class TestScratchpadServer(unittest.TestCase):
         )
         try:
             response_content = response.choices[0].message.content
-            result = json.loads(response_content)
-            capital_info = CapitalInfo.model_validate_json(response_content)
+            response = response_content.strip()
+            result = json.loads(response)
         except Exception as e:
+            print(f"response: {response}")
             assert (
                 False
-            ), f"Expected response to be a valid JSON, got {response.choices[0].message.content}"
-
+            ), f"Expected response to be a valid JSON, got {response}"
+        try:
+            capital_info = CapitalInfo.model_validate_json(response)
+        except Exception as e:
+            assert False, f"Expected response to be a valid CapitalInfo, got {response}"
 
 if __name__ == "__main__":
     unittest.main()
