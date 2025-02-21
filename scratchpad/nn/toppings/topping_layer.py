@@ -44,9 +44,10 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
         super().__init__(base_layer, config)
         self.weight = base_layer.weight
 
-    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None, num_lora = 0):
         self.weight_indices = weight_indices
         self.delta_weights = delta_buffer
+        self.num_lora = num_lora
 
     def forward(self, input_: torch.Tensor):
         if self.delta_weights == None or self.delta_weights.shape[0] == 0:
@@ -58,6 +59,10 @@ class VocabParallelEmbeddingWithTopping(BaseLayerWithTopping):
             dtype=self.delta_weights[0].dtype,
         )
         unique_indices = torch.unique(self.weight_indices)
+        # recover delta indices
+        mask_delta = (unique_indices >= self.num_lora) & (unique_indices != -1)
+        unique_indices = unique_indices[mask_delta] - self.num_lora
+
 
         for id in unique_indices:
             idx_mask = self.weight_indices == id
@@ -298,9 +303,10 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
     def __init__(self, base_layer, config):
         super().__init__(base_layer, config)
 
-    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None):
+    def set_topping_info(self, bs, weight_indices, lora_buffer=None, delta_buffer=None, num_lora = 0):
         self.weight_indices = weight_indices
         self.delta_buffer = delta_buffer
+        self.num_lora = num_lora
 
     def _get_logits(
         self,
@@ -317,6 +323,11 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
             logits_metadata = LogitsMetadata.from_forward_batch(logits_metadata)
         assert isinstance(logits_metadata, LogitsMetadata)
 
+        unique_indices = torch.unique(self.weight_indices)
+        # recover delta indices
+        mask_delta = (unique_indices >= self.num_lora) & (unique_indices != -1)
+        unique_indices = unique_indices[mask_delta] - self.num_lora
+
         # Get the last hidden states and last logits for the next token prediction
         if logits_metadata.forward_mode.is_decode():
             last_index = None
@@ -327,7 +338,6 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
                 dtype=last_hidden.dtype,
                 device=last_hidden.device,
             )
-            unique_indices = torch.unique(self.weight_indices)
             for id in unique_indices:
                 idx_mask = self.weight_indices == id
                 inp = last_hidden[idx_mask]
@@ -346,7 +356,6 @@ class LogitsProcessorWithTopping(BaseLayerWithTopping):
                 dtype=last_hidden.dtype,
                 device=last_hidden.device,
             )
-            unique_indices = torch.unique(self.weight_indices)
             assert len(unique_indices) == 1, f"Prefill stage only supports one index"
             w_idx = unique_indices[0]
             if w_idx == -1:
