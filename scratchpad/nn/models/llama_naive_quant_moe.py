@@ -4,8 +4,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers import LlamaConfig
+from Scratchpad.scratchpad.distributed.communication_op import tensor_model_parallel_all_reduce
 from scratchpad.config.cache_config import CacheConfig
-from scratchpad.distributed import get_tensor_model_parallel_world_size
+from scratchpad.distributed import get_tensor_model_parallel_world_size, get_tensor_model_parallel_rank
 from scratchpad.nn.layers.rotary_embedding import get_rope
 from scratchpad.nn.layers.vocab_parallel_embedding import (
     ParallelLMHead,
@@ -53,6 +54,7 @@ class LlamaMLP(nn.Module):
             bias=False,
             quant_config=None,
             prefix=f"{prefix}.down_proj",
+            reduce_results=False,
         )
         if hidden_act != "silu":
             raise ValueError(
@@ -91,6 +93,7 @@ class LlamaCompressedMLP(nn.Module):
             hidden_size,
             bias=False,
             quant_config=quant_config,
+            reduce_results=False
         )
         self.act_fn = SiluAndMul()
     
@@ -137,6 +140,8 @@ class LlamaMoE(nn.Module):
             ]
         )
         self.gate = nn.Linear(hidden_size, num_experts, bias=False)
+        self.tp_rank = get_tensor_model_parallel_rank()
+        self.tp_size() = get_tensor_model_parallel_world_size()
 
     def forward(self, x):
         base_y = self.base_mlp(x)
@@ -146,9 +151,9 @@ class LlamaMoE(nn.Module):
         router_logits = self.gate(x)
         weights, selected_experts = torch.topk(router_logits, self.experts_per_token)
         weights = F.softmax(weights, dim=2, dtype=torch.float).to(x.dtype)
-        results = torch.zeros(
+        results_parallel = torch.zeros(
             (batch_size, sequence_length, hidden_dim),
-            device=x.device,
+            device=f"cuda:{self.tp_rank}",
             dtype=x.dtype,
         )
         selected_experts = selected_experts.to(dtype=torch.int32)
@@ -157,11 +162,13 @@ class LlamaMoE(nn.Module):
             mask = selected_experts == ix
             batch_idx, tok_idx, expert_idx = torch.where(mask)
             if batch_idx.numel() != 0 and tok_idx.numel() != 0:
-                results[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
+                results_parallel[batch_idx, tok_idx] += expert(x[batch_idx, tok_idx]) * weights[
                     batch_idx, tok_idx, expert_idx
                 ].unsqueeze(-1)
-        results = results.view(original_shape)
-        return results + base_y
+        results_parallel = results_parallel.view(original_shape)
+        results_parallel += base_y
+        results = tensor_model_parallel_all_reduce(results_parallel)
+        return results
 
 
 class LlamaDecoderLayer(nn.Module):
