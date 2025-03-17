@@ -29,8 +29,10 @@ from scratchpad.memory.pool import (
     MLATokenToKVPool,
     ReqToTokenPool,
 )
-from scratchpad.memory.het_pool import (
+from scratchpad.memory import (
     HeterogeneousMHATokenToKVPool,
+    ReqToTokenPool,
+    TokenToKVPoolAllocator,
 )
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.model_executor.speculative.spec_info import SpeculativeAlgorithm
@@ -59,6 +61,8 @@ class ModelRunner:
         tp_size: int,
         nccl_port: int,
         server_args: ServerArgs,
+        req_to_token_pool: Optional[ReqToTokenPool] = None,
+        token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
         self.model_config = model_config
@@ -72,6 +76,8 @@ class ModelRunner:
         self.is_generation = model_config.is_generation
         self.is_multimodal = model_config.is_multimodal
         self.spec_algorithm = SpeculativeAlgorithm.NONE
+        self.req_to_token_pool = req_to_token_pool
+        self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
         logger.info(f"model config: {model_config}")
         # Model-specific adjustment
         if (
