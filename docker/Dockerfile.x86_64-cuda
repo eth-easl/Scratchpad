@@ -6,8 +6,8 @@ LABEL org.opencontainers.image.licenses=Apache-2.0
 LABEL org.opencontainers.image.architecture=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TRITEIA_COMPUTE_CAP=80
-ENV TORCH_CUDA_ARCH_LIST="8.0"
+ENV TRITEIA_COMPUTE_CAP=90
+ENV TORCH_CUDA_ARCH_LIST="8.0 8.6 9.0 9.0a"
 ENV FLASHINFER_ENABLE_AOT="1"
 
 RUN apt update && apt upgrade -y

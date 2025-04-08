@@ -42,7 +42,7 @@ def write_benchmark(
     os.makedirs(output_dir, exist_ok=True)
     output_file = f"{output_dir}/benchmark_{unique_id}.jsonl"
     meta = {
-        "server_args": server_args["system_info"],
+        "server_args": {},
         "client_args": vars(client_args),
         "metrics": asdict(benchmark),
     }

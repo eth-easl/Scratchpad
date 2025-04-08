@@ -10,8 +10,13 @@ from scratchpad.server.args import ServerArgs
 from scratchpad.model_executor.model_runner import ModelRunner
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.scheduler.schedule_batch import ModelWorkerBatch
-from scratchpad.memory.het_pool import HeterogeneousMHATokenToKVPool
 from scratchpad.model_executor.forward_info import ForwardBatch
+from scratchpad.memory import (
+    ReqToTokenPool,
+    HeterogeneousMHATokenToKVPool,
+    TokenToKVPoolAllocator,
+)
+
 from .structs import UpdateWeightReqInput
 from typing import Optional
 from scratchpad.server.args import global_args
@@ -27,9 +32,12 @@ class TpModelWorker:
         server_args: ServerArgs,
         nccl_port: int,
         dp_rank: Optional[int] = 0,
+        req_to_token_pool: Optional[ReqToTokenPool] = None,
+        token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
         logger.info(f"Initalizing model worker on GPU {gpu_id}, tp_rank: {tp_rank}")
+
         self.tp_rank = tp_rank
         self.server_args = server_args
         # Init model and tokenizer

@@ -87,24 +87,25 @@ async def async_request_openai_completions(
         ("completions", "profile")
     ), "OpenAI Completions API URL must end with 'completions' or 'profile'."
 
-    async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
+    async with aiohttp.ClientSession(
+        trust_env=True, timeout=AIOHTTP_TIMEOUT
+    ) as session:
         payload = {
             "model": request_func_input.model,
             "prompt": request_func_input.prompt,
             "temperature": 0.0,
-            "best_of": request_func_input.best_of,
             "max_tokens": request_func_input.output_len,
             "logprobs": request_func_input.logprobs,
             "stream": True,
-            "ignore_eos": request_func_input.ignore_eos,
+            "stream_options": {
+                "include_usage": True,
+            },
         }
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
-
         output = RequestFuncOutput()
         output.prompt_len = request_func_input.prompt_len
 
         generated_text = ""
-        ttft = 0.0
         st = time.perf_counter()
         most_recent_timestamp = st
         try:
@@ -112,37 +113,46 @@ async def async_request_openai_completions(
                 url=api_url, json=payload, headers=headers
             ) as response:
                 if response.status == 200:
+                    first_chunk_received = False
                     async for chunk_bytes in response.content:
                         chunk_bytes = chunk_bytes.strip()
                         if not chunk_bytes:
                             continue
 
-                        chunk = remove_prefix(chunk_bytes.decode("utf-8"), "data: ")
-                        if chunk == "[DONE]":
-                            latency = time.perf_counter() - st
-                        else:
+                        chunk = chunk_bytes.decode("utf-8").removeprefix("data: ")
+                        if chunk != "[DONE]":
                             data = json.loads(chunk)
-
                             # NOTE: Some completion API might have a last
                             # usage summary response without a token so we
                             # want to check a token was generated
-                            if data["choices"][0]["text"]:
+                            if choices := data.get("choices"):
+                                # Note that text could be empty here
+                                # e.g. for special tokens
+                                text = choices[0].get("text")
                                 timestamp = time.perf_counter()
                                 # First token
-                                if ttft == 0.0:
+                                if not first_chunk_received:
+                                    first_chunk_received = True
                                     ttft = time.perf_counter() - st
                                     output.ttft = ttft
-
                                 # Decoding phase
                                 else:
                                     output.itl.append(timestamp - most_recent_timestamp)
 
                                 most_recent_timestamp = timestamp
-                                generated_text += data["choices"][0]["text"]
-
+                                generated_text += text or ""
+                            elif usage := data.get("usage"):
+                                output.output_tokens = usage.get("completion_tokens")
+                    if first_chunk_received:
+                        output.success = True
+                    else:
+                        output.success = False
+                        output.error = (
+                            "Never received a valid chunk to calculate TTFT."
+                            "This response will be marked as failed!"
+                        )
                     output.generated_text = generated_text
-                    output.success = True
-                    output.latency = latency
+                    output.latency = most_recent_timestamp - st
                 else:
                     output.error = response.reason or ""
                     output.success = False
@@ -196,7 +206,7 @@ def construct_dataset(
             response = conversations[2 * i + 1]["content"]
             req = RequestFuncInput(
                 prompt=prompt,
-                api_url=endpoint + "v1/completions",
+                api_url=endpoint + "/completions",
                 prompt_len=len(tokenizer(prompt)["input_ids"]),
                 output_len=len(tokenizer(response)["input_ids"]),
                 model="",

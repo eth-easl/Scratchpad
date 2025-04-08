@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+import abc
 from typing import List, Tuple, Union, TYPE_CHECKING
 import torch
 from scratchpad.utils import logger
@@ -142,6 +142,108 @@ class BaseTokenToKVPool:
         cache_v: torch.Tensor,
     ) -> None:
         raise NotImplementedError()
+
+
+class KVCache(abc.ABC):
+    @abc.abstractmethod
+    def get_key_buffer(self, layer_id: int) -> torch.Tensor:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_value_buffer(self, layer_id: int) -> torch.Tensor:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_kv_buffer(self, layer_id: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def set_kv_buffer(
+        self,
+        layer: "RadixAttention",
+        loc: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
+    ) -> None:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def get_flat_data(self, indices):
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def transfer(self, indices, flat_data):
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def transfer_per_layer(self, indices, flat_data, layer_id):
+        raise NotImplementedError()
+
+    def register_layer_transfer_counter(self, layer_transfer_counter):
+        self.layer_transfer_counter = layer_transfer_counter
+
+
+class TokenToKVPoolAllocator:
+    """An allocator managing the indices to kv cache data."""
+
+    def __init__(
+        self,
+        size: int,
+        dtype: torch.dtype,
+        device: str,
+        kvcache: KVCache,
+    ):
+        self.size = size
+        self.dtype = dtype
+        self.device = device
+        self.page_size = 1
+
+        self.free_slots = None
+        self.is_not_in_free_group = True
+        self.free_group = []
+        self.clear()
+
+        self._kvcache = kvcache
+
+    def available_size(self):
+        return len(self.free_slots)
+
+    def get_kvcache(self):
+        return self._kvcache
+
+    def alloc(self, need_size: int):
+        if need_size > len(self.free_slots):
+            return None
+
+        select_index = self.free_slots[:need_size]
+        self.free_slots = self.free_slots[need_size:]
+        return select_index
+
+    def free(self, free_index: torch.Tensor):
+        if free_index.numel() == 0:
+            return
+
+        if self.is_not_in_free_group:
+            self.free_slots = torch.concat((self.free_slots, free_index))
+        else:
+            self.free_group.append(free_index)
+
+    def free_group_begin(self):
+        self.is_not_in_free_group = False
+        self.free_group = []
+
+    def free_group_end(self):
+        self.is_not_in_free_group = True
+        if self.free_group:
+            self.free(torch.concat(self.free_group))
+
+    def clear(self):
+        # The padded slot 0 is used for writing dummy outputs from padded tokens.
+        self.free_slots = torch.arange(
+            1, self.size + 1, dtype=torch.int64, device=self.device
+        )
+        self.is_in_free_group = False
+        self.free_group = []
 
 
 class MHATokenToKVPool(BaseTokenToKVPool):

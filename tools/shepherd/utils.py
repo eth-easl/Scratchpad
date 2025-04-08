@@ -98,3 +98,24 @@ def load_test_set():
     with open(".local/shepherd/llm_responses_test.jsonl", "r") as f:
         data = [json.loads(line) for line in f]
     return data
+
+
+def decontamination(test, train):
+    # return a new trainset that does not include any contamination
+    formatted_train = [f"{t['subject']} {t['question']} {t['choices']}" for t in train]
+    formatted_test = [f"{t['subject']} {t['question']} {t['choices']}" for t in test]
+    new_train = []
+    for t in formatted_train:
+        if t not in formatted_test:
+            new_train.append(train[formatted_train.index(t)])
+    return new_train
+
+
+def contain_contamination(test, train):
+    formatted_train = [f"{t['subject']} {t['question']} {t['choices']}" for t in train]
+    formatted_test = [f"{t['subject']} {t['question']} {t['choices']}" for t in test]
+    for t in formatted_test:
+        if t in formatted_train:
+            print(f"Found contamination: {t}")
+            return True
+    return False
