@@ -154,7 +154,9 @@ async def openai_v1_chat_completions(raw_request: Request):
         return JSONResponse(
             content=jsonable_encoder(
                 ErrorResponse(
-                    message=f"Model {model} not found", code=404, type="MODEL_NOT_FOUND"
+                    message=f"Model [{model}] not found",
+                    code=404,
+                    type="MODEL_NOT_FOUND",
                 )
             ),
             status_code=HTTPStatus.NOT_FOUND,

@@ -39,6 +39,7 @@ class ServerArgs:
     load_format: str = "auto"
     quantization: Optional[str] = None
     dtype: str = "auto"
+    page_size: int = 1
     # parallelism
     dist_init_addr: Optional[str] = None
     dp_size: int = 1
@@ -46,15 +47,15 @@ class ServerArgs:
     nnodes: int = 1
     node_rank: int = 0
     load_balance_method: str = "round_robin"
+    enable_memory_saver: bool = False
     # internal ports and and names
     scheduler_input_ipc_name: str = "auto"
     tokenizer_ipc_name: str = "auto"
     detokenizer_ipc_name: str = "auto"
-
     tokenizer_port: int = 30001
     scheduler_port: int = 30002
     detokenizer_port: int = 30003
-    ## note(xiaozhe): this is actually a list of ints, but can be provided as a comma-separated string
+    # note(xiaozhe): this is actually a list of ints, but can be provided as a comma-separated string
     nccl_ports: str = "30004"
     init_new_token_ratio: float = 0.7
     base_min_new_token_ratio: float = 0.1
@@ -64,6 +65,7 @@ class ServerArgs:
     mem_fraction_static: float = 0.8
 
     enable_dp_attention: bool = False
+    allow_auto_truncate: bool = False
     # constrained
     constrained_json_whitespace_pattern: Optional[str] = None
     enable_custom_logit_processor: bool = False
@@ -80,7 +82,9 @@ class ServerArgs:
     attention_backend: Optional[str] = None
     sampling_backend: Optional[str] = None
     grammar_backend: str = "xgrammar"  # or outlines
-
+    cuda_graph_bs: Optional[List[int]] = None
+    cuda_graph_max_bs: Optional[int] = None
+    speculative_algorithm: Optional[str] = None
     # debugging
 
     enable_nan_detection: bool = True
@@ -154,6 +158,8 @@ class ServerArgs:
             raise ValueError(
                 f"Invalid grammar_backend: {self.grammar_backend}, Expect one of ['xgrammar', 'outlines']"
             )
+        if self.cuda_graph_bs is None:
+            self.cuda_graph_max_bs = 160
 
     def update(self, args):
         for k, v in args.items():

@@ -1,8 +1,5 @@
-import typing
-
 import torch
-
-from ..orchestrator import _BatchedPenalizer, _TokenIDs
+from ..orchestrator import _BatchedPenalizer, BatchedPenalizerOrchestrator
 
 
 class BatchedFrequencyPenalizer(_BatchedPenalizer):
@@ -10,8 +7,9 @@ class BatchedFrequencyPenalizer(_BatchedPenalizer):
     Frequency penalizer penalizes tokens based on their frequency in the output.
     """
 
-    frequency_penalties: torch.Tensor = None
-    cumulated_frequency_penalties: torch.Tensor = None
+    def __init__(self, orchestrator: BatchedPenalizerOrchestrator):
+        self.orchestrator = orchestrator
+        self._is_prepared = False
 
     def _is_required(self) -> bool:
         return any(
@@ -20,14 +18,10 @@ class BatchedFrequencyPenalizer(_BatchedPenalizer):
         )
 
     def _prepare(self):
-        self.cumulated_frequency_penalties = (
-            torch.tensor(
-                data=[0.0 for _ in self.orchestrator.reqs()],
-                dtype=torch.float32,
-                device=self.orchestrator.device,
-            )
-            .unsqueeze_(1)
-            .repeat(1, self.orchestrator.vocab_size)
+        self.cumulated_frequency_penalties = torch.zeros(
+            (len(self.orchestrator.reqs()), self.orchestrator.vocab_size),
+            dtype=torch.float32,
+            device=self.orchestrator.device,
         )
 
         self.frequency_penalties = (
@@ -39,35 +33,22 @@ class BatchedFrequencyPenalizer(_BatchedPenalizer):
                 dtype=torch.float32,
                 device=self.orchestrator.device,
             )
-            .unsqueeze_(1)
-            .expand_as(self.cumulated_frequency_penalties)
-        )
+        ).unsqueeze_(1)
 
-    def _teardown(self):
-        del self.frequency_penalties
-        del self.cumulated_frequency_penalties
-
-        self.frequency_penalties = None
-        self.cumulated_frequency_penalties = None
-
-    def _cumulate_input_tokens(self, input_ids: _TokenIDs):
-        pass
-
-    def _cumulate_output_tokens(self, output_ids: _TokenIDs):
-        self.cumulated_frequency_penalties += (
-            self.frequency_penalties * output_ids.occurrence_count()
+    def _cumulate_output_tokens(self, output_ids: torch.Tensor):
+        self.cumulated_frequency_penalties.scatter_add_(
+            dim=1,
+            index=output_ids.unsqueeze(1),
+            src=self.frequency_penalties,
         )
 
     def _apply(self, logits: torch.Tensor) -> torch.Tensor:
-        logits -= self.cumulated_frequency_penalties
-        return logits
+        logits.sub_(self.cumulated_frequency_penalties)
 
-    def _filter(
-        self, indices_to_keep: typing.List[int], indices_tensor_to_keep: torch.Tensor
-    ):
-        self.frequency_penalties = self.frequency_penalties[indices_tensor_to_keep]
+    def _filter(self, keep_indices: torch.Tensor):
+        self.frequency_penalties = self.frequency_penalties[keep_indices]
         self.cumulated_frequency_penalties = self.cumulated_frequency_penalties[
-            indices_tensor_to_keep
+            keep_indices
         ]
 
     def _merge(self, their: "BatchedFrequencyPenalizer"):

@@ -1,4 +1,5 @@
 import uuid
+import copy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union, TYPE_CHECKING
 
@@ -26,8 +27,10 @@ class GenerateReqInput:
     # The embeddings for input_ids; one can specify either text or input_ids or input_embeds.
     input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
     # The image input. It can be a file name, a url, or base64 encoded string.
-    # See also python/sglang/srt/utils.py:load_image.
+    # See also scratchpad/nn/mm_utils.py:load_image.
     image_data: Optional[Union[List[str], str]] = None
+    # The audio input. Like image data, tt can be a file name, a url, or base64 encoded string.
+    audio_data: Optional[Union[List[str], str]] = None
     # The sampling_params. See descriptions below.
     sampling_params: Optional[Union[List[Dict], Dict]] = None
     # The request id.
@@ -39,122 +42,30 @@ class GenerateReqInput:
     logprob_start_len: Optional[Union[List[int], int]] = None
     # If return logprobs, the number of top logprobs to return at each position.
     top_logprobs_num: Optional[Union[List[int], int]] = None
+    # If return logprobs, the token ids to return logprob for.
+    token_ids_logprob: Optional[Union[List[List[int]], List[int]]] = None
     # Whether to detokenize tokens in text in the returned logprobs.
     return_text_in_logprobs: bool = False
     # Whether to stream output.
     stream: bool = False
+    # Whether to log metrics for this request (e.g. health_generate calls do not log metrics)
+    log_metrics: bool = True
+
     # The modalities of the image data [image, multi-images, video]
     modalities: Optional[List[str]] = None
-    # Topping related
+    # LoRA/Delta related
     topping_path: Optional[Union[List[Optional[str]], Optional[str]]] = None
 
     # Session info for continual prompting
     session_params: Optional[Union[List[Dict], Dict]] = None
 
-    def post_init(self):
-        if (self.text is None and self.input_ids is None) or (
-            self.text is not None and self.input_ids is not None
-        ):
-            raise ValueError("Either text or input_ids should be provided.")
+    # Custom logit processor for advanced sampling control. Must be a serialized instance
+    # of `CustomLogitProcessor` in python/sglang/srt/sampling/custom_logit_processor.py
+    # Use the processor's `to_str()` method to generate the serialized string.
+    custom_logit_processor: Optional[Union[List[Optional[str]], str]] = None
 
-        if (
-            isinstance(self.sampling_params, dict)
-            and self.sampling_params.get("n", 1) != 1
-        ):
-            is_single = False
-        else:
-            if self.text is not None:
-                is_single = isinstance(self.text, str)
-            else:
-                is_single = isinstance(self.input_ids[0], int)
-        self.is_single = is_single
-
-        if is_single:
-            if self.sampling_params is None:
-                self.sampling_params = {}
-            if self.rid is None:
-                self.rid = uuid.uuid4().hex
-            if self.return_logprob is None:
-                self.return_logprob = False
-            if self.logprob_start_len is None:
-                self.logprob_start_len = -1
-            if self.top_logprobs_num is None:
-                self.top_logprobs_num = 0
-        else:
-            parallel_sample_num_list = []
-            if isinstance(self.sampling_params, dict):
-                parallel_sample_num = self.sampling_params.get("n", 1)
-            elif isinstance(self.sampling_params, list):
-                for sp in self.sampling_params:
-                    parallel_sample_num = sp.get("n", 1)
-                    parallel_sample_num_list.append(parallel_sample_num)
-                parallel_sample_num = max(parallel_sample_num_list)
-                all_equal = all(
-                    element == parallel_sample_num
-                    for element in parallel_sample_num_list
-                )
-                if parallel_sample_num > 1 and (not all_equal):
-                    # TODO cope with the case that the parallel_sample_num is different for different samples
-                    raise ValueError(
-                        "The parallel_sample_num should be the same for all samples in sample params."
-                    )
-            else:
-                parallel_sample_num = 1
-            self.parallel_sample_num = parallel_sample_num
-
-            if parallel_sample_num != 1:
-                # parallel sampling +1 represents the original prefill stage
-                num = parallel_sample_num + 1
-                if isinstance(self.text, list):
-                    # suppot batch operation
-                    self.batch_size = len(self.text)
-                    num = num * len(self.text)
-                elif isinstance(self.input_ids, list) and isinstance(
-                    self.input_ids[0], list
-                ):
-                    self.batch_size = len(self.input_ids)
-                    num = num * len(self.input_ids)
-                else:
-                    self.batch_size = 1
-            else:
-                # support select operation
-                num = len(self.text) if self.text is not None else len(self.input_ids)
-                self.batch_size = num
-
-            if self.image_data is None:
-                self.image_data = [None] * num
-
-            elif not isinstance(self.image_data, list):
-                self.image_data = [self.image_data] * num
-            elif isinstance(self.image_data, list):
-                # multi-image with n > 1
-                self.image_data = self.image_data * num
-
-            if self.sampling_params is None:
-                self.sampling_params = [{}] * num
-            elif not isinstance(self.sampling_params, list):
-                self.sampling_params = [self.sampling_params] * num
-
-            if self.rid is None:
-                self.rid = [uuid.uuid4().hex for _ in range(num)]
-            else:
-                if not isinstance(self.rid, list):
-                    raise ValueError("The rid should be a list.")
-
-            if self.return_logprob is None:
-                self.return_logprob = [False] * num
-            elif not isinstance(self.return_logprob, list):
-                self.return_logprob = [self.return_logprob] * num
-
-            if self.logprob_start_len is None:
-                self.logprob_start_len = [-1] * num
-            elif not isinstance(self.logprob_start_len, list):
-                self.logprob_start_len = [self.logprob_start_len] * num
-
-            if self.top_logprobs_num is None:
-                self.top_logprobs_num = [0] * num
-            elif not isinstance(self.top_logprobs_num, list):
-                self.top_logprobs_num = [self.top_logprobs_num] * num
+    # Whether to return hidden states
+    return_hidden_states: bool = False
 
     def normalize_batch_and_arguments(self):
         if (
@@ -178,6 +89,8 @@ class GenerateReqInput:
                 self.batch_size = len(self.text)
             self.input_embeds = None
         elif self.input_ids is not None:
+            if len(self.input_ids) == 0:
+                raise ValueError("input_ids cannot be empty.")
             if isinstance(self.input_ids[0], int):
                 self.is_single = True
                 self.batch_size = 1
@@ -224,6 +137,8 @@ class GenerateReqInput:
                 self.logprob_start_len = -1
             if self.top_logprobs_num is None:
                 self.top_logprobs_num = 0
+            if not self.token_ids_logprob:  # covers both None and []
+                self.token_ids_logprob = None
         else:
             if self.parallel_sample_num == 1:
                 num = self.batch_size
@@ -231,11 +146,18 @@ class GenerateReqInput:
                 # Expand parallel_sample_num
                 num = self.batch_size * self.parallel_sample_num
 
-            if self.image_data is None:
+            if not self.image_data:
                 self.image_data = [None] * num
             elif not isinstance(self.image_data, list):
                 self.image_data = [self.image_data] * num
             elif isinstance(self.image_data, list):
+                pass
+
+            if self.audio_data is None:
+                self.audio_data = [None] * num
+            elif not isinstance(self.audio_data, list):
+                self.audio_data = [self.audio_data] * num
+            elif isinstance(self.audio_data, list):
                 pass
 
             if self.sampling_params is None:
@@ -269,6 +191,30 @@ class GenerateReqInput:
             else:
                 assert self.parallel_sample_num == 1
 
+            if not self.token_ids_logprob:  # covers both None and []
+                self.token_ids_logprob = [None] * num
+            elif not isinstance(self.token_ids_logprob, list):
+                self.token_ids_logprob = [[self.token_ids_logprob] for _ in range(num)]
+            elif not isinstance(self.token_ids_logprob[0], list):
+                self.token_ids_logprob = [
+                    copy.deepcopy(self.token_ids_logprob) for _ in range(num)
+                ]
+            else:
+                assert self.parallel_sample_num == 1
+
+            if self.custom_logit_processor is None:
+                self.custom_logit_processor = [None] * num
+            elif not isinstance(self.custom_logit_processor, list):
+                self.custom_logit_processor = [self.custom_logit_processor] * num
+            else:
+                assert self.parallel_sample_num == 1
+
+        # Other checks
+        if self.session_params is not None:
+            assert isinstance(self.session_params, dict) or isinstance(
+                self.session_params[0], dict
+            )
+
     def regenerate_rid(self):
         self.rid = uuid.uuid4().hex
         return self.rid
@@ -278,17 +224,26 @@ class GenerateReqInput:
             text=self.text[i] if self.text is not None else None,
             input_ids=self.input_ids[i] if self.input_ids is not None else None,
             image_data=self.image_data[i],
+            audio_data=self.audio_data[i],
             sampling_params=self.sampling_params[i],
             rid=self.rid[i],
             return_logprob=self.return_logprob[i],
             logprob_start_len=self.logprob_start_len[i],
             top_logprobs_num=self.top_logprobs_num[i],
+            token_ids_logprob=self.token_ids_logprob[i],
             return_text_in_logprobs=self.return_text_in_logprobs,
             stream=self.stream,
+            log_metrics=self.log_metrics,
             modalities=self.modalities[i] if self.modalities else None,
             topping_path=self.topping_path[i]
             if self.topping_path is not None
             else None,
+            custom_logit_processor=(
+                self.custom_logit_processor[i]
+                if self.custom_logit_processor is not None
+                else None
+            ),
+            return_hidden_states=self.return_hidden_states,
         )
 
 
@@ -311,19 +266,20 @@ class TokenizedGenerateReqInput:
     input_text: str
     # The input token ids
     input_ids: List[int]
-    # The image input
-    image_inputs: dict
+    # The multimodal input
+    mm_inputs: dict
     # The sampling parameters
     sampling_params: SamplingParams
+
     # Whether to return the logprobs
     return_logprob: bool
     # If return logprobs, the start location in the prompt for returning logprobs.
     logprob_start_len: int
     # If return logprobs, the number of top logprobs to return at each position.
     top_logprobs_num: int
+    token_ids_logprob: List[int]
     # Whether to stream output
     stream: bool
-
     # LoRA related
     topping_path: Optional[str] = None  # None means just use the base model
     # The input embeds
@@ -331,6 +287,12 @@ class TokenizedGenerateReqInput:
 
     # Session info for continual prompting
     session_params: Optional[SessionParams] = None
+    # Custom logit processor for advanced sampling control. Must be a serialized instance
+    # of `CustomLogitProcessor` in python/sglang/srt/sampling/custom_logit_processor.py
+    # Use the processor's `to_str()` method to generate the serialized string.
+    custom_logit_processor: Optional[str] = None
+    # Whether to return hidden states
+    return_hidden_states: bool = False
 
 
 @dataclass

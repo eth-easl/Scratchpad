@@ -9,12 +9,13 @@ from flashinfer import (
     BatchPrefillWithPagedKVCacheWrapper,
     BatchPrefillWithRaggedKVCacheWrapper,
 )
-from scratchpad.server.args import global_args
 from flashinfer.cascade import merge_state
 from flashinfer.decode import _grouped_size_compiled_for_decode_kernels
+
 from scratchpad.model_executor.forward_info import ForwardMode, ForwardBatch
 from scratchpad.model_executor.speculative.spec_info import SpecInfo
 from scratchpad.nn.utils import update_flashinfer_indices
+from scratchpad.server.args import global_args
 
 from typing import TYPE_CHECKING, Optional, List, Union
 from enum import Enum, auto

@@ -1,6 +1,6 @@
 from enum import IntEnum, auto
 from typing import Optional
-from typing import List
+from typing import List, Set
 from transformers import PretrainedConfig
 
 from scratchpad.utils import get_config, get_context_length
@@ -82,38 +82,26 @@ class ModelConfig:
             "head_dim",
             self.hf_text_config.hidden_size // self.hf_text_config.num_attention_heads,
         )
-
-        # FIXME: temporary special judge for deepseek v2 MLA architecture
-        if "DeepseekV2ForCausalLM" in self.hf_config.architectures:
-            self.head_dim = 256
-            self.attention_arch = AttentionArch.MLA
-            self.kv_lora_rank = self.hf_config.kv_lora_rank
-            self.qk_rope_head_dim = self.hf_config.qk_rope_head_dim
-        elif "MiniCPM3ForCausalLM" in self.hf_config.architectures:
-            self.head_dim = 128
-            self.attention_arch = AttentionArch.MLA
-            self.kv_lora_rank = self.hf_config.kv_lora_rank
-            self.qk_rope_head_dim = self.hf_config.qk_rope_head_dim
-        else:
-            self.attention_arch = AttentionArch.MHA
-
+        self.attention_arch = AttentionArch.MHA
         self.num_attention_heads = self.hf_text_config.num_attention_heads
         self.num_key_value_heads = getattr(
             self.hf_text_config, "num_key_value_heads", None
         )
-
-        # for Dbrx and MPT models
-        if self.hf_config.model_type in ["dbrx", "mpt"]:
-            self.num_key_value_heads = getattr(
-                self.hf_config.attn_config, "kv_n_heads", None
-            )
-
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
         self.hidden_size = self.hf_text_config.hidden_size
         self.num_hidden_layers = self.hf_text_config.num_hidden_layers
         self.vocab_size = self.hf_text_config.vocab_size
         self.is_encoder_decoder = self.hf_config.model_type in ["mllama"]
+        self.hf_eos_token_id = self.get_hf_eos_token_id()
+        self.image_token_id = getattr(self.hf_config, "image_token_id", None)
+
+    def get_hf_eos_token_id(self) -> Optional[Set[int]]:
+        eos_ids = getattr(self.hf_config, "eos_token_id", None)
+        if eos_ids:
+            # it can be either int or list of int
+            eos_ids = {eos_ids} if isinstance(eos_ids, int) else set(eos_ids)
+        return eos_ids
 
     # adapted from https://github.com/vllm-project/vllm/blob/main/vllm/config.py#L289
     def get_total_num_kv_heads(self) -> int:

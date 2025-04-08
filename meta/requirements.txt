@@ -6,7 +6,7 @@ requests
 uvicorn
 zmq
 huggingface_hub
-transformers==4.46.3
+transformers
 outlines==0.0.46
 uvloop
 nvidia-ml-py
@@ -24,3 +24,4 @@ xgrammar>=0.1.13
 nvidia-cuda-nvrtc-cu12
 cuda-python
 setproctitle
+torch-memory-saver

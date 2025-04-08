@@ -52,17 +52,24 @@ def _get_and_verify_dtype(
     if torch_dtype != config_dtype:
         if torch_dtype == torch.float32:
             # Upcasting to float32 is allowed.
-            logger.info("Upcasting %s to %s.", config_dtype, torch_dtype)
+            logger.info(f"Upcasting {config_dtype} to {torch_dtype}.")
             pass
         elif config_dtype == torch.float32:
             # Downcasting from float32 to float16 or bfloat16 is allowed.
-            logger.info("Downcasting %s to %s.", config_dtype, torch_dtype)
+            logger.info(f"Downcasting {config_dtype} to {torch_dtype}.")
             pass
         else:
             # Casting between float16 and bfloat16 is allowed with a warning.
-            logger.warning("Casting %s to %s.", config_dtype, torch_dtype)
+            logger.warning(f"Casting {config_dtype} to {torch_dtype}.")
 
     return torch_dtype
+
+
+def get_min_sliding_window(sliding_window: Union[int, list[Optional[int]]]) -> int:
+    if isinstance(sliding_window, list):
+        return min(s for s in sliding_window if s is not None)
+
+    return sliding_window
 
 
 def _get_and_verify_max_len(
@@ -216,3 +223,32 @@ def get_served_model_name(
     if isinstance(served_model_name, list):
         return served_model_name[0]
     return served_model_name
+
+
+multimodal_model_archs = [
+    "DeepseekVL2ForCausalLM",
+    "Gemma3ForConditionalGeneration",
+    "Grok1VForCausalLM",
+    "Grok1AForCausalLM",
+    "LlavaLlamaForCausalLM",
+    "LlavaMistralForCausalLM",
+    "LlavaQwenForCausalLM",
+    "LlavaVidForCausalLM",
+    "MiniCPMO",
+    "MiniCPMV",
+    "MultiModalityCausalLM",
+    "MllamaForConditionalGeneration",
+    "Qwen2VLForConditionalGeneration",
+    "Qwen2_5_VLForConditionalGeneration",
+    "CLIPModel",
+]
+
+
+def is_multimodal_model(model_architectures: List[str]):
+    if any(
+        multi_model_arch in model_architectures
+        for multi_model_arch in multimodal_model_archs
+    ):
+        return True
+    else:
+        return False

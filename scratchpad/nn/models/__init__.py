@@ -1,102 +1,103 @@
-import functools
+import os
 import importlib
-from typing import Dict, List, Optional, Tuple, Type
-
+import pkgutil
+from dataclasses import dataclass, field
+from functools import lru_cache
+from typing import AbstractSet, Dict, List, Optional, Tuple, Type, Union
 import torch.nn as nn
 from scratchpad.utils import logger
 
-_GENERATION_MODELS = {
-    "LlamaForCausalLM": ("llama", "LlamaForCausalLM"),
-    "Qwen2ForCausalLM": ("qwen2", "Qwen2ForCausalLM"),
-    "LlamaNaiveQuantisedMoEForCausalLM": (
-        "llama_naive_moe",
-        "LlamaNaiveQuantisedMoEForCausalLM",
-    ),
-    "LlamaQuantisedMoEForCausalLM": ("llama_quant_moe", "LlamaQuantisedMoEForCausalLM"),
-    "LlamaMoEForCausalLM": ("llama_moe", "LlamaMoEForCausalLM"),
-}
 
-_EMBEDDING_MODELS = {
-    "MistralModel": ("llama_embedding", "LlamaEmbeddingModel"),
-}
+@dataclass
+class _ModelRegistry:
+    # Keyed by model_arch
+    models: Dict[str, Union[Type[nn.Module], str]] = field(default_factory=dict)
 
-_MULTIMODAL_MODELS = {
-    "MllamaForConditionalGeneration": ("mllama", "MllamaForConditionalGeneration"),
-    "Qwen2VLForConditionalGeneration": ("qwen2", "Qwen2VLForConditionalGeneration"),
-}
-_CONDITIONAL_GENERATION_MODELS = {}
+    def get_supported_archs(self) -> AbstractSet[str]:
+        return self.models.keys()
 
-_MODELS = {
-    **_GENERATION_MODELS,
-    **_EMBEDDING_MODELS,
-    **_MULTIMODAL_MODELS,
-    **_CONDITIONAL_GENERATION_MODELS,
-}
-# Architecture -> type.
-# out of tree models
-_OOT_MODELS: Dict[str, Type[nn.Module]] = {}
+    def _raise_for_unsupported(self, architectures: List[str]):
+        all_supported_archs = self.get_supported_archs()
 
-
-class ModelRegistry:
-    @staticmethod
-    @functools.lru_cache(maxsize=128)
-    def _get_model(model_arch: str):
-        module_name, model_cls_name = _MODELS[model_arch]
-        module = importlib.import_module(
-            f"scratchpad.model_executor.models.{module_name}"
-        )
-        return getattr(module, model_cls_name, None)
-
-    @staticmethod
-    def _try_load_model_cls(model_arch: str) -> Optional[Type[nn.Module]]:
-        if model_arch in _OOT_MODELS:
-            return _OOT_MODELS[model_arch]
-        if model_arch not in _MODELS:
-            return None
-        return ModelRegistry._get_model(model_arch)
-
-    @staticmethod
-    def resolve_model_cls(architectures: List[str]) -> Tuple[Type[nn.Module], str]:
-        for arch in architectures:
-            model_cls = ModelRegistry._try_load_model_cls(arch)
-            if model_cls is not None:
-                return (model_cls, arch)
+        if any(arch in all_supported_archs for arch in architectures):
+            raise ValueError(
+                f"Model architectures {architectures} failed "
+                "to be inspected. Please check the logs for more details."
+            )
 
         raise ValueError(
             f"Model architectures {architectures} are not supported for now. "
-            f"Supported architectures: {ModelRegistry.get_supported_archs()}"
+            f"Supported architectures: {all_supported_archs}"
         )
 
-    @staticmethod
-    def get_supported_archs() -> List[str]:
-        return list(_MODELS.keys()) + list(_OOT_MODELS.keys())
+    def _try_load_model_cls(self, model_arch: str) -> Optional[Type[nn.Module]]:
+        if model_arch not in self.models:
+            return None
 
-    @staticmethod
-    def register_model(model_arch: str, model_cls: Type[nn.Module]):
-        if model_arch in _MODELS:
-            logger.warning(
-                "Model architecture %s is already registered, and will be "
-                "overwritten by the new model class %s.",
-                model_arch,
-                model_cls.__name__,
-            )
-        global _OOT_MODELS
-        _OOT_MODELS[model_arch] = model_cls
+        return self.models[model_arch]
 
-    @staticmethod
-    def is_embedding_model(model_arch: str) -> bool:
-        return model_arch in _EMBEDDING_MODELS
+    def _normalize_archs(
+        self,
+        architectures: Union[str, List[str]],
+    ) -> List[str]:
+        if isinstance(architectures, str):
+            architectures = [architectures]
+        if not architectures:
+            logger.warning("No model architectures are specified")
 
-    @staticmethod
-    def is_multimodal_model(model_arch: str) -> bool:
+        return architectures
 
-        # TODO: find a way to avoid initializing CUDA prematurely to
-        # use `supports_multimodal` to determine if a model is multimodal
-        # model_cls = ModelRegistry._try_load_model_cls(model_arch)
-        # from vllm.model_executor.models.interfaces import supports_multimodal
-        return model_arch in _MULTIMODAL_MODELS
+    def resolve_model_cls(
+        self,
+        architectures: Union[str, List[str]],
+    ) -> Tuple[Type[nn.Module], str]:
+        architectures = self._normalize_archs(architectures)
+
+        for arch in architectures:
+            model_cls = self._try_load_model_cls(arch)
+            if model_cls is not None:
+                return (model_cls, arch)
+
+        return self._raise_for_unsupported(architectures)
 
 
-__all__ = [
-    "ModelRegistry",
-]
+@lru_cache()
+def import_model_classes():
+    model_arch_name_to_cls = {}
+    package_name = "scratchpad.nn.models"
+    package = importlib.import_module(package_name)
+    # list all sub directories in the package
+    model_families = os.listdir(package.__path__[0])
+    for model_family in model_families:
+        iter_path = [os.path.join(package.__path__[0], model_family)]
+        for _, name, ispkg in pkgutil.iter_modules(
+            iter_path, package_name + f".{model_family}."
+        ):
+            if not ispkg:
+                try:
+                    module = importlib.import_module(name)
+                except Exception as e:
+                    logger.warning(
+                        f"Ignore import error when loading {name}. " f"Error: {e}"
+                    )
+                    continue
+                if hasattr(module, "EntryClass"):
+                    entry = module.EntryClass
+                    if isinstance(
+                        entry, list
+                    ):  # To support multiple model classes in one module
+                        for tmp in entry:
+                            assert (
+                                tmp.__name__ not in model_arch_name_to_cls
+                            ), f"Duplicated model implementation for {tmp.__name__}"
+                            model_arch_name_to_cls[tmp.__name__] = tmp
+                    else:
+                        assert (
+                            entry.__name__ not in model_arch_name_to_cls
+                        ), f"Duplicated model implementation for {entry.__name__}"
+                        model_arch_name_to_cls[entry.__name__] = entry
+
+    return model_arch_name_to_cls
+
+
+ModelRegistry = _ModelRegistry(import_model_classes())

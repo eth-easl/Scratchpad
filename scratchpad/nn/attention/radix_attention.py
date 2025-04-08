@@ -19,6 +19,8 @@ class RadixAttention(nn.Module):
         v_head_dim: int = -1,
         sliding_window_size: int = -1,
         is_cross_attention: bool = False,
+        prefix: str = "",
+        use_irope: bool = False,
     ):
         super().__init__()
         self.tp_q_head_num = num_heads
@@ -32,8 +34,9 @@ class RadixAttention(nn.Module):
         self.logit_cap = logit_cap
         self.sliding_window_size = sliding_window_size or -1
         self.is_cross_attention = is_cross_attention
-        self.k_scale = 1.0
-        self.v_scale = 1.0
+        self.k_scale = None
+        self.v_scale = None
+        self.use_irope = use_irope
 
     def forward(
         self,
