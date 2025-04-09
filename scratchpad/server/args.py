@@ -127,6 +127,9 @@ class ServerArgs:
     init_toppings: Optional[str] = None
     allow_toppings_registration: bool = False
 
+    # others
+    crash_on_warnings: bool = False
+
     def translate_auto(self):
         if self.served_model_name == "auto":
             self.served_model_name = self.model_path

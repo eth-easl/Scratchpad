@@ -1,11 +1,12 @@
 import os
-import faulthandler
 import zmq
 import time
 import torch
 import warnings
 import threading
+import traceback
 import setproctitle
+import faulthandler
 from collections import defaultdict
 from concurrent import futures
 import multiprocessing
@@ -205,6 +206,13 @@ class Scheduler:
 
         # Init memory pool and cache
         self._init_memory_pool_and_cache()
+
+        # Init profiler
+        self.torch_profiler = None
+        self.torch_profiler_output_dir: Optional[str] = None
+        self.profiler_activities: Optional[List[str]] = None
+        self.profiler_target_forward_ct: Optional[int] = None
+
         self._init_metrics()
         self.policy = SchedulePolicy(self.schedule_policy, self.tree_cache)
         # Init running status
@@ -220,6 +228,7 @@ class Scheduler:
         self.num_generated_tokens = 0
         self.last_decode_stats_tic = time.time()
         self.last_prefill_stats_tic = time.time()
+        self.return_health_check_ct = 0
         self.num_prefill_tokens = 0
         self.stream_interval = server_args.stream_interval
 
@@ -894,7 +903,7 @@ class Scheduler:
             batch.batch_is_full = False
 
         # Update batch tensors
-        batch.prepare_for_decode()
+        batch.prepare_for_decode(self.tp_worker.model_runner.topping_manager)
         return batch
 
     def run_batch(
@@ -903,45 +912,60 @@ class Scheduler:
         """Run a batch."""
         self.forward_ct += 1
 
+        # Check profiler
+        if (
+            self.profiler_target_forward_ct
+            and self.profiler_target_forward_ct <= self.forward_ct
+        ):
+            self.stop_profile()
+
+        # Run forward
         if self.is_generation:
-            if batch.forward_mode.is_decode() or batch.extend_num_tokens != 0:
-                if self.spec_algorithm.is_none():
-                    model_worker_batch = batch.get_model_worker_batch()
-                    (
-                        logits_output,
-                        next_token_ids,
-                    ) = self.tp_worker.forward_batch_generation(model_worker_batch)
-                    bid = model_worker_batch.bid
-                else:
-                    (
-                        logits_output,
-                        next_token_ids,
-                        model_worker_batch,
-                        num_accepted_tokens,
-                    ) = self.draft_worker.forward_batch_speculative_generation(batch)
-                    self.num_generated_tokens += num_accepted_tokens
-                batch.output_ids = next_token_ids
-
-            elif batch.forward_mode.is_idle():
+            if self.spec_algorithm.is_none():
                 model_worker_batch = batch.get_model_worker_batch()
-                self.tp_worker.forward_batch_idle(model_worker_batch)
-                return
+                logits_output, next_token_ids = self.tp_worker.forward_batch_generation(
+                    model_worker_batch
+                )
+                bid = model_worker_batch.bid
             else:
-                logits_output = None
-                if self.skip_tokenizer_init:
-                    next_token_ids = torch.full(
-                        (batch.batch_size(),), self.tokenizer.eos_token_id
-                    )
-                else:
-                    next_token_ids = torch.full((batch.batch_size(),), 0)
-
+                (
+                    logits_output,
+                    next_token_ids,
+                    bid,
+                    num_accepted_tokens,
+                ) = self.draft_worker.forward_batch_speculative_generation(batch)
+                self.spec_num_total_accepted_tokens += (
+                    num_accepted_tokens + batch.batch_size()
+                )
+                self.spec_num_total_forward_ct += batch.batch_size()
+                self.num_generated_tokens += num_accepted_tokens
             batch.output_ids = next_token_ids
-            ret = logits_output, next_token_ids, model_worker_batch.bid
+
+            # These 2 values are needed for processing the output, but the values can be
+            # modified by overlap schedule. So we have to copy them here so that
+            # we can use the correct values in output processing.
+            if batch.return_logprob:
+                extend_input_len_per_req = [req.extend_input_len for req in batch.reqs]
+                extend_logprob_start_len_per_req = [
+                    req.extend_logprob_start_len for req in batch.reqs
+                ]
+            else:
+                extend_input_len_per_req = None
+                extend_logprob_start_len_per_req = None
+
+            ret = GenerationBatchResult(
+                logits_output=logits_output,
+                next_token_ids=next_token_ids,
+                extend_input_len_per_req=extend_input_len_per_req,
+                extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
+                bid=bid,
+            )
         else:  # embedding or reward model
-            assert batch.extend_num_tokens != 0
             model_worker_batch = batch.get_model_worker_batch()
             embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
-            ret = embeddings, model_worker_batch.bid
+            ret = EmbeddingBatchResult(
+                embeddings=embeddings, bid=model_worker_batch.bid
+            )
         return ret
 
     def process_batch_result(
@@ -1121,28 +1145,48 @@ class Scheduler:
 
         self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 
-    def process_batch_result_decode(self, batch: ScheduleBatch, result):
-        logits_output, next_token_ids, bid = result
+    def process_batch_result_decode(
+        self,
+        batch: ScheduleBatch,
+        result: GenerationBatchResult,
+    ):
+        logits_output, next_token_ids, bid = (
+            result.logits_output,
+            result.next_token_ids,
+            result.bid,
+        )
         self.num_generated_tokens += len(batch.reqs)
 
         if self.enable_overlap:
             logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             next_token_logprobs = logits_output.next_token_logprobs
-        else:
+        elif batch.spec_algorithm.is_none():
+            # spec decoding handles output logprobs inside verify process.
             next_token_ids = next_token_ids.tolist()
             if batch.return_logprob:
                 next_token_logprobs = logits_output.next_token_logprobs.tolist()
 
-        self.token_to_kv_pool.free_group_begin()
+        self.token_to_kv_pool_allocator.free_group_begin()
 
         # Check finish condition
+        # NOTE: the length of reqs and next_token_ids don't match if it is spec decoding.
+        # We should ignore using next_token_ids for spec decoding cases.
         for i, (req, next_token_id) in enumerate(zip(batch.reqs, next_token_ids)):
             if req.is_retracted:
                 continue
 
             if self.enable_overlap and req.finished():
-                # Free the one delayed token
-                self.token_to_kv_pool.free(batch.out_cache_loc[i : i + 1])
+                # Free the one extra delayed token
+                if self.page_size == 1:
+                    self.token_to_kv_pool_allocator.free(batch.out_cache_loc[i : i + 1])
+                else:
+                    # Only free when the extra token is in a new page
+                    if (
+                        len(req.origin_input_ids) + len(req.output_ids) - 1
+                    ) % self.page_size == 0:
+                        self.token_to_kv_pool_allocator.free(
+                            batch.out_cache_loc[i : i + 1]
+                        )
                 continue
 
             if batch.spec_algorithm.is_none():
@@ -1150,11 +1194,11 @@ class Scheduler:
                 req.output_ids.append(next_token_id)
 
             req.check_finished()
-
             if req.finished():
                 self.tree_cache.cache_finished_req(req)
 
-            if req.return_logprob:
+            if req.return_logprob and batch.spec_algorithm.is_none():
+                # speculative worker handles logprob in speculative decoding
                 req.output_token_logprobs_val.append(next_token_logprobs[i])
                 req.output_token_logprobs_idx.append(next_token_id)
                 if req.top_logprobs_num > 0:
@@ -1164,8 +1208,20 @@ class Scheduler:
                     req.output_top_logprobs_idx.append(
                         logits_output.next_token_top_logprobs_idx[i]
                     )
+                if req.token_ids_logprob is not None:
+                    req.output_token_ids_logprobs_val.append(
+                        logits_output.next_token_token_ids_logprobs_val[i]
+                    )
+                    req.output_token_ids_logprobs_idx.append(
+                        logits_output.next_token_token_ids_logprobs_idx[i]
+                    )
 
-            if req.grammar is not None:
+            if req.return_hidden_states and logits_output.hidden_states is not None:
+                req.hidden_states.append(
+                    logits_output.hidden_states[i].cpu().clone().tolist()
+                )
+
+            if req.grammar is not None and batch.spec_algorithm.is_none():
                 req.grammar.accept_token(next_token_id)
                 req.grammar.finished = req.finished()
 
@@ -1176,7 +1232,7 @@ class Scheduler:
 
         self.stream_output(batch.reqs, batch.return_logprob)
 
-        self.token_to_kv_pool.free_group_end()
+        self.token_to_kv_pool_allocator.free_group_end()
 
         self.forward_ct_decode = (self.forward_ct_decode + 1) % (1 << 30)
         if (
@@ -1262,135 +1318,189 @@ class Scheduler:
         self, reqs: List[Req], return_logprob: bool, skip_req: Optional[Req] = None
     ):
         """Stream the output to detokenizer."""
+        if self.is_generation:
+            self.stream_output_generation(reqs, return_logprob, skip_req)
+        else:  # embedding or reward model
+            self.stream_output_embedding(reqs)
+
+    def stream_output_generation(
+        self, reqs: List[Req], return_logprob: bool, skip_req: Optional[Req] = None
+    ):
         rids = []
         finished_reasons: List[BaseFinishReason] = []
 
-        if self.is_generation:
-            vids = []
-            decoded_texts = []
-            decode_ids_list = []
-            read_offsets = []
-            output_ids = []
+        decoded_texts = []
+        decode_ids_list = []
+        read_offsets = []
+        output_ids = []
 
-            skip_special_tokens = []
-            spaces_between_special_tokens = []
-            no_stop_trim = []
-            prompt_tokens = []
-            completion_tokens = []
-            cached_tokens = []
+        skip_special_tokens = []
+        spaces_between_special_tokens = []
+        no_stop_trim = []
+        prompt_tokens = []
+        completion_tokens = []
+        cached_tokens = []
+        spec_verify_ct = []
+        output_hidden_states = None
 
-            if return_logprob:
-                input_token_logprobs_val = []
-                input_token_logprobs_idx = []
-                output_token_logprobs_val = []
-                output_token_logprobs_idx = []
-                input_top_logprobs_val = []
-                input_top_logprobs_idx = []
-                output_top_logprobs_val = []
-                output_top_logprobs_idx = []
-                normalized_prompt_logprob = []
-            else:
-                input_token_logprobs_val = (
-                    input_token_logprobs_idx
-                ) = (
-                    output_token_logprobs_val
-                ) = (
-                    output_token_logprobs_idx
-                ) = (
-                    input_top_logprobs_val
-                ) = (
-                    input_top_logprobs_idx
-                ) = (
-                    output_top_logprobs_val
-                ) = output_top_logprobs_idx = normalized_prompt_logprob = None
+        if return_logprob:
+            input_token_logprobs_val = []
+            input_token_logprobs_idx = []
+            output_token_logprobs_val = []
+            output_token_logprobs_idx = []
+            input_top_logprobs_val = []
+            input_top_logprobs_idx = []
+            output_top_logprobs_val = []
+            output_top_logprobs_idx = []
+            input_token_ids_logprobs_val = []
+            input_token_ids_logprobs_idx = []
+            output_token_ids_logprobs_val = []
+            output_token_ids_logprobs_idx = []
+        else:
+            input_token_logprobs_val = (
+                input_token_logprobs_idx
+            ) = (
+                output_token_logprobs_val
+            ) = (
+                output_token_logprobs_idx
+            ) = (
+                input_top_logprobs_val
+            ) = (
+                input_top_logprobs_idx
+            ) = (
+                output_top_logprobs_val
+            ) = (
+                output_top_logprobs_idx
+            ) = (
+                input_token_ids_logprobs_val
+            ) = (
+                input_token_ids_logprobs_idx
+            ) = output_token_ids_logprobs_val = output_token_ids_logprobs_idx = None
 
-            for req in reqs:
-                if req is skip_req:
-                    continue
+        for req in reqs:
+            if req is skip_req:
+                continue
 
-                # TODO(lianmin): revisit this for overlap + retract + stream
-                if (
-                    req.finished()
-                    # If stream, follow the given stream_interval
-                    or (req.stream and len(req.output_ids) % self.stream_interval == 0)
-                    # If not stream, we still want to output some tokens to get the benefit of incremental decoding.
-                    or (not req.stream and len(req.output_ids) % 50 == 0)
-                ):
-                    if self.draft_worker and req.finished():
-                        self.draft_worker.finish_request(req)
+            # Multimodal partial stream chunks break the detokenizer, so drop aborted requests here.
+            if self.model_config.is_multimodal_gen and req.to_abort:
+                continue
 
-                    rids.append(req.rid)
-                    finished_reasons.append(
-                        req.finished_reason.to_json() if req.finished_reason else None
-                    )
-                    vids.append(req.vid)
-                    decoded_texts.append(req.decoded_text)
-                    decode_ids, read_offset = req.init_incremental_detokenize()
-                    decode_ids_list.append(decode_ids)
-                    read_offsets.append(read_offset)
-                    if self.skip_tokenizer_init:
-                        output_ids.append(req.output_ids)
-                    skip_special_tokens.append(req.sampling_params.skip_special_tokens)
-                    spaces_between_special_tokens.append(
-                        req.sampling_params.spaces_between_special_tokens
-                    )
-                    no_stop_trim.append(req.sampling_params.no_stop_trim)
-
-                    prompt_tokens.append(len(req.origin_input_ids))
-                    completion_tokens.append(len(req.output_ids))
-                    cached_tokens.append(req.cached_tokens)
-
-                    if return_logprob:
-                        input_token_logprobs_val.append(req.input_token_logprobs_val)
-                        input_token_logprobs_idx.append(req.input_token_logprobs_idx)
-                        output_token_logprobs_val.append(req.output_token_logprobs_val)
-                        output_token_logprobs_idx.append(req.output_token_logprobs_idx)
-                        input_top_logprobs_val.append(req.input_top_logprobs_val)
-                        input_top_logprobs_idx.append(req.input_top_logprobs_idx)
-                        output_top_logprobs_val.append(req.output_top_logprobs_val)
-                        output_top_logprobs_idx.append(req.output_top_logprobs_idx)
-                        normalized_prompt_logprob.append(req.normalized_prompt_logprob)
-
-            # Send to detokenizer
-            if rids:
-                self.send_to_detokenizer.send_pyobj(
-                    BatchTokenIDOut(
-                        rids,
-                        finished_reasons,
-                        vids,
-                        decoded_texts,
-                        decode_ids_list,
-                        read_offsets,
-                        output_ids,
-                        skip_special_tokens,
-                        spaces_between_special_tokens,
-                        no_stop_trim,
-                        prompt_tokens,
-                        completion_tokens,
-                        cached_tokens,
-                        input_token_logprobs_val,
-                        input_token_logprobs_idx,
-                        output_token_logprobs_val,
-                        output_token_logprobs_idx,
-                        input_top_logprobs_val,
-                        input_top_logprobs_idx,
-                        output_top_logprobs_val,
-                        output_top_logprobs_idx,
-                        normalized_prompt_logprob,
-                    )
+            if (
+                req.finished()
+                # If stream, follow the given stream_interval
+                or (req.stream and len(req.output_ids) % self.stream_interval == 0)
+                # If not stream, we still want to output some tokens to get the benefit of incremental decoding.
+                # TODO(lianmin): this is wrong for speculative decoding because len(req.output_ids) does not
+                # always increase one-by-one.
+                or (
+                    not req.stream
+                    and len(req.output_ids) % 50 == 0
+                    and not self.model_config.is_multimodal_gen
                 )
-        else:  # embedding or reward model
-            embeddings = []
-            prompt_tokens = []
-            for req in reqs:
-                if req.finished():
-                    rids.append(req.rid)
-                    finished_reasons.append(req.finished_reason.to_json())
-                    embeddings.append(req.embedding)
-                    prompt_tokens.append(len(req.origin_input_ids))
+            ):
+                rids.append(req.rid)
+                finished_reasons.append(
+                    req.finished_reason.to_json() if req.finished_reason else None
+                )
+                decoded_texts.append(req.decoded_text)
+                decode_ids, read_offset = req.init_incremental_detokenize()
+                decode_ids_list.append(decode_ids)
+                read_offsets.append(read_offset)
+                if self.skip_tokenizer_init:
+                    output_ids.append(req.output_ids)
+                skip_special_tokens.append(req.sampling_params.skip_special_tokens)
+                spaces_between_special_tokens.append(
+                    req.sampling_params.spaces_between_special_tokens
+                )
+                no_stop_trim.append(req.sampling_params.no_stop_trim)
+                prompt_tokens.append(len(req.origin_input_ids))
+                completion_tokens.append(len(req.output_ids))
+                cached_tokens.append(req.cached_tokens)
+
+                if not self.spec_algorithm.is_none():
+                    spec_verify_ct.append(req.spec_verify_ct)
+
+                if return_logprob:
+                    input_token_logprobs_val.append(req.input_token_logprobs_val)
+                    input_token_logprobs_idx.append(req.input_token_logprobs_idx)
+                    output_token_logprobs_val.append(req.output_token_logprobs_val)
+                    output_token_logprobs_idx.append(req.output_token_logprobs_idx)
+                    input_top_logprobs_val.append(req.input_top_logprobs_val)
+                    input_top_logprobs_idx.append(req.input_top_logprobs_idx)
+                    output_top_logprobs_val.append(req.output_top_logprobs_val)
+                    output_top_logprobs_idx.append(req.output_top_logprobs_idx)
+                    input_token_ids_logprobs_val.append(
+                        req.input_token_ids_logprobs_val
+                    )
+                    input_token_ids_logprobs_idx.append(
+                        req.input_token_ids_logprobs_idx
+                    )
+                    output_token_ids_logprobs_val.append(
+                        req.output_token_ids_logprobs_val
+                    )
+                    output_token_ids_logprobs_idx.append(
+                        req.output_token_ids_logprobs_idx
+                    )
+
+                if req.return_hidden_states:
+                    if output_hidden_states is None:
+                        output_hidden_states = []
+                    output_hidden_states.append(req.hidden_states)
+
+        # Send to detokenizer
+        if rids:
+            if self.model_config.is_multimodal_gen:
+                return
             self.send_to_detokenizer.send_pyobj(
-                BatchEmbeddingOut(rids, finished_reasons, embeddings, prompt_tokens)
+                BatchTokenIDOut(
+                    rids,
+                    finished_reasons,
+                    decoded_texts,
+                    decode_ids_list,
+                    read_offsets,
+                    output_ids,
+                    skip_special_tokens,
+                    spaces_between_special_tokens,
+                    no_stop_trim,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    spec_verify_ct,
+                    input_token_logprobs_val,
+                    input_token_logprobs_idx,
+                    output_token_logprobs_val,
+                    output_token_logprobs_idx,
+                    input_top_logprobs_val,
+                    input_top_logprobs_idx,
+                    output_top_logprobs_val,
+                    output_top_logprobs_idx,
+                    input_token_ids_logprobs_val,
+                    input_token_ids_logprobs_idx,
+                    output_token_ids_logprobs_val,
+                    output_token_ids_logprobs_idx,
+                    output_hidden_states,
+                )
             )
+
+    def stream_output_embedding(self, reqs: List[Req]):
+        rids = []
+        finished_reasons: List[BaseFinishReason] = []
+
+        embeddings = []
+        prompt_tokens = []
+        cached_tokens = []
+        for req in reqs:
+            if req.finished():
+                rids.append(req.rid)
+                finished_reasons.append(req.finished_reason.to_json())
+                embeddings.append(req.embedding)
+                prompt_tokens.append(len(req.origin_input_ids))
+                cached_tokens.append(req.cached_tokens)
+        self.send_to_detokenizer.send_pyobj(
+            BatchEmbeddingOut(
+                rids, finished_reasons, embeddings, prompt_tokens, cached_tokens
+            )
+        )
 
     def get_idle_batch(self):
         idle_batch = ScheduleBatch.init_new(
@@ -1520,6 +1630,7 @@ def run_scheduler_process(
         pipe_writer.send("ready")
         scheduler.event_loop_normal()
     except ValueError as e:
+        traceback.print_exc()
         logger.info(f"Scheduler process exited: {e}")
     except Exception:
         msg = get_exception_traceback()

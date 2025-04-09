@@ -70,6 +70,9 @@ class ModelConfig:
             self.hf_config.architectures, is_embedding
         )
         self.is_multimodal = is_multimodal_model(self.hf_config.architectures)
+        self.is_multimodal_gen = False
+        self.is_image_gen = False
+        self.is_audio_model = False
         self.is_encoder_decoder = is_encoder_decoder_model(self.hf_config.architectures)
         if context_length is not None:
             self.context_len = context_length

@@ -190,7 +190,7 @@ class ModelRunner:
                 )
                 self.server_args.dtype = "float16"
                 if torch.cuda.get_device_capability()[1] < 5:
-                    raise RuntimeError("SGLang only supports sm75 and above.")
+                    raise RuntimeError("SP only supports sm75 and above.")
 
         # Prepare the vllm model config
         self.load_config = LoadConfig(load_format=self.server_args.load_format)
@@ -551,9 +551,10 @@ class ModelRunner:
         # Sample the next tokens
         next_token_ids = self.sampler(
             logits_output,
-            sampling_info,
+            forward_batch.sampling_info,
             forward_batch.return_logprob,
             forward_batch.top_logprobs_nums,
+            forward_batch.token_ids_logprobs,
         )
         return next_token_ids
 

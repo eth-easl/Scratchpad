@@ -69,7 +69,7 @@ def patch_model(
             yield torch.compile(
                 torch.no_grad()(model.forward),
                 mode=os.environ.get(
-                    "SGLANG_TORCH_COMPILE_MODE", "max-autotune-no-cudagraphs"
+                    "SP_TORCH_COMPILE_MODE", "max-autotune-no-cudagraphs"
                 ),
                 dynamic=False,
             )
@@ -256,7 +256,6 @@ class CudaGraphRunner:
                 "2. set --mem-fraction-static to a smaller value (e.g., 0.8 or 0.7)\n"
                 "3. disable torch compile by not using --enable-torch-compile\n"
                 "4. set --cuda-graph-max-bs to a smaller value (e.g., 32)\n"
-                "Open an issue on GitHub https://github.com/sgl-project/sglang/issues/new/choose \n"
             )
 
     @contextmanager

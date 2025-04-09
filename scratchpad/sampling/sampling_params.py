@@ -1,3 +1,4 @@
+# adapted from sglang
 from typing import List, Optional, Union, Dict, Any
 
 _SAMPLING_EPS = 1e-6

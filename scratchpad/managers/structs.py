@@ -60,7 +60,7 @@ class GenerateReqInput:
     session_params: Optional[Union[List[Dict], Dict]] = None
 
     # Custom logit processor for advanced sampling control. Must be a serialized instance
-    # of `CustomLogitProcessor` in python/sglang/srt/sampling/custom_logit_processor.py
+    # of `CustomLogitProcessor` in custom_logit_processor.py
     # Use the processor's `to_str()` method to generate the serialized string.
     custom_logit_processor: Optional[Union[List[Optional[str]], str]] = None
 
@@ -288,7 +288,7 @@ class TokenizedGenerateReqInput:
     # Session info for continual prompting
     session_params: Optional[SessionParams] = None
     # Custom logit processor for advanced sampling control. Must be a serialized instance
-    # of `CustomLogitProcessor` in python/sglang/srt/sampling/custom_logit_processor.py
+    # of `CustomLogitProcessor` in sampling/custom_logit_processor.py
     # Use the processor's `to_str()` method to generate the serialized string.
     custom_logit_processor: Optional[str] = None
     # Whether to return hidden states
@@ -413,8 +413,6 @@ class BatchTokenIDOut:
     # The finish reason
     finished_reasons: List["BaseFinishReason"]
     # For incremental decoding
-    # The version id to sync decode status with in detokenizer_manager
-    vids: List[int]
     decoded_texts: List[str]
     decode_ids: List[int]
     read_offsets: List[int]
@@ -424,10 +422,13 @@ class BatchTokenIDOut:
     skip_special_tokens: List[bool]
     spaces_between_special_tokens: List[bool]
     no_stop_trim: List[bool]
+
     # Token counts
     prompt_tokens: List[int]
     completion_tokens: List[int]
     cached_tokens: List[int]
+    spec_verify_ct: List[int]
+
     # Logprobs
     input_token_logprobs_val: List[float]
     input_token_logprobs_idx: List[int]
@@ -437,7 +438,25 @@ class BatchTokenIDOut:
     input_top_logprobs_idx: List[List]
     output_top_logprobs_val: List[List]
     output_top_logprobs_idx: List[List]
-    normalized_prompt_logprob: List[float]
+    input_token_ids_logprobs_val: List[List]
+    input_token_ids_logprobs_idx: List[List]
+    output_token_ids_logprobs_val: List[List]
+    output_token_ids_logprobs_idx: List[List]
+
+    # Hidden states
+    output_hidden_states: List[List[float]]
+
+
+@dataclass
+class BatchMultimodalDecodeReq:
+    # The request id
+    rids: List[str]
+    finished_reasons: List["BaseFinishReason"]
+
+    # Token counts
+    prompt_tokens: List[int]
+    completion_tokens: List[int]
+    cached_tokens: List[int]
 
 
 @dataclass
@@ -448,14 +467,14 @@ class BatchStrOut:
     finished_reasons: List[dict]
     # The output decoded strings
     output_strs: List[str]
+    # The token ids
+    output_ids: Optional[List[int]]
 
     # Token counts
-    # real input and output tokens can be get from
-    # origin_input_ids and output_ids by enabling --return_token_ids
-    # TODO (Shuai): Rename this to clarify the meaning.
     prompt_tokens: List[int]
     completion_tokens: List[int]
     cached_tokens: List[int]
+    spec_verify_ct: List[int]
 
     # Logprobs
     input_token_logprobs_val: List[float]
@@ -466,7 +485,28 @@ class BatchStrOut:
     input_top_logprobs_idx: List[List]
     output_top_logprobs_val: List[List]
     output_top_logprobs_idx: List[List]
-    normalized_prompt_logprob: List[float]
+    input_token_ids_logprobs_val: List[List]
+    input_token_ids_logprobs_idx: List[List]
+    output_token_ids_logprobs_val: List[List]
+    output_token_ids_logprobs_idx: List[List]
+
+    # Hidden states
+    output_hidden_states: List[List[float]]
+
+
+@dataclass
+class BatchMultimodalOut:
+    # The request id
+    rids: List[str]
+    # The finish reason
+    finished_reasons: List[dict]
+    # The outputs
+    outputs: List[List[Dict]]
+
+    # Token counts
+    prompt_tokens: List[int]
+    completion_tokens: List[int]
+    cached_tokens: List[int]
 
 
 @dataclass
