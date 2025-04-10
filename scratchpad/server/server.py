@@ -154,7 +154,9 @@ async def openai_v1_chat_completions(raw_request: Request):
         return JSONResponse(
             content=jsonable_encoder(
                 ErrorResponse(
-                    message=f"Model {model} not found", code=404, type="MODEL_NOT_FOUND"
+                    message=f"Model [{model}] not found",
+                    code=404,
+                    type="MODEL_NOT_FOUND",
                 )
             ),
             status_code=HTTPStatus.NOT_FOUND,
@@ -269,6 +271,7 @@ def launch_server(model_name, args: "ServerArgs"):
         load_chat_template_for_openai_api(tokenizer_manager, server_args.chat_template)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
+
     uvicorn.run(
         app,
         host=args.host,

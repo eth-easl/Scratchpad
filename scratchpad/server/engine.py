@@ -2,7 +2,7 @@ import gc
 import torch
 import asyncio
 import multiprocessing as mp
-from typing import List, Union, Optional, Dict
+from typing import List, Union, Optional, Dict, Iterator
 from scratchpad.managers.structs import GenerateReqInput
 from .args import ServerArgs
 
@@ -67,23 +67,58 @@ class AsyncLLMEngine:
 
     def generate(
         self,
-        prompt: Union[str, List[str]],
-        sampling_params: Optional[Dict] = None,
+        # The input prompt. It can be a single prompt or a batch of prompts.
+        prompt: Optional[Union[List[str], str]] = None,
+        sampling_params: Optional[Union[List[Dict], Dict]] = None,
+        # The token ids for text; one can either specify text or input_ids.
+        input_ids: Optional[Union[List[List[int]], List[int]]] = None,
+        # The image input. It can be a file name, a url, or base64 encoded string.
+        # See also scratchpad/nn/mm_utils.py:load_image.
+        image_data: Optional[Union[List[str], str]] = None,
         return_logprob: Optional[Union[List[bool], bool]] = False,
         logprob_start_len: Optional[Union[List[int], int]] = None,
         top_logprobs_num: Optional[Union[List[int], int]] = None,
+        token_ids_logprob: Optional[Union[List[List[int]], List[int]]] = None,
         topping_path: Optional[List[Optional[str]]] = None,
-    ):
+        custom_logit_processor: Optional[Union[List[str], str]] = None,
+        return_hidden_states: bool = False,
+        stream: bool = False,
+    ) -> Union[Dict, Iterator[Dict]]:
+        """
+        The arguments of this function is the same as `sglang/srt/managers/io_struct.py::GenerateReqInput`.
+        Please refer to `GenerateReqInput` for the documentation.
+        """
         obj = GenerateReqInput(
             text=prompt,
+            input_ids=input_ids,
             sampling_params=sampling_params,
+            image_data=image_data,
             return_logprob=return_logprob,
             logprob_start_len=logprob_start_len,
             top_logprobs_num=top_logprobs_num,
+            token_ids_logprob=token_ids_logprob,
             topping_path=topping_path,
+            custom_logit_processor=custom_logit_processor,
+            return_hidden_states=return_hidden_states,
+            stream=stream,
         )
-        task = self.loop.create_task(self.generate_request(obj))
-        return self.loop.run_until_complete(task)
+        loop = asyncio.get_event_loop()
+        generator = self.tokenizer_manager.generate_request(obj, None)
+
+        if stream:
+
+            def generator_wrapper():
+                while True:
+                    try:
+                        chunk = loop.run_until_complete(generator.__anext__())
+                        yield chunk
+                    except StopAsyncIteration:
+                        break
+
+            return generator_wrapper()
+        else:
+            ret = loop.run_until_complete(generator.__anext__())
+            return ret
 
     def generate_chat(
         self,

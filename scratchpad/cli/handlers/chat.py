@@ -57,7 +57,7 @@ class ChatHandler:
         self.cache_prompt = cache_prompt
         self.headers = {"Content-Type": "application/json"}
         self.chat_history = []
-        self.model_name = ""
+        self.model_name = model_name
         self.console = Console()
         self.client = openai.OpenAI(api_key="test", base_url=self.serveraddr + "/v1")
         # TODO: Gracefully handle user input history file.
@@ -77,6 +77,7 @@ class ChatHandler:
             "seed": self.seed,
             "model": self.model_name,
         }
+        print(f"Payload: {payload}")
         try:
             response = self.client.chat.completions.create(**payload)
             for chunk in response:

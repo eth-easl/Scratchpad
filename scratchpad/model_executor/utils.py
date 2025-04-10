@@ -1,19 +1,30 @@
 import torch
 import glob
 import contextlib
-from typing import List, Generator, Tuple, Type
+from typing import List, Generator, Tuple, Type, Protocol, TYPE_CHECKING
 from tqdm import tqdm
 import json
 import os
-from scratchpad.utils import snapshot_download, get_lock, DisabledTqdm
+from scratchpad.utils import (
+    snapshot_download,
+    get_lock,
+    DisabledTqdm,
+    is_pin_memory_available,
+)
 from safetensors.torch import safe_open
-from scratchpad.nn.models import ModelRegistry
+
 from scratchpad.config import ModelConfig, LoadConfig
-from scratchpad.nn.quantization import get_quantization_config, QuantizationConfig
+from scratchpad.nn.quantization import get_quantization_config
 import huggingface_hub
 from torch import nn
+from torch.func import functional_call
+
+if TYPE_CHECKING:
+    from scratchpad.nn.quantization import QuantizationConfig
 
 _BAR_FORMAT = "{desc}: {percentage:3.0f}% Completed | {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]\n"  # noqa: E501
+_CPU_OFFLOAD_BYTES = 0
+_CPU_OFFLOAD_MAX_BYTES = 0
 
 
 @contextlib.contextmanager
@@ -116,6 +127,7 @@ def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], 
         and "MixtralForCausalLM" in architectures
     ):
         architectures = ["QuantMixtralForCausalLM"]
+    from scratchpad.nn.models import ModelRegistry
 
     return ModelRegistry.resolve_model_cls(architectures)
 
@@ -126,7 +138,7 @@ def get_architecture_class_name(model_config: ModelConfig) -> str:
 
 def get_quant_config(
     model_config: ModelConfig, load_config: LoadConfig
-) -> QuantizationConfig:
+) -> "QuantizationConfig":
 
     quant_cls = get_quantization_config(model_config.quantization)
 
@@ -208,3 +220,96 @@ def get_quant_config(
                 )
 
     return quant_cls.from_config(config)
+
+
+def set_cpu_offload_max_bytes(max_bytes: int) -> None:
+    global _CPU_OFFLOAD_MAX_BYTES, _CPU_OFFLOAD_BYTES
+    _CPU_OFFLOAD_BYTES = 0
+    _CPU_OFFLOAD_MAX_BYTES = max_bytes
+
+
+def maybe_offload_to_cpu(module: torch.nn.Module) -> torch.nn.Module:
+    device = next(module.parameters()).device
+
+    if device == torch.device("cpu"):
+        return module
+
+    global _CPU_OFFLOAD_MAX_BYTES, _CPU_OFFLOAD_BYTES
+    if _CPU_OFFLOAD_BYTES >= _CPU_OFFLOAD_MAX_BYTES:
+        return module
+
+    pin_memory = is_pin_memory_available()
+    # offload parameters to CPU
+    # use pin_memory if possible, which helps cudagraph capture speed
+    offloaded_parameters = False
+    for p in module.parameters():
+        if _CPU_OFFLOAD_BYTES >= _CPU_OFFLOAD_MAX_BYTES:
+            # we use per-parameter offloading
+            # one module might have some parameters offloaded and some not
+            break
+
+        # `torch.empty_like` does not support `pin_memory` argument
+        cpu_data = torch.empty_strided(
+            size=p.data.size(),
+            stride=p.data.stride(),
+            dtype=p.data.dtype,
+            layout=p.data.layout,
+            device="cpu",
+            pin_memory=pin_memory,
+        )
+        cpu_data.copy_(p.data)
+        p.data = cpu_data
+        _CPU_OFFLOAD_BYTES += p.data.numel() * p.data.element_size()
+        offloaded_parameters = True
+
+    if offloaded_parameters:
+        original_forward = module.forward
+
+        def forward(*args, **kwargs):
+            module.forward = original_forward
+            device_state = {
+                # here we blindly call `to(device)`
+                # if the parameter is already on the device, it will be a no-op
+                k: v.to(device, non_blocking=True)
+                for k, v in module.state_dict().items()
+            }
+            output = functional_call(module, device_state, args=args, kwargs=kwargs)
+            module.forward = forward
+            return output
+
+        module.forward = forward
+
+    return module
+
+
+class LayerFn(Protocol):
+    def __call__(self, layer_id: int, prefix: str) -> torch.nn.Module:
+        ...
+
+
+def add_prefix(name: str, prefix: str) -> str:
+    """Add a weight path prefix to a module name.
+
+    Args:
+        name: base module name.
+        prefix: weight prefix str to added to the front of `name` concatenated with `.`.
+
+    Returns:
+        The string `prefix.name` if prefix is non-empty, otherwise just `name`.
+    """
+    return name if not prefix else f"{prefix}.{name}"
+
+
+def make_layers(
+    num_hidden_layers: int,
+    layer_fn: LayerFn,
+    prefix: str = "",
+) -> Tuple[int, int, torch.nn.ModuleList]:
+    """Make a list of layers with the given layer function"""
+    modules = torch.nn.ModuleList(
+        [
+            maybe_offload_to_cpu(layer_fn(idx=idx, prefix=add_prefix(idx, prefix)))
+            for idx in range(num_hidden_layers)
+        ]
+    )
+    return modules

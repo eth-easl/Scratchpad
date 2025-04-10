@@ -4,7 +4,6 @@ import zmq.asyncio
 import torch
 import dataclasses
 from functools import lru_cache
-from typing import Optional, Dict, List, Any
 import socket
 import ipaddress
 import sys
@@ -15,6 +14,7 @@ import psutil
 import torch.distributed as dist
 import pickle
 import torch.nn as nn
+from typing import Optional, Dict, List, Any
 from . import envs, logger
 
 show_time_cost = False
@@ -68,7 +68,7 @@ def find_printable_text(text: str):
         return text[: text.rfind(" ") + 1]
 
 
-def get_available_gpu_memory(device, gpu_id, distributed=False):
+def get_available_gpu_memory(device, gpu_id, distributed=False, empty_cache=True):
     """
     Get available memory for cuda:gpu_id device.
     When distributed is True, the available memory is the minimum available memory of all GPUs.
@@ -82,8 +82,8 @@ def get_available_gpu_memory(device, gpu_id, distributed=False):
                 f"WARNING: current device is not {gpu_id}, but {torch.cuda.current_device()}, ",
                 "which may cause useless memory allocation for torch CUDA context.",
             )
-
-        torch.cuda.empty_cache()
+        if empty_cache:
+            torch.cuda.empty_cache()
         free_gpu_memory, _ = torch.cuda.mem_get_info(gpu_id)
 
     if distributed:
@@ -462,3 +462,16 @@ def dataclass_to_string_truncated(data, max_length=2048):
 
 def kill_all_scratchpad_processes():
     os.system("ps aux | grep 'sp' | awk '{print $2}' |xargs kill -9")
+
+
+def flatten_nested_list(nested_list):
+    if isinstance(nested_list, list):
+        return [
+            item for sublist in nested_list for item in flatten_nested_list(sublist)
+        ]
+    else:
+        return [nested_list]
+
+
+def get_compiler_backend() -> str:
+    return "inductor"

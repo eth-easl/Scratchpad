@@ -64,7 +64,7 @@ async def run_benchmark(
     goodput_config_dict: Dict[str, float],
     max_concurrency: Optional[int] = None,
 ):
-    system_info = await async_request_sp_sysinfo(args.endpoint)
+    # system_info = await async_request_sp_sysinfo(args.endpoint)
     pbar = tqdm(total=len(input_requests))
     tasks: List[asyncio.Task] = []
     semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
@@ -101,7 +101,7 @@ async def run_benchmark(
         output_file = write_benchmark(
             metrics,
             args.output,
-            system_info,
+            {},
             args,
             outputs,
         )
@@ -131,6 +131,7 @@ def benchmark(args):
             except Exception as e:
                 print("Server is not ready. Please start the server first.")
                 time.sleep(5)
+    print(f"Server is ready. Starting benchmark...")
     asyncio.run(
         run_benchmark(
             args,
@@ -209,7 +210,7 @@ if __name__ == "__main__":
         "--wait-until-ready",
         action="store_true",
         help="Wait until the server is ready before starting the benchmark.",
-        default=True,
+        default=False,
     )
     args = parser.parse_args()
     benchmark(args)

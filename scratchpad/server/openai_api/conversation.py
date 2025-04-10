@@ -553,3 +553,14 @@ register_conv_template(
         image_token="<|vision_start|><|image_pad|><|vision_end|>",
     )
 )
+
+register_conv_template(
+    Conversation(
+        name="gemma-it",
+        system_message=None,
+        system_template="",
+        roles=("<start_of_turn>user\n", "<start_of_turn>model\n"),
+        sep="<end_of_turn>\n",
+        sep_style=SeparatorStyle.ADD_NEW_LINE_SINGLE,
+    )
+)
