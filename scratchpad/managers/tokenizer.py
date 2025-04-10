@@ -201,6 +201,7 @@ class TokenizerManager:
             return_logprob = obj.return_logprob
             logprob_start_len = obj.logprob_start_len
             top_logprobs_num = obj.top_logprobs_num
+            token_ids_logprob = obj.token_ids_logprob
             session_params = (
                 SessionParams(**obj.session_params) if obj.session_params else None
             )
@@ -227,10 +228,13 @@ class TokenizerManager:
                 return_logprob,
                 logprob_start_len,
                 top_logprobs_num,
+                token_ids_logprob,
                 obj.stream,
                 topping_path=obj.topping_path,
                 input_embeds=input_embeds,
                 session_params=session_params,
+                custom_logit_processor=obj.custom_logit_processor,
+                return_hidden_states=obj.return_hidden_states,
             )
         elif isinstance(obj, EmbeddingReqInput):
             tokenized_obj = TokenizedEmbeddingReqInput(
@@ -534,6 +538,7 @@ class TokenizerManager:
                     self.convert_logprob_style(
                         meta_info,
                         state.obj.top_logprobs_num,
+                        state.obj.token_ids_logprob,
                         state.obj.return_text_in_logprobs,
                         recv_obj,
                         i,
@@ -570,32 +575,49 @@ class TokenizerManager:
 
     def convert_logprob_style(
         self,
-        ret: dict,
-        return_logprob: bool,
+        meta_info: dict,
         top_logprobs_num: int,
+        token_ids_logprob: List[int],
         return_text_in_logprobs: bool,
+        recv_obj: BatchStrOut,
+        recv_obj_index: int,
     ):
-        if return_logprob:
-            ret["meta_info"]["input_token_logprobs"] = self.detokenize_logprob_tokens(
-                ret["meta_info"]["input_token_logprobs"], return_text_in_logprobs
+        meta_info["input_token_logprobs"] = self.detokenize_logprob_tokens(
+            recv_obj.input_token_logprobs_val[recv_obj_index],
+            recv_obj.input_token_logprobs_idx[recv_obj_index],
+            return_text_in_logprobs,
+        )
+        meta_info["output_token_logprobs"] = self.detokenize_logprob_tokens(
+            recv_obj.output_token_logprobs_val[recv_obj_index],
+            recv_obj.output_token_logprobs_idx[recv_obj_index],
+            return_text_in_logprobs,
+        )
+
+        if top_logprobs_num > 0:
+            meta_info["input_top_logprobs"] = self.detokenize_top_logprobs_tokens(
+                recv_obj.input_top_logprobs_val[recv_obj_index],
+                recv_obj.input_top_logprobs_idx[recv_obj_index],
+                return_text_in_logprobs,
             )
-            ret["meta_info"]["output_token_logprobs"] = self.detokenize_logprob_tokens(
-                ret["meta_info"]["output_token_logprobs"], return_text_in_logprobs
+            meta_info["output_top_logprobs"] = self.detokenize_top_logprobs_tokens(
+                recv_obj.output_top_logprobs_val[recv_obj_index],
+                recv_obj.output_top_logprobs_idx[recv_obj_index],
+                return_text_in_logprobs,
             )
 
-            if top_logprobs_num > 0:
-                ret["meta_info"][
-                    "input_top_logprobs"
-                ] = self.detokenize_top_logprobs_tokens(
-                    ret["meta_info"]["input_top_logprobs"],
-                    return_text_in_logprobs,
-                )
-                ret["meta_info"][
-                    "output_top_logprobs"
-                ] = self.detokenize_top_logprobs_tokens(
-                    ret["meta_info"]["output_top_logprobs"], return_text_in_logprobs
-                )
-        return ret
+        if token_ids_logprob is not None:
+            meta_info["input_token_ids_logprobs"] = self.detokenize_top_logprobs_tokens(
+                recv_obj.input_token_ids_logprobs_val[recv_obj_index],
+                recv_obj.input_token_ids_logprobs_idx[recv_obj_index],
+                return_text_in_logprobs,
+            )
+            meta_info[
+                "output_token_ids_logprobs"
+            ] = self.detokenize_top_logprobs_tokens(
+                recv_obj.output_token_ids_logprobs_val[recv_obj_index],
+                recv_obj.output_token_ids_logprobs_idx[recv_obj_index],
+                return_text_in_logprobs,
+            )
 
     def detokenize_logprob_tokens(
         self, token_logprobs: List[Tuple[float, int]], decode_to_text: bool

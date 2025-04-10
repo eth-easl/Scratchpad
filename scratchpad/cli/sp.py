@@ -1,5 +1,5 @@
 import typer
-from scratchpad.server import dataclass_to_cli, ServerArgs, launch_server
+from scratchpad.server import dataclass_to_cli, ServerArgs
 from .handlers import ChatHandler, benchmark_quality
 
 app = typer.Typer()
@@ -13,6 +13,7 @@ def serve(
 ):
     """Spin up the server"""
     from scratchpad.server.args import global_args
+    from scratchpad.server import launch_server
     import multiprocessing as mp
 
     mp.set_start_method("spawn", force=True)
@@ -30,7 +31,7 @@ def version():
 @app.command()
 def chat(
     model: str,
-    backend: str = "http://localhost:8080",
+    backend: str = "http://localhost:3000",
 ):
     chat_handler = ChatHandler(server_addr=backend, model_name=model)
     chat_handler.chat()

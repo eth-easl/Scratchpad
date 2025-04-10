@@ -1,8 +1,6 @@
-import typing
-
 import torch
 
-from ..orchestrator import _BatchedPenalizer, _TokenIDs
+from ..orchestrator import _BatchedPenalizer, BatchedPenalizerOrchestrator
 
 
 class BatchedPresencePenalizer(_BatchedPenalizer):
@@ -10,8 +8,9 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
     Presence penalizer penalizes tokens based on their presence in the output.
     """
 
-    presence_penalties: torch.Tensor = None
-    cumulated_presence_penalties: torch.Tensor = None
+    def __init__(self, orchestrator: BatchedPenalizerOrchestrator):
+        self.orchestrator = orchestrator
+        self._is_prepared = False
 
     def _is_required(self) -> bool:
         return any(
@@ -20,14 +19,10 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
         )
 
     def _prepare(self):
-        self.cumulated_presence_penalties = (
-            torch.tensor(
-                data=[0.0 for _ in self.orchestrator.reqs()],
-                dtype=torch.float32,
-                device=self.orchestrator.device,
-            )
-            .unsqueeze_(1)
-            .repeat(1, self.orchestrator.vocab_size)
+        self.cumulated_presence_penalties = torch.zeros(
+            (len(self.orchestrator.reqs()), self.orchestrator.vocab_size),
+            dtype=torch.float32,
+            device=self.orchestrator.device,
         )
 
         self.presence_penalties = (
@@ -39,34 +34,22 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
                 dtype=torch.float32,
                 device=self.orchestrator.device,
             )
-            .unsqueeze_(1)
-            .expand_as(self.cumulated_presence_penalties)
+        ).unsqueeze_(1)
+
+    def _cumulate_output_tokens(self, output_ids: torch.Tensor):
+        self.cumulated_presence_penalties.scatter_(
+            dim=1,
+            index=output_ids.unsqueeze(1),
+            src=self.presence_penalties,
         )
 
-    def _teardown(self):
-        del self.presence_penalties
-        del self.cumulated_presence_penalties
-
-        self.presence_penalties = None
-        self.cumulated_presence_penalties = None
-
-    def _cumulate_input_tokens(self, input_ids: _TokenIDs):
-        pass
-
-    def _cumulate_output_tokens(self, output_ids: _TokenIDs):
-        mask = output_ids.occurrence_count() > 0
-        self.cumulated_presence_penalties[mask] = self.presence_penalties[mask]
-
     def _apply(self, logits: torch.Tensor) -> torch.Tensor:
-        logits -= self.cumulated_presence_penalties
-        return logits
+        logits.sub_(self.cumulated_presence_penalties)
 
-    def _filter(
-        self, indices_to_keep: typing.List[int], indices_tensor_to_keep: torch.Tensor
-    ):
-        self.presence_penalties = self.presence_penalties[indices_tensor_to_keep]
+    def _filter(self, keep_indices: torch.Tensor):
+        self.presence_penalties = self.presence_penalties[keep_indices]
         self.cumulated_presence_penalties = self.cumulated_presence_penalties[
-            indices_tensor_to_keep
+            keep_indices
         ]
 
     def _merge(self, their: "BatchedPresencePenalizer"):

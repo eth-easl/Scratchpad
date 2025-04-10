@@ -1,8 +1,5 @@
 import enum
-from dataclasses import dataclass, field, fields
-import contextlib
 from typing import (
-    TYPE_CHECKING,
     Any,
     Dict,
     List,
@@ -10,8 +7,8 @@ from typing import (
     Optional,
     Union,
 )
-from pathlib import Path
 import torch
+from pathlib import Path
 from transformers import PretrainedConfig, AutoConfig
 from scratchpad.utils import (
     logger,
@@ -20,11 +17,16 @@ from scratchpad.utils import (
     get_hf_image_processor_config,
 )
 from scratchpad.config.modality_config import MultiModalConfig
-from scratchpad.nn.models import ModelRegistry
-from .utils import _get_and_verify_dtype, _get_and_verify_max_len, get_served_model_name
 import huggingface_hub
 from huggingface_hub import file_exists, try_to_load_from_cache
 from transformers.utils import CONFIG_NAME as HF_CONFIG_NAME
+
+from .utils import (
+    _get_and_verify_dtype,
+    _get_and_verify_max_len,
+    get_served_model_name,
+    is_multimodal_model,
+)
 
 
 class ConfigFormat(str, enum.Enum):
@@ -307,7 +309,6 @@ class ModelConfig:
             self._verify_tokenizer_mode()
 
         self.override_neuron_config = None
-        self._verify_embedding_mode()
         self._verify_cuda_graph()
         self._verify_bnb_config()
 
@@ -315,7 +316,7 @@ class ModelConfig:
         self, limit_mm_per_prompt: Optional[Mapping[str, int]]
     ) -> Optional["MultiModalConfig"]:
         architectures = getattr(self.hf_config, "architectures", [])
-        if any(ModelRegistry.is_multimodal_model(arch) for arch in architectures):
+        if is_multimodal_model(architectures):
             return MultiModalConfig(limit_per_prompt=limit_mm_per_prompt or {})
         else:
             if limit_mm_per_prompt:
@@ -332,12 +333,6 @@ class ModelConfig:
                 "either 'auto', 'slow' or 'mistral'."
             )
         self.tokenizer_mode = tokenizer_mode
-
-    def _verify_embedding_mode(self) -> None:
-        architectures = getattr(self.hf_config, "architectures", [])
-        self.embedding_mode = any(
-            ModelRegistry.is_embedding_model(arch) for arch in architectures
-        )
 
     def _parse_quant_hf_config(self):
         quant_cfg = getattr(self.hf_config, "quantization_config", None)
@@ -525,11 +520,6 @@ class ModelConfig:
                 and getattr(self.hf_config.text_config, "is_encoder_decoder", False)
             )
         )
-
-    @property
-    def is_embedding_model(self) -> bool:
-        """Extract the embedding model flag."""
-        return self.embedding_mode
 
     @property
     def is_multimodal_model(self) -> bool:

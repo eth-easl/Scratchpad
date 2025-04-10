@@ -1,17 +1,20 @@
 import os
-import faulthandler
 import zmq
 import time
 import torch
 import warnings
-import setproctitle
 import threading
+import traceback
+import setproctitle
+import faulthandler
+from collections import defaultdict
 from concurrent import futures
 import multiprocessing
+from http import HTTPStatus
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from functools import cached_property
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, TYPE_CHECKING, Union
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.constrained.base_backend import create_grammar_backend
@@ -19,7 +22,7 @@ from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
     BaseFinishReason,
-    ImageInputs,
+    MultimodalInputs,
     Req,
     ScheduleBatch,
 )
@@ -61,12 +64,34 @@ from ..managers.structs import (
     RegisterToppingsReqInput,
 )
 
+from .utils import validate_input_length
+
 if TYPE_CHECKING:
     from scratchpad.server.metric_types import StatLoggerBase
 
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SP_IS_IN_CI", "false") == "true"
-test_retract = os.getenv("SP_TEST_RETRACT", "false") == "true"
+TEST_RETRACT = os.getenv("SP_TEST_RETRACT", "false") == "true"
+
+
+@dataclass
+class GenerationBatchResult:
+    logits_output: LogitsProcessorOutput
+    next_token_ids: List[int]
+    extend_input_len_per_req: List[int]
+    extend_logprob_start_len_per_req: List[int]
+    bid: int
+
+
+@dataclass
+class EmbeddingBatchResult:
+    embeddings: torch.Tensor
+    bid: int
+
+
+@dataclass
+class HealthCheckOutput:
+    pass
 
 
 class Scheduler:
@@ -84,6 +109,7 @@ class Scheduler:
         self.server_args = server_args
         self.tp_rank = tp_rank
         self.tp_size = server_args.tp_size
+        self.page_size = server_args.page_size
         self.schedule_policy = server_args.schedule_policy
         self.disable_jump_forward = server_args.disable_jump_forward
         self.spec_algorithm = SpeculativeAlgorithm.NONE
@@ -92,6 +118,7 @@ class Scheduler:
         self.skip_tokenizer_init = server_args.skip_tokenizer_init
         self.loggers = loggers
         self.decode_mem_cache_buf_multiplier = 1
+        self.enable_hierarchical_cache = False
         # update this ondemand
         # Init inter-process communication
         context = zmq.Context(2)
@@ -142,12 +169,6 @@ class Scheduler:
                     trust_remote_code=server_args.trust_remote_code,
                 )
         self.draft_worker = None
-        # Launch a tensor parallel worker
-        # if self.enable_overlap:
-        #     TpWorkerClass = TpModelWorkerClient
-        # else:
-        #     TpWorkerClass = TpModelWorker
-
         self.tp_worker = TpModelWorker(
             server_args=server_args,
             gpu_id=gpu_id,
@@ -184,44 +205,39 @@ class Scheduler:
         )
 
         # Init memory pool and cache
-        self.req_to_token_pool, self.token_to_kv_pool = self.tp_worker.get_memory_pool()
+        self._init_memory_pool_and_cache()
 
-        if (
-            server_args.chunked_prefill_size is not None
-            and server_args.disable_radix_cache
-        ):
-            self.tree_cache = ChunkCache(
-                req_to_token_pool=self.req_to_token_pool,
-                token_to_kv_pool=self.token_to_kv_pool,
-            )
-        else:
-            self.tree_cache = RadixCache(
-                req_to_token_pool=self.req_to_token_pool,
-                token_to_kv_pool=self.token_to_kv_pool,
-                disable=server_args.disable_radix_cache,
-            )
-        self.tree_cache_metrics = {"total": 0, "hit": 0}
+        # Init profiler
+        self.torch_profiler = None
+        self.torch_profiler_output_dir: Optional[str] = None
+        self.profiler_activities: Optional[List[str]] = None
+        self.profiler_target_forward_ct: Optional[int] = None
+
+        self._init_metrics()
         self.policy = SchedulePolicy(self.schedule_policy, self.tree_cache)
-
         # Init running status
         self.waiting_queue: List[Req] = []
-        self.running_batch: Optional[ScheduleBatch] = None
+        self.running_batch: Optional[ScheduleBatch] = ScheduleBatch(
+            reqs=[], batch_is_full=False
+        )
         self.cur_batch: Optional[ScheduleBatch] = None
         self.last_batch: Optional[ScheduleBatch] = None
 
         self.forward_ct = 0
         self.forward_ct_decode = 0
         self.num_generated_tokens = 0
-        self.last_stats_tic = time.time()
+        self.last_decode_stats_tic = time.time()
+        self.last_prefill_stats_tic = time.time()
+        self.return_health_check_ct = 0
+        self.num_prefill_tokens = 0
         self.stream_interval = server_args.stream_interval
 
         # Init chunked prefill
         self.chunked_prefill_size = server_args.chunked_prefill_size
-        self.being_chunked_req = None
         self.is_mixed_chunk = (
             self.chunked_prefill_size is not None and server_args.enable_mixed_chunk
         )
-
+        self.chunked_req = None
         # Init the FSM cache for constrained generation
         self.grammar_queue: List[Req] = []
         if not server_args.skip_tokenizer_init:
@@ -275,6 +291,59 @@ class Scheduler:
             )
         logger.info(f"Scheduler initialized.")
 
+    def _init_metrics(self):
+        # The largest prefill length of a single request
+        self._largest_prefill_len: int = 0
+        # The largest context length (prefill + generation) of a single request
+        self._largest_prefill_decode_len: int = 0
+        self.last_gen_throughput: float = 0.0
+        self.last_input_throughput: float = 0.0
+        self.step_time_dict = defaultdict(list)  # Dict[batch size -> step time]
+        self.spec_num_total_accepted_tokens = 0
+        self.spec_num_total_forward_ct = 0
+        self.cum_spec_accept_length = 0
+        self.cum_spec_accept_count = 0
+
+    def _init_memory_pool_and_cache(self):
+        server_args = self.server_args
+
+        (
+            self.req_to_token_pool,
+            self.token_to_kv_pool_allocator,
+        ) = self.tp_worker.get_memory_pool()
+
+        if (
+            server_args.chunked_prefill_size is not None
+            and server_args.disable_radix_cache
+        ):
+            self.tree_cache = ChunkCache(
+                req_to_token_pool=self.req_to_token_pool,
+                token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            )
+        else:
+            self.tree_cache = RadixCache(
+                req_to_token_pool=self.req_to_token_pool,
+                token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+                page_size=self.page_size,
+                disable=server_args.disable_radix_cache,
+            )
+
+        self.decode_mem_cache_buf_multiplier = (
+            1
+            if self.spec_algorithm.is_none()
+            else (
+                server_args.speculative_num_draft_tokens
+                + (
+                    server_args.speculative_eagle_topk
+                    * server_args.speculative_num_steps
+                )
+            )
+        )
+
+    def _add_request_to_queue(self, req: Req):
+        # todo: supports p-d disaggregation
+        self.waiting_queue.append(req)
+
     def watchdog_thread(self):
         self.watchdog_last_forward_ct = 0
         self.watchdog_last_time = time.time()
@@ -295,51 +364,18 @@ class Scheduler:
     @torch.inference_mode()
     def event_loop_normal(self):
         """A normal blocking scheduler loop."""
-        self.last_batch = None
-
         while True:
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
             batch = self.get_next_batch_to_run()
-
-            if self.server_args.enable_dp_attention:  # TODO: simplify this
-                batch = self.prepare_dp_attn_batch(batch)
-
             self.cur_batch = batch
 
             if batch:
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
-                # When the server is idle, so self-check and re-init some states
-                self.check_memory()
-                self.new_token_ratio = self.init_new_token_ratio
-
-            self.last_batch = batch
-
-    @torch.inference_mode()
-    def event_loop_overlap(self):
-        """A scheduler loop that overlaps the CPU processing and GPU computation."""
-        result_queue = deque()
-
-        self.last_batch = None
-        self.running_batch = None
-
-        while True:
-            recv_reqs = self.recv_requests()
-            self.process_input_requests(recv_reqs)
-
-            batch = self.get_next_batch_to_run()
-            self.cur_batch = batch
-            if batch:
-                result = self.run_batch(batch)
-                result_queue.append((batch.copy(), result))
-
-            if self.last_batch:
-                tmp_batch, tmp_result = result_queue.popleft()
-                self.process_batch_result(tmp_batch, tmp_result)
-            elif batch is None:
+                # When the server is idle, do self-check and re-init some states
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
 
@@ -399,40 +435,117 @@ class Scheduler:
         self,
         recv_req: TokenizedGenerateReqInput,
     ):
-        req = Req(
-            recv_req.rid,
-            recv_req.input_text,
-            recv_req.input_ids,
-            recv_req.sampling_params,
-            topping_path=recv_req.topping_path,
-        )
-        req.tokenizer = self.tokenizer
-        # Image inputs
-        if recv_req.image_inputs is not None:
-            req.image_inputs = ImageInputs.from_dict(
-                recv_req.image_inputs, self.model_config.vocab_size
+        # Create a new request
+        if (
+            recv_req.session_params is None
+            or recv_req.session_params.id is None
+            or recv_req.session_params.id not in self.sessions
+        ):
+            if recv_req.input_embeds is not None:
+                # Generate fake input_ids based on the length of input_embeds
+                seq_length = len(recv_req.input_embeds)
+                fake_input_ids = [1] * seq_length
+                recv_req.input_ids = fake_input_ids
+
+            # Handle custom logit processor passed to the request
+            custom_logit_processor = recv_req.custom_logit_processor
+            if (
+                not self.server_args.enable_custom_logit_processor
+                and custom_logit_processor is not None
+            ):
+                logger.warning(
+                    "Scratchpad server is not configured to enable custom logit processor."
+                    "The custom logit processor passed in will be ignored."
+                    "Please set --enable-custom-logits-processor to enable this feature."
+                )
+                custom_logit_processor = None
+
+            req = Req(
+                recv_req.rid,
+                recv_req.input_text,
+                recv_req.input_ids,
+                recv_req.sampling_params,
+                return_logprob=recv_req.return_logprob,
+                top_logprobs_num=recv_req.top_logprobs_num,
+                token_ids_logprob=recv_req.token_ids_logprob,
+                stream=recv_req.stream,
+                topping_path=recv_req.topping_path,
+                input_embeds=recv_req.input_embeds,
+                custom_logit_processor=custom_logit_processor,
+                return_hidden_states=recv_req.return_hidden_states,
+                eos_token_ids=self.model_config.hf_eos_token_id,
             )
+            req.tokenizer = self.tokenizer
+
+            if (
+                recv_req.session_params is not None
+                and recv_req.session_params.id is not None
+            ):
+                req.finished_reason = FINISH_ABORT(
+                    f"Invalid request: session id {recv_req.session_params.id} does not exist"
+                )
+                self._add_request_to_queue(req)
+                return
+        else:
+            # Create a new request from a previous session
+            session = self.sessions[recv_req.session_params.id]
+            req = session.create_req(recv_req, self.tokenizer)
+            if isinstance(req.finished_reason, FINISH_ABORT):
+                self._add_request_to_queue(req)
+                return
+
+        # Handle multimodal inputs
+        if recv_req.mm_inputs is not None:
+            image_inputs = MultimodalInputs.from_dict(recv_req.mm_inputs)
+            # Expand a single image token into multiple dummy tokens for receiving image embeddings
             req.origin_input_ids = self.pad_input_ids_func(
-                req.origin_input_ids_unpadded, req.image_inputs
+                req.origin_input_ids, image_inputs
             )
+            req.extend_image_inputs(image_inputs)
 
-        req.return_logprob = recv_req.return_logprob
-        req.top_logprobs_num = recv_req.top_logprobs_num
-        req.stream = recv_req.stream
-        req.logprob_start_len = recv_req.logprob_start_len
+            if len(req.origin_input_ids) >= self.max_req_input_len:
+                error_msg = (
+                    "Multimodal prompt is too long after expanding multimodal tokens. "
+                    f"After expanding {len(req.origin_input_ids_unpadded)=} => {len(req.origin_input_ids)} >= {self.max_req_input_len}."
+                )
+                logger.error(error_msg)
+                req.origin_input_ids = [0]
+                req.multimodal_inputs = None
+                req.sampling_params.max_new_tokens = 0
+                req.finished_reason = FINISH_ABORT(
+                    error_msg, HTTPStatus.BAD_REQUEST, "BadRequestError"
+                )
+                self._add_request_to_queue(req)
+                return
 
-        if req.logprob_start_len == -1:
+        # Validate prompts length
+        error_msg = validate_input_length(
+            req,
+            self.max_req_input_len,
+            self.server_args.allow_auto_truncate,
+        )
+        if error_msg:
+            req.origin_input_ids = [0]
+            req.sampling_params.max_new_tokens = 0
+            self._add_request_to_queue(req)
+            return
+
+        # Copy more attributes
+        if recv_req.logprob_start_len == -1 or not recv_req.return_logprob:
             # By default, only return the logprobs for output tokens
-            req.logprob_start_len = len(recv_req.input_ids) - 1
+            req.logprob_start_len = len(req.origin_input_ids) - 1
+        else:
+            req.logprob_start_len = recv_req.logprob_start_len
 
-        # Truncate prompts that are too long
-        if len(req.origin_input_ids) > self.max_req_input_len:
-            logger.error(
-                "Request length is longer than the KV cache pool size or "
-                "the max context length. Truncated!!!"
+        if req.logprob_start_len >= len(req.origin_input_ids):
+            req.finished_reason = FINISH_ABORT(
+                f"logprob_start_len, ({req.logprob_start_len}) is higher than the number of input tokens ({len(req.origin_input_ids)}). Request with a lower logprob_start_len.",
+                HTTPStatus.BAD_REQUEST,
+                "BadRequestError",
             )
-            return False
-            # req.origin_input_ids = req.origin_input_ids[: self.max_req_input_len]
+            req.logprob_start_len = len(req.origin_input_ids) - 1
+            self._add_request_to_queue(req)
+            return
 
         req.sampling_params.max_new_tokens = min(
             (
@@ -449,6 +562,7 @@ class Scheduler:
             req.sampling_params.json_schema is not None
             or req.sampling_params.regex is not None
             or req.sampling_params.ebnf is not None
+            or req.sampling_params.structural_tag is not None
         ):
             assert self.grammar_backend is not None
             if req.sampling_params.json_schema is not None:
@@ -457,6 +571,9 @@ class Scheduler:
                 key = ("regex", req.sampling_params.regex)
             elif req.sampling_params.ebnf is not None:
                 key = ("ebnf", req.sampling_params.ebnf)
+            elif req.sampling_params.structural_tag:
+                key = ("structural_tag", req.sampling_params.structural_tag)
+
             req.grammar = self.grammar_backend.get_cached_value(key)
             if not req.grammar:
                 req.grammar = self.grammar_backend.get_future_value(key)
@@ -465,7 +582,7 @@ class Scheduler:
         if add_to_grammar_queue:
             self.grammar_queue.append(req)
         else:
-            self.waiting_queue.append(req)
+            self._add_request_to_queue(req)
         return True
 
     def log_stats(self, stats):
@@ -494,35 +611,80 @@ class Scheduler:
 
         self.waiting_queue.append(req)
 
-    def log_decode_stats(self):
+    def log_prefill_stats(
+        self,
+        adder: PrefillAdder,
+        can_run_list: List[Req],
+        running_bs: int,
+    ):
+        gap_latency = time.time() - self.last_prefill_stats_tic
+        self.last_prefill_stats_tic = time.time()
+        self.last_input_throughput = self.num_prefill_tokens / gap_latency
+        self.num_prefill_tokens = 0
+
         num_used = self.max_total_num_tokens - (
-            self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
+            self.token_to_kv_pool_allocator.available_size()
+            + self.tree_cache.evictable_size()
         )
-        throughput = self.num_generated_tokens / (time.time() - self.last_stats_tic)
-        stats = Stats(
-            time.time(),
-            generation_throughput=throughput,
-            running_requests=len(self.running_batch.reqs),
-            queued_requests=len(self.waiting_queue),
-            token_usage=num_used / self.max_total_num_tokens,
-            used_token_pool=num_used,
+        self._largest_prefill_len = max(
+            self._largest_prefill_len, adder.log_input_tokens
         )
-        self.log_stats(stats)
-        self.num_generated_tokens = 0
-        self.last_stats_tic = time.time()
-        num_running_reqs = len(self.running_batch.reqs) if self.running_batch else 0
-        logger.info(
-            f"Decode batch. "
-            f"#running-req: {num_running_reqs}, "
-            f"#token: {num_used}, "
+
+        f = (
+            f"Prefill batch. "
+            f"#new-seq: {len(can_run_list)}, "
+            f"#new-token: {adder.log_input_tokens}, "
+            f"#cached-token: {adder.log_hit_tokens}, "
             f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
-            f"gen throughput (token/s): {throughput:.2f}, "
-            f"#queue-req: {len(self.waiting_queue)}"
+            f"#running-req: {running_bs}, "
+            f"#queue-req: {len(self.waiting_queue)}, "
         )
+        logger.info(f)
+
+    def log_decode_stats(self):
+        gap_latency = time.time() - self.last_decode_stats_tic
+        self.last_decode_stats_tic = time.time()
+        self.last_gen_throughput = self.num_generated_tokens / gap_latency
+        self.num_generated_tokens = 0
+        num_running_reqs = len(self.running_batch.reqs)
+        num_used = self.max_total_num_tokens - (
+            self.token_to_kv_pool_allocator.available_size()
+            + self.tree_cache.evictable_size()
+        )
+
+        if self.spec_algorithm.is_none():
+            msg = (
+                f"Decode batch. "
+                f"#running-req: {num_running_reqs}, "
+                f"#token: {num_used}, "
+                f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
+                f"gen throughput (token/s): {self.last_gen_throughput:.2f}, "
+                f"#queue-req: {len(self.waiting_queue)}, "
+            )
+            spec_accept_length = 0
+        else:
+            spec_accept_length = (
+                self.spec_num_total_accepted_tokens / self.spec_num_total_forward_ct
+            )
+            self.cum_spec_accept_length += self.spec_num_total_accepted_tokens
+            self.cum_spec_accept_count += self.spec_num_total_forward_ct
+            self.spec_num_total_accepted_tokens = self.spec_num_total_forward_ct = 0
+            msg = (
+                f"Decode batch. "
+                f"#running-req: {num_running_reqs}, "
+                f"#token: {num_used}, "
+                f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
+                f"accept len: {spec_accept_length:.2f}, "
+                f"gen throughput (token/s): {self.last_gen_throughput:.2f}, "
+                f"#queue-req: {len(self.waiting_queue)}, "
+            )
+
+        logger.info(msg)
 
     def check_memory(self):
         available_size = (
-            self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size()
+            self.token_to_kv_pool_allocator.available_size()
+            + self.tree_cache.evictable_size()
         )
         if available_size != self.max_total_num_tokens:
             warnings.warn(
@@ -544,75 +706,86 @@ class Scheduler:
     def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
         # Merge the prefill batch into the running batch
         if self.last_batch and self.last_batch.forward_mode.is_extend():
-            if self.being_chunked_req:
-                # Move the chunked request out of the batch
-                self.last_batch.filter_batch(being_chunked_req=self.being_chunked_req)
-                self.tree_cache.cache_unfinished_req(self.being_chunked_req)
-                # being chunked request keeps its rid but will get a new req_pool_idx
-                self.req_to_token_pool.free(self.being_chunked_req.req_pool_idx)
-                self.batch_is_full = False
+            if self.chunked_req:
+                # Move the chunked request out of the batch so that we can merge
+                # only finished requests to running_batch.
+                self.last_batch.filter_batch(chunked_req_to_exclude=self.chunked_req)
+                self.tree_cache.cache_unfinished_req(self.chunked_req)
+                # chunked request keeps its rid but will get a new req_pool_idx
+                self.req_to_token_pool.free(self.chunked_req.req_pool_idx)
+                self.running_batch.batch_is_full = False
 
+            # Filter batch
+            last_bs = self.last_batch.batch_size()
+            self.last_batch.filter_batch()
+            if self.last_batch.batch_size() < last_bs:
+                self.running_batch.batch_is_full = False
+
+            # Merge the new batch into the running batch
             if not self.last_batch.is_empty():
-                if self.running_batch is None:
+                if self.running_batch.is_empty():
                     self.running_batch = self.last_batch
                 else:
+                    # Merge running_batch with prefill batch
                     self.running_batch.merge_batch(self.last_batch)
 
-        # Run prefill first if possible
         new_batch = self.get_new_batch_prefill()
         if new_batch is not None:
-            return new_batch
-
-        # Run decode
-        if self.running_batch is None:
-            return None
-        self.running_batch = self.update_running_batch(self.running_batch)
-        return self.running_batch
+            # Run prefill first if possible
+            ret = new_batch
+        else:
+            # Run decode
+            if not self.running_batch.is_empty():
+                self.running_batch = self.update_running_batch(self.running_batch)
+                ret = self.running_batch if not self.running_batch.is_empty() else None
+            else:
+                ret = None
+        return ret
 
     def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
+        # Check if the grammar is ready in the grammar queue
         if self.grammar_queue:
             self.move_ready_grammar_requests()
+
         # Handle the cases where prefill is not allowed
         if (
-            self.batch_is_full or len(self.waiting_queue) == 0
-        ) and self.being_chunked_req is None:
+            self.running_batch.batch_is_full or len(self.waiting_queue) == 0
+        ) and self.chunked_req is None:
             return None
 
-        running_bs = len(self.running_batch.reqs) if self.running_batch else 0
+        running_bs = len(self.running_batch.reqs)
         if running_bs >= self.max_running_requests:
-            self.batch_is_full = True
+            self.running_batch.batch_is_full = True
             return None
+
+        if self.enable_hierarchical_cache:
+            # check for completion of hierarchical cache activities to release memory
+            self.tree_cache.writing_check()
+            self.tree_cache.loading_check()
 
         # Get priority queue
         prefix_computed = self.policy.calc_priority(self.waiting_queue)
 
         # Prefill policy
-        num_mixed_running = running_bs if self.is_mixed_chunk else 0
         adder = PrefillAdder(
             self.tree_cache,
+            self.token_to_kv_pool_allocator,
             self.running_batch,
             self.new_token_ratio,
-            self.token_to_kv_pool.available_size() + self.tree_cache.evictable_size(),
             self.max_prefill_tokens,
             self.chunked_prefill_size,
-            num_mixed_running,
+            running_bs if self.is_mixed_chunk else 0,
         )
 
-        has_inflight = self.being_chunked_req is not None
-        if has_inflight:
-            self.being_chunked_req.init_next_round_input()
-            self.being_chunked_req = adder.add_inflight_req(self.being_chunked_req)
+        if self.chunked_req is not None:
+            self.chunked_req.init_next_round_input()
+            self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
         if self.topping_paths:
-            topping_set = (
-                set([req.topping_path for req in self.running_batch.reqs])
-                if self.running_batch is not None
-                else set([])
-            )
+            topping_set = set([req.topping_path for req in self.running_batch.reqs])
 
         # Get requests from the waiting queue to a new prefill batch
         for req in self.waiting_queue:
-
             if (
                 self.topping_paths
                 and len(
@@ -620,91 +793,55 @@ class Scheduler:
                     | set([req.topping_path for req in adder.can_run_list])
                     | set([req.topping_path])
                 )
-                > self.max_toppings_per_batch
+                > self.max_loras_per_batch
             ):
-                self.batch_is_full = True
+                self.running_batch.batch_is_full = True
                 break
 
             if running_bs + len(adder.can_run_list) >= self.max_running_requests:
-                self.batch_is_full = True
+                self.running_batch.batch_is_full = True
                 break
 
-            req.init_next_round_input(None if prefix_computed else self.tree_cache)
-            res = adder.add_one_req(req)
+            req.init_next_round_input(
+                None if prefix_computed else self.tree_cache,
+                self.enable_hierarchical_cache,
+            )
+
+            res = adder.add_one_req(
+                req, self.chunked_req, self.enable_hierarchical_cache
+            )
             if res != AddReqResult.CONTINUE:
                 if res == AddReqResult.NO_TOKEN:
-                    self.batch_is_full = True
+                    self.running_batch.batch_is_full = True
                 break
 
         # Update waiting queue
-        can_run_list = adder.can_run_list
+        can_run_list: List[Req] = adder.can_run_list
         if len(can_run_list) == 0:
             return None
         self.waiting_queue = [
             x for x in self.waiting_queue if x not in set(can_run_list)
         ]
 
-        if adder.new_inflight_req is not None:
-            assert self.being_chunked_req is None
-            self.being_chunked_req = adder.new_inflight_req
+        if self.enable_hierarchical_cache:
+            self.tree_cache.ready_to_load_cache()
 
-        if self.being_chunked_req:
-            self.being_chunked_req.is_being_chunked += 1
+        if adder.new_chunked_req is not None:
+            assert self.chunked_req is None
+            self.chunked_req = adder.new_chunked_req
+
+        if self.chunked_req:
+            self.chunked_req.is_chunked += 1
 
         # Print stats
         if self.tp_rank == 0:
-            if isinstance(self.tree_cache, RadixCache):
-                self.tree_cache_metrics["total"] += (
-                    adder.log_input_tokens + adder.log_hit_tokens
-                ) / 10**9
-                self.tree_cache_metrics["hit"] += (adder.log_hit_tokens) / 10**9
-                tree_cache_hit_rate = (
-                    self.tree_cache_metrics["hit"] / self.tree_cache_metrics["total"]
-                )
-            else:
-                tree_cache_hit_rate = 0.0
-
-            num_used = self.max_total_num_tokens - (
-                self.token_to_kv_pool.available_size()
-                + self.tree_cache.evictable_size()
-            )
-            stats = Stats(
-                now=time.time(),
-                generation_throughput=0,
-                token_usage=num_used / self.max_total_num_tokens,
-                queued_requests=len(self.waiting_queue) + has_inflight,
-                running_requests=num_mixed_running + running_bs,
-                used_token_pool=num_used,
-            )
-            self.log_stats(stats)
-            if num_mixed_running > 0:
-                logger.info(
-                    f"Prefill batch"
-                    f"(mixed #running-req: {num_mixed_running}). "
-                    f"#new-seq: {len(can_run_list)}, "
-                    f"#new-token: {adder.log_input_tokens}, "
-                    f"#cached-token: {adder.log_hit_tokens}, "
-                    f"cache hit rate: {100.0 * tree_cache_hit_rate:.2f}%, "
-                    f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
-                    f"#queue-req: {len(self.waiting_queue) + has_inflight}"
-                )
-            else:
-                logger.info(
-                    f"Prefill batch. "
-                    f"#new-seq: {len(can_run_list)}, "
-                    f"#new-token: {adder.log_input_tokens}, "
-                    f"#cached-token: {adder.log_hit_tokens}, "
-                    f"cache hit rate: {100.0 * tree_cache_hit_rate:.2f}%, "
-                    f"token usage: {num_used / self.max_total_num_tokens:.2f}, "
-                    f"#running-req: {running_bs}, "
-                    f"#queue-req: {len(self.waiting_queue) + has_inflight}"
-                )
+            self.log_prefill_stats(adder, can_run_list, running_bs)
 
         # Create a new batch
         new_batch = ScheduleBatch.init_new(
             can_run_list,
             self.req_to_token_pool,
-            self.token_to_kv_pool,
+            self.token_to_kv_pool_allocator,
             self.tree_cache,
             self.model_config,
             self.enable_overlap,
@@ -712,124 +849,169 @@ class Scheduler:
             self.server_args.enable_custom_logit_processor,
         )
         new_batch.prepare_for_extend()
-
         # Mixed-style chunked prefill
-        if self.is_mixed_chunk and self.running_batch is not None:
+        if (
+            self.is_mixed_chunk
+            and not self.running_batch.is_empty()
+            and not (new_batch.return_logprob or self.running_batch.return_logprob)
+        ):
+            # TODO (lianmin): support return_logprob + mixed chunked prefill
             self.running_batch.filter_batch()
             if not self.running_batch.is_empty():
-                self.running_batch.prepare_for_decode(self.enable_overlap)
+                self.running_batch.prepare_for_decode()
                 new_batch.mix_with_running(self.running_batch)
                 new_batch.decoding_reqs = self.running_batch.reqs
-            self.running_batch = None
+            self.running_batch = ScheduleBatch(
+                reqs=[], batch_is_full=self.running_batch.batch_is_full
+            )
         else:
             new_batch.decoding_reqs = None
+
         return new_batch
 
     def update_running_batch(self, batch: ScheduleBatch) -> Optional[ScheduleBatch]:
         """Update the current running decoding batch."""
-        global test_retract
-
         initial_bs = batch.batch_size()
 
         batch.filter_batch()
         if batch.is_empty():
-            self.batch_is_full = False
-            return None
+            batch.batch_is_full = False
+            return batch
 
         # Check if decode out of memory
         if not batch.check_decode_mem(self.decode_mem_cache_buf_multiplier) or (
-            test_retract and batch.batch_size() > 10
+            TEST_RETRACT and batch.batch_size() > 10
         ):
             old_ratio = self.new_token_ratio
 
-            retracted_reqs, new_token_ratio = batch.retract_decode()
+            retracted_reqs, new_token_ratio = batch.retract_decode(self.server_args)
             self.new_token_ratio = new_token_ratio
-            if self.draft_worker:
-                self.draft_worker.finish_request(retracted_reqs)
 
             logger.info(
                 "Decode out of memory happened. "
                 f"#retracted_reqs: {len(retracted_reqs)}, "
                 f"#new_token_ratio: {old_ratio:.4f} -> {self.new_token_ratio:.4f}"
             )
-            self.waiting_queue.extend(retracted_reqs)
+            self._extend_requests_to_queue(retracted_reqs)
         else:
             self.new_token_ratio = max(
                 self.new_token_ratio - self.new_token_ratio_decay,
                 self.min_new_token_ratio,
             )
 
-        # Check for jump-forward
-        if not self.disable_jump_forward:
-            jump_forward_reqs = batch.check_for_jump_forward(self.pad_input_ids_func)
-            self.waiting_queue.extend(jump_forward_reqs)
-            if batch.is_empty():
-                self.batch_is_full = False
-                return None
-
         if batch.batch_size() < initial_bs:
-            self.batch_is_full = False
+            batch.batch_is_full = False
 
         # Update batch tensors
-        batch.prepare_for_decode(self, self.tp_worker.model_runner.topping_manager)
+        batch.prepare_for_decode(self.tp_worker.model_runner.topping_manager)
         return batch
 
-    def run_batch(self, batch: ScheduleBatch):
+    def run_batch(
+        self, batch: ScheduleBatch
+    ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
         self.forward_ct += 1
 
+        # Check profiler
+        if (
+            self.profiler_target_forward_ct
+            and self.profiler_target_forward_ct <= self.forward_ct
+        ):
+            self.stop_profile()
+
+        # Run forward
         if self.is_generation:
-            if batch.forward_mode.is_decode() or batch.extend_num_tokens != 0:
-                if self.spec_algorithm.is_none():
-                    model_worker_batch = batch.get_model_worker_batch()
-                    (
-                        logits_output,
-                        next_token_ids,
-                    ) = self.tp_worker.forward_batch_generation(model_worker_batch)
-                else:
-                    (
-                        logits_output,
-                        next_token_ids,
-                        model_worker_batch,
-                        num_accepted_tokens,
-                    ) = self.draft_worker.forward_batch_speculative_generation(batch)
-                    self.num_generated_tokens += num_accepted_tokens
-
-            elif batch.forward_mode.is_idle():
+            if self.spec_algorithm.is_none():
                 model_worker_batch = batch.get_model_worker_batch()
-                self.tp_worker.forward_batch_idle(model_worker_batch)
-                return
+                logits_output, next_token_ids = self.tp_worker.forward_batch_generation(
+                    model_worker_batch
+                )
+                bid = model_worker_batch.bid
             else:
-                logits_output = None
-                if self.skip_tokenizer_init:
-                    next_token_ids = torch.full(
-                        (batch.batch_size(),), self.tokenizer.eos_token_id
-                    )
-                else:
-                    next_token_ids = torch.full((batch.batch_size(),), 0)
-
+                (
+                    logits_output,
+                    next_token_ids,
+                    bid,
+                    num_accepted_tokens,
+                ) = self.draft_worker.forward_batch_speculative_generation(batch)
+                self.spec_num_total_accepted_tokens += (
+                    num_accepted_tokens + batch.batch_size()
+                )
+                self.spec_num_total_forward_ct += batch.batch_size()
+                self.num_generated_tokens += num_accepted_tokens
             batch.output_ids = next_token_ids
-            ret = logits_output, next_token_ids, model_worker_batch.bid
+
+            # These 2 values are needed for processing the output, but the values can be
+            # modified by overlap schedule. So we have to copy them here so that
+            # we can use the correct values in output processing.
+            if batch.return_logprob:
+                extend_input_len_per_req = [req.extend_input_len for req in batch.reqs]
+                extend_logprob_start_len_per_req = [
+                    req.extend_logprob_start_len for req in batch.reqs
+                ]
+            else:
+                extend_input_len_per_req = None
+                extend_logprob_start_len_per_req = None
+
+            ret = GenerationBatchResult(
+                logits_output=logits_output,
+                next_token_ids=next_token_ids,
+                extend_input_len_per_req=extend_input_len_per_req,
+                extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
+                bid=bid,
+            )
         else:  # embedding or reward model
-            assert batch.extend_num_tokens != 0
             model_worker_batch = batch.get_model_worker_batch()
             embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
-            ret = embeddings, model_worker_batch.bid
+            ret = EmbeddingBatchResult(
+                embeddings=embeddings, bid=model_worker_batch.bid
+            )
         return ret
 
-    def process_batch_result(self, batch: ScheduleBatch, result):
+    def process_batch_result(
+        self,
+        batch: ScheduleBatch,
+        result: Union[GenerationBatchResult, EmbeddingBatchResult],
+    ):
         if batch.forward_mode.is_decode():
             self.process_batch_result_decode(batch, result)
-            if batch.is_empty():
-                self.running_batch = None
-        else:
+        elif batch.forward_mode.is_extend():
             self.process_batch_result_prefill(batch, result)
+        elif batch.forward_mode.is_idle():
+            if self.enable_overlap:
+                self.tp_worker.resolve_batch_result(result.bid)
+                if batch.next_batch_sampling_info:
+                    batch.next_batch_sampling_info.update_regex_vocab_mask()
+                    self.current_stream.synchronize()
+                    batch.next_batch_sampling_info.sampling_info_done.set()
+        elif batch.forward_mode.is_dummy_first():
+            batch.next_batch_sampling_info.update_regex_vocab_mask()
+            self.current_stream.synchronize()
+            batch.next_batch_sampling_info.sampling_info_done.set()
+
+        if self.return_health_check_ct:
+            # Return some signal for the health check.
+            # This is used to prevent the health check signal being blocked by long context prefill.
+            # However, one minor issue is that this code path does not check the status of detokenizer manager.
+            self.return_health_check_ct -= 1
+            self.send_to_tokenizer.send_pyobj(HealthCheckOutput())
 
     def process_batch_result_prefill(self, batch: ScheduleBatch, result):
         skip_stream_req = None
-
         if self.is_generation:
-            logits_output, next_token_ids, bid = result
+            (
+                logits_output,
+                next_token_ids,
+                extend_input_len_per_req,
+                extend_logprob_start_len_per_req,
+                bid,
+            ) = (
+                result.logits_output,
+                result.next_token_ids,
+                result.extend_input_len_per_req,
+                result.extend_logprob_start_len_per_req,
+                result.bid,
+            )
 
             if self.enable_overlap:
                 logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
@@ -837,15 +1019,16 @@ class Scheduler:
                 # Move next_token_ids and logprobs to cpu
                 next_token_ids = next_token_ids.tolist()
                 if batch.return_logprob:
-                    logits_output.next_token_logprobs = (
-                        logits_output.next_token_logprobs.tolist()
-                    )
-                    logits_output.input_token_logprobs = (
-                        logits_output.input_token_logprobs.tolist()
-                    )
-                    logits_output.normalized_prompt_logprobs = (
-                        logits_output.normalized_prompt_logprobs.tolist()
-                    )
+                    if logits_output.next_token_logprobs is not None:
+                        logits_output.next_token_logprobs = (
+                            logits_output.next_token_logprobs.tolist()
+                        )
+                    if logits_output.input_token_logprobs is not None:
+                        logits_output.input_token_logprobs = tuple(
+                            logits_output.input_token_logprobs.tolist()
+                        )
+
+            hidden_state_offset = 0
 
             # Check finish conditions
             logprob_pt = 0
@@ -856,21 +1039,50 @@ class Scheduler:
                 if self.is_mixed_chunk and self.enable_overlap and req.finished():
                     # Free the one delayed token for the mixed decode batch
                     j = len(batch.out_cache_loc) - len(batch.reqs) + i
-                    self.token_to_kv_pool.free(batch.out_cache_loc[j : j + 1])
+                    self.token_to_kv_pool_allocator.free(batch.out_cache_loc[j : j + 1])
                     continue
 
-                if req.is_being_chunked <= 0:
+                if req.is_chunked <= 0:
+                    # req output_ids are set here
                     req.output_ids.append(next_token_id)
                     req.check_finished()
 
                     if req.finished():
                         self.tree_cache.cache_finished_req(req)
                     elif not batch.decoding_reqs or req not in batch.decoding_reqs:
+                        # This updates radix so others can match
                         self.tree_cache.cache_unfinished_req(req)
 
                     if req.return_logprob:
-                        logprob_pt += self.add_logprob_return_values(
-                            i, req, logprob_pt, next_token_ids, logits_output
+                        assert extend_logprob_start_len_per_req is not None
+                        assert extend_input_len_per_req is not None
+                        extend_logprob_start_len = extend_logprob_start_len_per_req[i]
+                        extend_input_len = extend_input_len_per_req[i]
+                        num_input_logprobs = extend_input_len - extend_logprob_start_len
+                        self.add_logprob_return_values(
+                            i,
+                            req,
+                            logprob_pt,
+                            next_token_ids,
+                            num_input_logprobs,
+                            logits_output,
+                        )
+                        logprob_pt += num_input_logprobs
+
+                    if (
+                        req.return_hidden_states
+                        and logits_output.hidden_states is not None
+                    ):
+                        req.hidden_states.append(
+                            logits_output.hidden_states[
+                                hidden_state_offset : (
+                                    hidden_state_offset := hidden_state_offset
+                                    + len(req.origin_input_ids)
+                                )
+                            ]
+                            .cpu()
+                            .clone()
+                            .tolist()
                         )
 
                     if req.grammar is not None:
@@ -878,11 +1090,30 @@ class Scheduler:
                         req.grammar.finished = req.finished()
                 else:
                     # being chunked reqs' prefill is not finished
-                    req.is_being_chunked -= 1
+                    req.is_chunked -= 1
                     # There is only at most one request being currently chunked.
                     # Because this request does not finish prefill,
                     # we don't want to stream the request currently being chunked.
                     skip_stream_req = req
+
+                    # Incrementally update input logprobs.
+                    if req.return_logprob:
+                        extend_logprob_start_len = extend_logprob_start_len_per_req[i]
+                        extend_input_len = extend_input_len_per_req[i]
+                        if extend_logprob_start_len < extend_input_len:
+                            # Update input logprobs.
+                            num_input_logprobs = (
+                                extend_input_len - extend_logprob_start_len
+                            )
+                            self.add_input_logprob_return_values(
+                                i,
+                                req,
+                                logits_output,
+                                logprob_pt,
+                                num_input_logprobs,
+                                last_prefill_chunk=False,
+                            )
+                            logprob_pt += num_input_logprobs
 
             if batch.next_batch_sampling_info:
                 batch.next_batch_sampling_info.update_regex_vocab_mask()
@@ -890,7 +1121,7 @@ class Scheduler:
                 batch.next_batch_sampling_info.sampling_info_done.set()
 
         else:  # embedding or reward model
-            embeddings, bid = result
+            embeddings, bid = result.embeddings, result.bid
             embeddings = embeddings.tolist()
 
             # Check finish conditions
@@ -899,7 +1130,7 @@ class Scheduler:
                     continue
 
                 req.embedding = embeddings[i]
-                if req.is_being_chunked <= 0:
+                if req.is_chunked <= 0:
                     # Dummy output token for embedding models
                     req.output_ids.append(0)
                     req.check_finished()
@@ -910,32 +1141,52 @@ class Scheduler:
                         self.tree_cache.cache_unfinished_req(req)
                 else:
                     # being chunked reqs' prefill is not finished
-                    req.is_being_chunked -= 1
+                    req.is_chunked -= 1
 
         self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 
-    def process_batch_result_decode(self, batch: ScheduleBatch, result):
-        logits_output, next_token_ids, bid = result
+    def process_batch_result_decode(
+        self,
+        batch: ScheduleBatch,
+        result: GenerationBatchResult,
+    ):
+        logits_output, next_token_ids, bid = (
+            result.logits_output,
+            result.next_token_ids,
+            result.bid,
+        )
         self.num_generated_tokens += len(batch.reqs)
 
         if self.enable_overlap:
             logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
             next_token_logprobs = logits_output.next_token_logprobs
-        else:
+        elif batch.spec_algorithm.is_none():
+            # spec decoding handles output logprobs inside verify process.
             next_token_ids = next_token_ids.tolist()
             if batch.return_logprob:
                 next_token_logprobs = logits_output.next_token_logprobs.tolist()
 
-        self.token_to_kv_pool.free_group_begin()
+        self.token_to_kv_pool_allocator.free_group_begin()
 
         # Check finish condition
+        # NOTE: the length of reqs and next_token_ids don't match if it is spec decoding.
+        # We should ignore using next_token_ids for spec decoding cases.
         for i, (req, next_token_id) in enumerate(zip(batch.reqs, next_token_ids)):
             if req.is_retracted:
                 continue
 
             if self.enable_overlap and req.finished():
-                # Free the one delayed token
-                self.token_to_kv_pool.free(batch.out_cache_loc[i : i + 1])
+                # Free the one extra delayed token
+                if self.page_size == 1:
+                    self.token_to_kv_pool_allocator.free(batch.out_cache_loc[i : i + 1])
+                else:
+                    # Only free when the extra token is in a new page
+                    if (
+                        len(req.origin_input_ids) + len(req.output_ids) - 1
+                    ) % self.page_size == 0:
+                        self.token_to_kv_pool_allocator.free(
+                            batch.out_cache_loc[i : i + 1]
+                        )
                 continue
 
             if batch.spec_algorithm.is_none():
@@ -943,11 +1194,11 @@ class Scheduler:
                 req.output_ids.append(next_token_id)
 
             req.check_finished()
-
             if req.finished():
                 self.tree_cache.cache_finished_req(req)
 
-            if req.return_logprob:
+            if req.return_logprob and batch.spec_algorithm.is_none():
+                # speculative worker handles logprob in speculative decoding
                 req.output_token_logprobs_val.append(next_token_logprobs[i])
                 req.output_token_logprobs_idx.append(next_token_id)
                 if req.top_logprobs_num > 0:
@@ -957,8 +1208,20 @@ class Scheduler:
                     req.output_top_logprobs_idx.append(
                         logits_output.next_token_top_logprobs_idx[i]
                     )
+                if req.token_ids_logprob is not None:
+                    req.output_token_ids_logprobs_val.append(
+                        logits_output.next_token_token_ids_logprobs_val[i]
+                    )
+                    req.output_token_ids_logprobs_idx.append(
+                        logits_output.next_token_token_ids_logprobs_idx[i]
+                    )
 
-            if req.grammar is not None:
+            if req.return_hidden_states and logits_output.hidden_states is not None:
+                req.hidden_states.append(
+                    logits_output.hidden_states[i].cpu().clone().tolist()
+                )
+
+            if req.grammar is not None and batch.spec_algorithm.is_none():
                 req.grammar.accept_token(next_token_id)
                 req.grammar.finished = req.finished()
 
@@ -969,7 +1232,7 @@ class Scheduler:
 
         self.stream_output(batch.reqs, batch.return_logprob)
 
-        self.token_to_kv_pool.free_group_end()
+        self.token_to_kv_pool_allocator.free_group_end()
 
         self.forward_ct_decode = (self.forward_ct_decode + 1) % (1 << 30)
         if (
@@ -1055,135 +1318,189 @@ class Scheduler:
         self, reqs: List[Req], return_logprob: bool, skip_req: Optional[Req] = None
     ):
         """Stream the output to detokenizer."""
+        if self.is_generation:
+            self.stream_output_generation(reqs, return_logprob, skip_req)
+        else:  # embedding or reward model
+            self.stream_output_embedding(reqs)
+
+    def stream_output_generation(
+        self, reqs: List[Req], return_logprob: bool, skip_req: Optional[Req] = None
+    ):
         rids = []
         finished_reasons: List[BaseFinishReason] = []
 
-        if self.is_generation:
-            vids = []
-            decoded_texts = []
-            decode_ids_list = []
-            read_offsets = []
-            output_ids = []
+        decoded_texts = []
+        decode_ids_list = []
+        read_offsets = []
+        output_ids = []
 
-            skip_special_tokens = []
-            spaces_between_special_tokens = []
-            no_stop_trim = []
-            prompt_tokens = []
-            completion_tokens = []
-            cached_tokens = []
+        skip_special_tokens = []
+        spaces_between_special_tokens = []
+        no_stop_trim = []
+        prompt_tokens = []
+        completion_tokens = []
+        cached_tokens = []
+        spec_verify_ct = []
+        output_hidden_states = None
 
-            if return_logprob:
-                input_token_logprobs_val = []
-                input_token_logprobs_idx = []
-                output_token_logprobs_val = []
-                output_token_logprobs_idx = []
-                input_top_logprobs_val = []
-                input_top_logprobs_idx = []
-                output_top_logprobs_val = []
-                output_top_logprobs_idx = []
-                normalized_prompt_logprob = []
-            else:
-                input_token_logprobs_val = (
-                    input_token_logprobs_idx
-                ) = (
-                    output_token_logprobs_val
-                ) = (
-                    output_token_logprobs_idx
-                ) = (
-                    input_top_logprobs_val
-                ) = (
-                    input_top_logprobs_idx
-                ) = (
-                    output_top_logprobs_val
-                ) = output_top_logprobs_idx = normalized_prompt_logprob = None
+        if return_logprob:
+            input_token_logprobs_val = []
+            input_token_logprobs_idx = []
+            output_token_logprobs_val = []
+            output_token_logprobs_idx = []
+            input_top_logprobs_val = []
+            input_top_logprobs_idx = []
+            output_top_logprobs_val = []
+            output_top_logprobs_idx = []
+            input_token_ids_logprobs_val = []
+            input_token_ids_logprobs_idx = []
+            output_token_ids_logprobs_val = []
+            output_token_ids_logprobs_idx = []
+        else:
+            input_token_logprobs_val = (
+                input_token_logprobs_idx
+            ) = (
+                output_token_logprobs_val
+            ) = (
+                output_token_logprobs_idx
+            ) = (
+                input_top_logprobs_val
+            ) = (
+                input_top_logprobs_idx
+            ) = (
+                output_top_logprobs_val
+            ) = (
+                output_top_logprobs_idx
+            ) = (
+                input_token_ids_logprobs_val
+            ) = (
+                input_token_ids_logprobs_idx
+            ) = output_token_ids_logprobs_val = output_token_ids_logprobs_idx = None
 
-            for req in reqs:
-                if req is skip_req:
-                    continue
+        for req in reqs:
+            if req is skip_req:
+                continue
 
-                # TODO(lianmin): revisit this for overlap + retract + stream
-                if (
-                    req.finished()
-                    # If stream, follow the given stream_interval
-                    or (req.stream and len(req.output_ids) % self.stream_interval == 0)
-                    # If not stream, we still want to output some tokens to get the benefit of incremental decoding.
-                    or (not req.stream and len(req.output_ids) % 50 == 0)
-                ):
-                    if self.draft_worker and req.finished():
-                        self.draft_worker.finish_request(req)
+            # Multimodal partial stream chunks break the detokenizer, so drop aborted requests here.
+            if self.model_config.is_multimodal_gen and req.to_abort:
+                continue
 
-                    rids.append(req.rid)
-                    finished_reasons.append(
-                        req.finished_reason.to_json() if req.finished_reason else None
-                    )
-                    vids.append(req.vid)
-                    decoded_texts.append(req.decoded_text)
-                    decode_ids, read_offset = req.init_incremental_detokenize()
-                    decode_ids_list.append(decode_ids)
-                    read_offsets.append(read_offset)
-                    if self.skip_tokenizer_init:
-                        output_ids.append(req.output_ids)
-                    skip_special_tokens.append(req.sampling_params.skip_special_tokens)
-                    spaces_between_special_tokens.append(
-                        req.sampling_params.spaces_between_special_tokens
-                    )
-                    no_stop_trim.append(req.sampling_params.no_stop_trim)
-
-                    prompt_tokens.append(len(req.origin_input_ids))
-                    completion_tokens.append(len(req.output_ids))
-                    cached_tokens.append(req.cached_tokens)
-
-                    if return_logprob:
-                        input_token_logprobs_val.append(req.input_token_logprobs_val)
-                        input_token_logprobs_idx.append(req.input_token_logprobs_idx)
-                        output_token_logprobs_val.append(req.output_token_logprobs_val)
-                        output_token_logprobs_idx.append(req.output_token_logprobs_idx)
-                        input_top_logprobs_val.append(req.input_top_logprobs_val)
-                        input_top_logprobs_idx.append(req.input_top_logprobs_idx)
-                        output_top_logprobs_val.append(req.output_top_logprobs_val)
-                        output_top_logprobs_idx.append(req.output_top_logprobs_idx)
-                        normalized_prompt_logprob.append(req.normalized_prompt_logprob)
-
-            # Send to detokenizer
-            if rids:
-                self.send_to_detokenizer.send_pyobj(
-                    BatchTokenIDOut(
-                        rids,
-                        finished_reasons,
-                        vids,
-                        decoded_texts,
-                        decode_ids_list,
-                        read_offsets,
-                        output_ids,
-                        skip_special_tokens,
-                        spaces_between_special_tokens,
-                        no_stop_trim,
-                        prompt_tokens,
-                        completion_tokens,
-                        cached_tokens,
-                        input_token_logprobs_val,
-                        input_token_logprobs_idx,
-                        output_token_logprobs_val,
-                        output_token_logprobs_idx,
-                        input_top_logprobs_val,
-                        input_top_logprobs_idx,
-                        output_top_logprobs_val,
-                        output_top_logprobs_idx,
-                        normalized_prompt_logprob,
-                    )
+            if (
+                req.finished()
+                # If stream, follow the given stream_interval
+                or (req.stream and len(req.output_ids) % self.stream_interval == 0)
+                # If not stream, we still want to output some tokens to get the benefit of incremental decoding.
+                # TODO(lianmin): this is wrong for speculative decoding because len(req.output_ids) does not
+                # always increase one-by-one.
+                or (
+                    not req.stream
+                    and len(req.output_ids) % 50 == 0
+                    and not self.model_config.is_multimodal_gen
                 )
-        else:  # embedding or reward model
-            embeddings = []
-            prompt_tokens = []
-            for req in reqs:
-                if req.finished():
-                    rids.append(req.rid)
-                    finished_reasons.append(req.finished_reason.to_json())
-                    embeddings.append(req.embedding)
-                    prompt_tokens.append(len(req.origin_input_ids))
+            ):
+                rids.append(req.rid)
+                finished_reasons.append(
+                    req.finished_reason.to_json() if req.finished_reason else None
+                )
+                decoded_texts.append(req.decoded_text)
+                decode_ids, read_offset = req.init_incremental_detokenize()
+                decode_ids_list.append(decode_ids)
+                read_offsets.append(read_offset)
+                if self.skip_tokenizer_init:
+                    output_ids.append(req.output_ids)
+                skip_special_tokens.append(req.sampling_params.skip_special_tokens)
+                spaces_between_special_tokens.append(
+                    req.sampling_params.spaces_between_special_tokens
+                )
+                no_stop_trim.append(req.sampling_params.no_stop_trim)
+                prompt_tokens.append(len(req.origin_input_ids))
+                completion_tokens.append(len(req.output_ids))
+                cached_tokens.append(req.cached_tokens)
+
+                if not self.spec_algorithm.is_none():
+                    spec_verify_ct.append(req.spec_verify_ct)
+
+                if return_logprob:
+                    input_token_logprobs_val.append(req.input_token_logprobs_val)
+                    input_token_logprobs_idx.append(req.input_token_logprobs_idx)
+                    output_token_logprobs_val.append(req.output_token_logprobs_val)
+                    output_token_logprobs_idx.append(req.output_token_logprobs_idx)
+                    input_top_logprobs_val.append(req.input_top_logprobs_val)
+                    input_top_logprobs_idx.append(req.input_top_logprobs_idx)
+                    output_top_logprobs_val.append(req.output_top_logprobs_val)
+                    output_top_logprobs_idx.append(req.output_top_logprobs_idx)
+                    input_token_ids_logprobs_val.append(
+                        req.input_token_ids_logprobs_val
+                    )
+                    input_token_ids_logprobs_idx.append(
+                        req.input_token_ids_logprobs_idx
+                    )
+                    output_token_ids_logprobs_val.append(
+                        req.output_token_ids_logprobs_val
+                    )
+                    output_token_ids_logprobs_idx.append(
+                        req.output_token_ids_logprobs_idx
+                    )
+
+                if req.return_hidden_states:
+                    if output_hidden_states is None:
+                        output_hidden_states = []
+                    output_hidden_states.append(req.hidden_states)
+
+        # Send to detokenizer
+        if rids:
+            if self.model_config.is_multimodal_gen:
+                return
             self.send_to_detokenizer.send_pyobj(
-                BatchEmbeddingOut(rids, finished_reasons, embeddings, prompt_tokens)
+                BatchTokenIDOut(
+                    rids,
+                    finished_reasons,
+                    decoded_texts,
+                    decode_ids_list,
+                    read_offsets,
+                    output_ids,
+                    skip_special_tokens,
+                    spaces_between_special_tokens,
+                    no_stop_trim,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    spec_verify_ct,
+                    input_token_logprobs_val,
+                    input_token_logprobs_idx,
+                    output_token_logprobs_val,
+                    output_token_logprobs_idx,
+                    input_top_logprobs_val,
+                    input_top_logprobs_idx,
+                    output_top_logprobs_val,
+                    output_top_logprobs_idx,
+                    input_token_ids_logprobs_val,
+                    input_token_ids_logprobs_idx,
+                    output_token_ids_logprobs_val,
+                    output_token_ids_logprobs_idx,
+                    output_hidden_states,
+                )
             )
+
+    def stream_output_embedding(self, reqs: List[Req]):
+        rids = []
+        finished_reasons: List[BaseFinishReason] = []
+
+        embeddings = []
+        prompt_tokens = []
+        cached_tokens = []
+        for req in reqs:
+            if req.finished():
+                rids.append(req.rid)
+                finished_reasons.append(req.finished_reason.to_json())
+                embeddings.append(req.embedding)
+                prompt_tokens.append(len(req.origin_input_ids))
+                cached_tokens.append(req.cached_tokens)
+        self.send_to_detokenizer.send_pyobj(
+            BatchEmbeddingOut(
+                rids, finished_reasons, embeddings, prompt_tokens, cached_tokens
+            )
+        )
 
     def get_idle_batch(self):
         idle_batch = ScheduleBatch.init_new(
@@ -1313,6 +1630,7 @@ def run_scheduler_process(
         pipe_writer.send("ready")
         scheduler.event_loop_normal()
     except ValueError as e:
+        traceback.print_exc()
         logger.info(f"Scheduler process exited: {e}")
     except Exception:
         msg = get_exception_traceback()

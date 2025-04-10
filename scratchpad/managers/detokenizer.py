@@ -1,3 +1,4 @@
+import os
 import asyncio
 import dataclasses
 from typing import List, Dict, Union, TYPE_CHECKING
@@ -11,7 +12,7 @@ from .structs import (
     BatchEmbeddingOut,
     BatchStrOut,
     BatchTokenIDOut,
-    UpdateWeightReqOutput,
+    BatchMultimodalDecodeReq,
 )
 from scratchpad.utils import (
     find_printable_text,
@@ -20,11 +21,12 @@ from scratchpad.utils import (
     kill_parent_process,
     get_zmq_socket,
 )
+from .utils import TypeBasedDispatcher
 
 if TYPE_CHECKING:
     from scratchpad.server.args import ServerArgs
 
-
+DETOKENIZER_MAX_STATES = int(os.environ.get("SP_DETOKENIZER_MAX_STATES", 1 << 16))
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
@@ -32,7 +34,6 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 class DecodeStatus:
     """Store the status of incremental decoding."""
 
-    vid: int
     decoded_text: str
     decode_ids: List[int]
     surr_offset: int
@@ -65,6 +66,20 @@ class DetokenizerManager:
             )
 
         self.decode_status = LimitedCapacityDict()
+        self._request_dispatcher = TypeBasedDispatcher(
+            [
+                (BatchEmbeddingOut, self.handle_batch_embedding_out),
+                (BatchTokenIDOut, self.handle_batch_token_id_out),
+                (BatchMultimodalDecodeReq, self.handle_multimodal_decode_req),
+            ]
+        )
+
+    def event_loop(self):
+        """The event loop that handles requests"""
+        while True:
+            recv_obj = self.recv_from_scheduler.recv_pyobj()
+            output = self._request_dispatcher(recv_obj)
+            self.send_to_tokenizer.send_pyobj(output)
 
     def trim_matched_stop(
         self, output: Union[str, List[int]], finished_reason: Dict, no_stop_trim: bool
@@ -89,102 +104,108 @@ class DetokenizerManager:
             return output[:-1]
         return output
 
-    def event_loop(self):
-        """The event loop that handles requests"""
+    def handle_batch_embedding_out(self, recv_obj: BatchEmbeddingOut):
+        # If it is embedding model, no detokenization is needed.
+        return recv_obj
 
-        while True:
-            recv_obj = self.recv_from_scheduler.recv_pyobj()
+    def handle_batch_token_id_out(self, recv_obj: BatchTokenIDOut):
+        bs = len(recv_obj.rids)
 
-            if isinstance(recv_obj, BatchEmbeddingOut):
-                # If it is embedding model, no detokenization is needed.
-                self.send_to_tokenizer.send_pyobj(recv_obj)
-                continue
-            elif isinstance(recv_obj, UpdateWeightReqOutput):
-                # If it is a weight update request, no detokenization is needed.
-                self.send_to_tokenizer.send_pyobj(recv_obj)
-                continue
-            elif self.tokenizer is None:
-                # If the tokenizer is skipped, no detokenization is needed
-                self.send_to_tokenizer.send_pyobj(recv_obj)
-                continue
+        # Initialize decode status
+        read_ids, surr_ids = [], []
+        for i in range(bs):
+            rid = recv_obj.rids[i]
+            if rid not in self.decode_status:
+                s = DecodeStatus(
+                    decoded_text=recv_obj.decoded_texts[i],
+                    decode_ids=recv_obj.decode_ids[i],
+                    surr_offset=0,
+                    read_offset=recv_obj.read_offsets[i],
+                )
+                self.decode_status[rid] = s
+            else:
+                s = self.decode_status[rid]
+                s.decode_ids = recv_obj.decode_ids[i]
 
-            assert isinstance(recv_obj, BatchTokenIDOut)
-            bs = len(recv_obj.rids)
-
-            # Initialize decode status
-            read_ids, surr_ids = [], []
-            for i in range(bs):
-                rid = recv_obj.rids[i]
-                vid = recv_obj.vids[i]
-                if rid not in self.decode_status or self.decode_status[rid].vid != vid:
-                    s = DecodeStatus(
-                        vid=vid,
-                        decoded_text=recv_obj.decoded_texts[i],
-                        decode_ids=recv_obj.decode_ids[i],
-                        surr_offset=0,
-                        read_offset=recv_obj.read_offsets[i],
-                    )
-                    self.decode_status[rid] = s
-                else:
-                    s = self.decode_status[rid]
-                    s.decode_ids = recv_obj.decode_ids[i]
-
-                read_ids.append(s.decode_ids[s.surr_offset :])
-                surr_ids.append(s.decode_ids[s.surr_offset : s.read_offset])
-
-            # TODO(lmzheng): handle skip_special_tokens/spaces_between_special_tokens per request
-            surr_texts = self.tokenizer.batch_decode(
-                surr_ids,
-                skip_special_tokens=recv_obj.skip_special_tokens[0],
-                spaces_between_special_tokens=recv_obj.spaces_between_special_tokens[0],
+            read_ids.append(
+                self.trim_matched_stop(
+                    s.decode_ids[s.surr_offset :],
+                    recv_obj.finished_reasons[i],
+                    recv_obj.no_stop_trim[i],
+                )
             )
-            read_texts = self.tokenizer.batch_decode(
-                read_ids,
-                skip_special_tokens=recv_obj.skip_special_tokens[0],
-                spaces_between_special_tokens=recv_obj.spaces_between_special_tokens[0],
-            )
+            surr_ids.append(s.decode_ids[s.surr_offset : s.read_offset])
 
-            # Incremental decoding
-            output_strs = []
-            for i in range(bs):
+        # TODO(lmzheng): handle skip_special_tokens/spaces_between_special_tokens per request
+        surr_texts = self.tokenizer.batch_decode(
+            surr_ids,
+            skip_special_tokens=recv_obj.skip_special_tokens[0],
+            spaces_between_special_tokens=recv_obj.spaces_between_special_tokens[0],
+        )
+        read_texts = self.tokenizer.batch_decode(
+            read_ids,
+            skip_special_tokens=recv_obj.skip_special_tokens[0],
+            spaces_between_special_tokens=recv_obj.spaces_between_special_tokens[0],
+        )
+
+        # Incremental decoding
+        output_strs = []
+        for i in range(bs):
+            try:
                 s = self.decode_status[recv_obj.rids[i]]
-                new_text = read_texts[i][len(surr_texts[i]) :]
-                if recv_obj.finished_reasons[i] is None:
-                    # Streaming chunk: update the decode status
-                    if len(new_text) > 0 and not new_text.endswith("�"):
-                        s.decoded_text = s.decoded_text + new_text
-                        s.surr_offset = s.read_offset
-                        s.read_offset = len(s.decode_ids)
-                        new_text = ""
-                    else:
-                        new_text = find_printable_text(new_text)
-
-                output_strs.append(
-                    self.trim_matched_stop(
-                        s.decoded_text + new_text,
-                        recv_obj.finished_reasons[i],
-                        recv_obj.no_stop_trim[i],
-                    )
+            except KeyError:
+                raise RuntimeError(
+                    f"Decode status not found for request {recv_obj.rids[i]}. "
+                    "It may be due to the request being evicted from the decode status due to memory pressure. "
+                    "Please increase the maximum number of requests by setting "
+                    "the SP_DETOKENIZER_MAX_STATES environment variable to a bigger value than the default value. "
+                    f"The current value is {DETOKENIZER_MAX_STATES}. "
                 )
-            self.send_to_tokenizer.send_pyobj(
-                BatchStrOut(
-                    rids=recv_obj.rids,
-                    finished_reasons=recv_obj.finished_reasons,
-                    output_strs=output_strs,
-                    prompt_tokens=recv_obj.prompt_tokens,
-                    completion_tokens=recv_obj.completion_tokens,
-                    cached_tokens=recv_obj.cached_tokens,
-                    input_token_logprobs_val=recv_obj.input_token_logprobs_val,
-                    input_token_logprobs_idx=recv_obj.input_token_logprobs_idx,
-                    output_token_logprobs_val=recv_obj.output_token_logprobs_val,
-                    output_token_logprobs_idx=recv_obj.output_token_logprobs_idx,
-                    input_top_logprobs_val=recv_obj.input_top_logprobs_val,
-                    input_top_logprobs_idx=recv_obj.input_top_logprobs_idx,
-                    output_top_logprobs_val=recv_obj.output_top_logprobs_val,
-                    output_top_logprobs_idx=recv_obj.output_top_logprobs_idx,
-                    normalized_prompt_logprob=recv_obj.normalized_prompt_logprob,
+            new_text = read_texts[i][len(surr_texts[i]) :]
+            if recv_obj.finished_reasons[i] is None:
+                # Streaming chunk: update the decode status
+                if len(new_text) > 0 and not new_text.endswith("�"):
+                    s.decoded_text = s.decoded_text + new_text
+                    s.surr_offset = s.read_offset
+                    s.read_offset = len(s.decode_ids)
+                    new_text = ""
+                else:
+                    new_text = find_printable_text(new_text)
+
+            output_strs.append(
+                self.trim_matched_stop(
+                    s.decoded_text + new_text,
+                    recv_obj.finished_reasons[i],
+                    recv_obj.no_stop_trim[i],
                 )
             )
+
+        return BatchStrOut(
+            rids=recv_obj.rids,
+            finished_reasons=recv_obj.finished_reasons,
+            output_strs=output_strs,
+            output_ids=None,
+            prompt_tokens=recv_obj.prompt_tokens,
+            completion_tokens=recv_obj.completion_tokens,
+            cached_tokens=recv_obj.cached_tokens,
+            spec_verify_ct=recv_obj.spec_verify_ct,
+            input_token_logprobs_val=recv_obj.input_token_logprobs_val,
+            input_token_logprobs_idx=recv_obj.input_token_logprobs_idx,
+            output_token_logprobs_val=recv_obj.output_token_logprobs_val,
+            output_token_logprobs_idx=recv_obj.output_token_logprobs_idx,
+            input_top_logprobs_val=recv_obj.input_top_logprobs_val,
+            input_top_logprobs_idx=recv_obj.input_top_logprobs_idx,
+            output_top_logprobs_val=recv_obj.output_top_logprobs_val,
+            output_top_logprobs_idx=recv_obj.output_top_logprobs_idx,
+            input_token_ids_logprobs_val=recv_obj.input_token_ids_logprobs_val,
+            input_token_ids_logprobs_idx=recv_obj.input_token_ids_logprobs_idx,
+            output_token_ids_logprobs_val=recv_obj.output_token_ids_logprobs_val,
+            output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
+            output_hidden_states=recv_obj.output_hidden_states,
+        )
+
+    def handle_multimodal_decode_req(self, recv_obj: BatchMultimodalDecodeReq):
+        raise NotImplementedError()
 
 
 class LimitedCapacityDict(OrderedDict):

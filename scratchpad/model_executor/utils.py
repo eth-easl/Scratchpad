@@ -1,7 +1,7 @@
 import torch
 import glob
 import contextlib
-from typing import List, Generator, Tuple, Type, Protocol
+from typing import List, Generator, Tuple, Type, Protocol, TYPE_CHECKING
 from tqdm import tqdm
 import json
 import os
@@ -12,12 +12,15 @@ from scratchpad.utils import (
     is_pin_memory_available,
 )
 from safetensors.torch import safe_open
-from scratchpad.nn.models import ModelRegistry
+
 from scratchpad.config import ModelConfig, LoadConfig
-from scratchpad.nn.quantization import get_quantization_config, QuantizationConfig
+from scratchpad.nn.quantization import get_quantization_config
 import huggingface_hub
 from torch import nn
 from torch.func import functional_call
+
+if TYPE_CHECKING:
+    from scratchpad.nn.quantization import QuantizationConfig
 
 _BAR_FORMAT = "{desc}: {percentage:3.0f}% Completed | {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]\n"  # noqa: E501
 _CPU_OFFLOAD_BYTES = 0
@@ -124,6 +127,7 @@ def get_model_architecture(model_config: ModelConfig) -> Tuple[Type[nn.Module], 
         and "MixtralForCausalLM" in architectures
     ):
         architectures = ["QuantMixtralForCausalLM"]
+    from scratchpad.nn.models import ModelRegistry
 
     return ModelRegistry.resolve_model_cls(architectures)
 
@@ -134,7 +138,7 @@ def get_architecture_class_name(model_config: ModelConfig) -> str:
 
 def get_quant_config(
     model_config: ModelConfig, load_config: LoadConfig
-) -> QuantizationConfig:
+) -> "QuantizationConfig":
 
     quant_cls = get_quantization_config(model_config.quantization)
 

@@ -12,7 +12,7 @@ from .speculative.spec_info import SpecInfo, SpeculativeAlgorithm
 
 if TYPE_CHECKING:
     from scratchpad.nn.attention.backend import AttentionBackend
-    from scratchpad.scheduler.schedule_batch import ModelWorkerBatch, ImageInputs
+    from scratchpad.scheduler.schedule_batch import ModelWorkerBatch, MultimodalInputs
     from scratchpad.model_executor.model_runner import ModelRunner
     from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 
@@ -102,9 +102,19 @@ class ForwardBatch:
     # The sum of all sequence lengths
     seq_lens_sum: int
 
+    # Optional seq_lens on cpu
+    seq_lens_cpu: Optional[torch.Tensor] = None
+
     # For logprob
     return_logprob: bool = False
     top_logprobs_nums: Optional[List[int]] = None
+    token_ids_logprobs: Optional[List[List[int]]] = None
+
+    # For logits and logprobs post processing
+    temp_scaled_logprobs: bool = False
+    temperature: torch.Tensor = None
+    top_p_normalized_logprobs: bool = False
+    top_p: torch.Tensor = None
 
     # Position information
     positions: torch.Tensor = None
@@ -114,11 +124,13 @@ class ForwardBatch:
     extend_seq_lens: Optional[torch.Tensor] = None
     extend_prefix_lens: Optional[torch.Tensor] = None
     extend_start_loc: Optional[torch.Tensor] = None
+    extend_prefix_lens_cpu: Optional[List[int]] = None
     extend_seq_lens_cpu: Optional[List[int]] = None
     extend_logprob_start_lens_cpu: Optional[List[int]] = None
+    extend_input_logprob_token_ids_gpu: Optional[torch.Tensor] = None
 
     # For multimodal
-    image_inputs: Optional[List["ImageInputs"]] = None
+    mm_inputs: Optional[List["MultimodalInputs"]] = None
 
     # Encoder-decoder
     encoder_cached: Optional[List[bool]] = None
@@ -141,7 +153,16 @@ class ForwardBatch:
     attn_backend: "AttentionBackend" = None
 
     # For DP attention
-    global_num_tokens: Optional[List[int]] = None
+    global_num_tokens_cpu: Optional[List[int]] = None
+    global_num_tokens_gpu: Optional[torch.Tensor] = None
+    # Has to be None when cuda graph is captured.
+    global_num_tokens_for_logprob_cpu: Optional[List[int]] = None
+    global_num_tokens_for_logprob_gpu: Optional[torch.Tensor] = None
+    # for extend, local start pos and num tokens is different in logits processor
+    # this will be computed in get_dp_local_info
+    # this will be recomputed in LogitsMetadata.from_forward_batch
+    dp_local_start_pos: Optional[torch.Tensor] = None  # cached info at runtime
+    dp_local_num_tokens: Optional[torch.Tensor] = None  # cached info at runtime
     gathered_buffer: Optional[torch.Tensor] = None
     can_run_dp_cuda_graph: bool = False
 
@@ -150,63 +171,11 @@ class ForwardBatch:
     spec_algorithm: SpeculativeAlgorithm = None
     capture_hidden_mode: CaptureHiddenMode = None
 
+    # for padding
+    padded_static_len: int = -1  # -1 if not padded
+
     # For Qwen2-VL
     mrope_positions: torch.Tensor = None
-
-    def compute_mrope_positions(
-        self, model_runner: "ModelRunner", batch: "ModelWorkerBatch"
-    ):
-        device = model_runner.device
-        hf_config = model_runner.model_config.hf_config
-        mrope_positions_list = [None] * self.seq_lens.shape[0]
-        if self.forward_mode.is_decode():
-            for i, _ in enumerate(mrope_positions_list):
-                mrope_positions_list[i] = MRotaryEmbedding.get_next_input_positions(
-                    batch.mrope_positions_delta[i][0],
-                    int(self.seq_lens[i]) - 1,
-                    int(self.seq_lens[i]),
-                )
-        elif self.forward_mode.is_extend():
-            extend_start_loc_cpu = self.extend_start_loc.cpu().numpy()
-            for i, image_inputs in enumerate(batch.image_inputs):
-                extend_start_loc, extend_seq_len, extend_prefix_len = (
-                    extend_start_loc_cpu[i],
-                    batch.extend_seq_lens[i],
-                    batch.extend_prefix_lens[i],
-                )
-                if image_inputs is None:
-                    # text only
-                    mrope_positions = [
-                        [
-                            pos
-                            for pos in range(
-                                extend_prefix_len, extend_prefix_len + extend_seq_len
-                            )
-                        ]
-                    ] * 3
-                    mrope_position_delta = 0
-                else:
-                    # TODO: current qwen2-vl do not support radix cache since mrope position calculation
-                    (
-                        mrope_positions,
-                        mrope_position_delta,
-                    ) = MRotaryEmbedding.get_input_positions(
-                        input_tokens=self.input_ids[
-                            extend_start_loc : extend_start_loc + extend_seq_len
-                        ],
-                        image_grid_thw=image_inputs.image_grid_thws,
-                        vision_start_token_id=hf_config.vision_start_token_id,
-                        spatial_merge_size=hf_config.vision_config.spatial_merge_size,
-                        context_len=0,
-                    )
-                mrope_positions_list[i] = mrope_positions
-                batch.mrope_positions_delta[i].append(mrope_position_delta)
-
-        self.mrope_positions = torch.concat(
-            [torch.tensor(pos, device=device) for pos in mrope_positions_list],
-            axis=1,
-        )
-        self.mrope_positions = self.mrope_positions.to(torch.int64)
 
     @classmethod
     def init_new(
@@ -214,8 +183,12 @@ class ForwardBatch:
         batch: "ModelWorkerBatch",
         model_runner: "ModelRunner",
     ):
-
         device = model_runner.device
+        extend_input_logprob_token_ids_gpu = None
+        if batch.extend_input_logprob_token_ids is not None:
+            extend_input_logprob_token_ids_gpu = (
+                batch.extend_input_logprob_token_ids.to(device, non_blocking=True)
+            )
         ret = cls(
             forward_mode=batch.forward_mode,
             batch_size=len(batch.seq_lens),
@@ -223,7 +196,7 @@ class ForwardBatch:
             req_pool_indices=batch.req_pool_indices,
             seq_lens=batch.seq_lens,
             out_cache_loc=batch.out_cache_loc,
-            image_inputs=batch.image_inputs,
+            mm_inputs=batch.multimodal_inputs,
             encoder_cached=batch.encoder_cached,
             encoder_lens=batch.encoder_lens,
             encoder_lens_cpu=batch.encoder_lens_cpu,
@@ -231,22 +204,38 @@ class ForwardBatch:
             seq_lens_sum=batch.seq_lens_sum,
             return_logprob=batch.return_logprob,
             top_logprobs_nums=batch.top_logprobs_nums,
-            topping_paths=batch.topping_paths,
+            token_ids_logprobs=batch.token_ids_logprobs,
+            can_run_dp_cuda_graph=batch.can_run_dp_cuda_graph,
+            topping_paths=batch.toppings_paths,
             sampling_info=batch.sampling_info,
+            req_to_token_pool=model_runner.req_to_token_pool,
+            token_to_kv_pool=model_runner.token_to_kv_pool,
+            attn_backend=model_runner.attn_backend,
             spec_algorithm=batch.spec_algorithm,
             spec_info=batch.spec_info,
             capture_hidden_mode=batch.capture_hidden_mode,
             input_embeds=batch.input_embeds,
+            extend_input_logprob_token_ids_gpu=extend_input_logprob_token_ids_gpu,
         )
 
-        if ret.global_num_tokens is not None:
-            max_len = max(ret.global_num_tokens)
+        # For DP attention
+        if batch.global_num_tokens is not None:
+            ret.global_num_tokens_cpu = batch.global_num_tokens
+            ret.global_num_tokens_gpu = torch.tensor(
+                batch.global_num_tokens, dtype=torch.int64
+            ).to(device, non_blocking=True)
+
+            ret.global_num_tokens_for_logprob_cpu = batch.global_num_tokens_for_logprob
+            ret.global_num_tokens_for_logprob_gpu = torch.tensor(
+                batch.global_num_tokens_for_logprob, dtype=torch.int64
+            ).to(device, non_blocking=True)
+
+            sum_len = sum(batch.global_num_tokens)
             ret.gathered_buffer = torch.zeros(
-                (max_len * model_runner.tp_size, model_runner.model_config.hidden_size),
+                (sum_len, model_runner.model_config.hidden_size),
                 dtype=model_runner.dtype,
                 device=device,
             )
-
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), device=device)
             return ret
@@ -257,6 +246,10 @@ class ForwardBatch:
             and getattr(ret.spec_info, "positions", None) is not None
         ):
             ret.positions = ret.spec_info.positions
+
+        # Get seq_lens_cpu if needed
+        if ret.seq_lens_cpu is None:
+            ret.seq_lens_cpu = batch.seq_lens_cpu
 
         # Init position information
         if ret.forward_mode.is_decode():
@@ -272,7 +265,9 @@ class ForwardBatch:
             if model_runner.server_args.attention_backend != "torch_native":
                 ret.extend_num_tokens = batch.extend_num_tokens
                 positions, ret.extend_start_loc = compute_position_triton(
-                    ret.extend_prefix_lens, ret.extend_seq_lens, ret.extend_num_tokens
+                    ret.extend_prefix_lens,
+                    ret.extend_seq_lens,
+                    ret.extend_num_tokens,
                 )
             else:
                 positions, ret.extend_start_loc = compute_position_torch(
@@ -285,17 +280,122 @@ class ForwardBatch:
             ret.extend_logprob_start_lens_cpu = batch.extend_logprob_start_lens
 
         if model_runner.model_is_mrope:
-            ret.compute_mrope_positions(model_runner, batch)
+            ret._compute_mrope_positions(model_runner, batch)
 
-        # Init attention information
-        ret.req_to_token_pool = model_runner.req_to_token_pool
-        ret.token_to_kv_pool = model_runner.token_to_kv_pool
-        ret.attn_backend = model_runner.attn_backend
-
-        # Init lora information
+        # Init topping information
         if model_runner.server_args.enable_toppings:
             model_runner.topping_manager.prepare_topping_batch(ret)
         return ret
+
+    def merge_mm_inputs(self) -> Optional["MultimodalInputs"]:
+        """
+        Merge all image inputs in the batch into a single MultiModalInputs object.
+
+        Returns:
+            if none, current batch contains no image input
+
+        """
+        if not self.mm_inputs or all(x is None for x in self.mm_inputs):
+            return None
+
+        # Filter out None values
+        valid_inputs = [x for x in self.mm_inputs if x is not None]
+
+        # Start with the first valid image input
+        merged = valid_inputs[0]
+
+        # Merge remaining inputs
+        for mm_input in valid_inputs[1:]:
+            merged.merge(mm_input)
+
+        return merged
+
+    def contains_image_inputs(self) -> bool:
+        if self.mm_inputs is None:
+            return False
+        return any(
+            mm_input is not None and mm_input.contains_image_inputs()
+            for mm_input in self.mm_inputs
+        )
+
+    def contains_audio_inputs(self) -> bool:
+        if self.mm_inputs is None:
+            return False
+        return any(
+            mm_input is not None and mm_input.contains_audio_inputs()
+            for mm_input in self.mm_inputs
+        )
+
+    def contains_mm_inputs(self) -> bool:
+        return self.contains_audio_inputs() or self.contains_image_inputs()
+
+    def _compute_mrope_positions(
+        self, model_runner: "ModelRunner", batch: "ModelWorkerBatch"
+    ):
+        device = model_runner.device
+        hf_config = model_runner.model_config.hf_config
+        mrope_positions_list = [None] * self.seq_lens.shape[0]
+        if self.forward_mode.is_decode():
+            for i, _ in enumerate(mrope_positions_list):
+                mrope_position_delta = (
+                    0
+                    if batch.multimodal_inputs[i] is None
+                    else batch.multimodal_inputs[i].mrope_position_delta
+                )
+                mrope_positions_list[i] = MRotaryEmbedding.get_next_input_positions(
+                    mrope_position_delta,
+                    int(self.seq_lens[i]) - 1,
+                    int(self.seq_lens[i]),
+                )
+        elif self.forward_mode.is_extend():
+            extend_start_loc_cpu = self.extend_start_loc.cpu().numpy()
+            for i, multimodal_inputs in enumerate(batch.multimodal_inputs):
+                extend_start_loc, extend_seq_len, extend_prefix_len = (
+                    extend_start_loc_cpu[i],
+                    batch.extend_seq_lens[i],
+                    batch.extend_prefix_lens[i],
+                )
+                if multimodal_inputs is None:
+                    # text only
+                    mrope_positions = [
+                        [
+                            pos
+                            for pos in range(
+                                extend_prefix_len, extend_prefix_len + extend_seq_len
+                            )
+                        ]
+                    ] * 3
+                else:
+                    # TODO: current qwen2-vl do not support radix cache since mrope position calculation
+                    (
+                        mrope_positions,
+                        mrope_position_delta,
+                    ) = MRotaryEmbedding.get_input_positions(
+                        input_tokens=self.input_ids[
+                            extend_start_loc : extend_start_loc + extend_seq_len
+                        ],
+                        image_grid_thw=multimodal_inputs.image_grid_thws,
+                        video_grid_thw=multimodal_inputs.video_grid_thws,
+                        image_token_id=multimodal_inputs.im_token_id,
+                        video_token_id=multimodal_inputs.video_token_id,
+                        vision_start_token_id=hf_config.vision_start_token_id,
+                        vision_end_token_id=hf_config.vision_end_token_id,
+                        spatial_merge_size=hf_config.vision_config.spatial_merge_size,
+                        context_len=0,
+                        seq_len=len(self.input_ids),
+                        second_per_grid_ts=multimodal_inputs.second_per_grid_ts,
+                        tokens_per_second=hf_config.vision_config.tokens_per_second,
+                    )
+                    batch.multimodal_inputs[
+                        i
+                    ].mrope_position_delta = mrope_position_delta
+                mrope_positions_list[i] = mrope_positions
+
+        self.mrope_positions = torch.cat(
+            [torch.tensor(pos, device=device) for pos in mrope_positions_list],
+            axis=1,
+        )
+        self.mrope_positions = self.mrope_positions.to(torch.int64)
 
 
 def compute_position_triton(

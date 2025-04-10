@@ -7,7 +7,6 @@ from torch.nn.parameter import Parameter, UninitializedParameter
 
 from scratchpad.distributed import (
     divide,
-    get_tensor_model_parallel_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
     split_tensor_along_last_dim,
@@ -1163,20 +1162,21 @@ class RowParallelLinear(LinearBase):
         s += f", reduce_results={self.reduce_results}"
         return s
 
+
 class TritelaLinear(LinearBase):
     def __init__(
-        self, 
-        input_size, 
-        output_size, 
-        skip_bias_add = False, 
-        params_dtype = None, 
-        quant_config = None, 
-        prefix = ""
+        self,
+        input_size,
+        output_size,
+        skip_bias_add=False,
+        params_dtype=None,
+        quant_config=None,
+        prefix="",
     ):
         super().__init__(
             input_size, output_size, skip_bias_add, params_dtype, quant_config, prefix
         )
         self.layer = sparse_low_precision_linear(input_size, output_size)
-        
+
     def forward(self, x):
-        return self.layer(x)        
+        return self.layer(x)

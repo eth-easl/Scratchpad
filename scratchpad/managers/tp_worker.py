@@ -56,6 +56,8 @@ class TpModelWorker:
             tp_size=server_args.tp_size,
             nccl_port=nccl_port,
             server_args=server_args,
+            req_to_token_pool=req_to_token_pool,
+            token_to_kv_pool_allocator=token_to_kv_pool_allocator,
         )
         if server_args.skip_tokenizer_init:
             self.tokenizer = self.processor = None
@@ -156,7 +158,7 @@ class TpModelWorker:
     def get_memory_pool(self):
         return (
             self.model_runner.req_to_token_pool,
-            self.model_runner.token_to_kv_pool,
+            self.model_runner.token_to_kv_pool_allocator,
         )
 
     def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):

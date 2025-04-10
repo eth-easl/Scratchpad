@@ -6,7 +6,6 @@ from typing import Iterable, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
 import transformers.models.mllama.configuration_mllama as config_mllama
 import scratchpad.distributed.parallel_state as ps
 from torch import nn
@@ -31,9 +30,11 @@ from scratchpad.nn.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
+from scratchpad.nn.attention.vision import VisionAttention
 from scratchpad.nn.quantization.base_config import QuantizationConfig
-from scratchpad.scheduler.schedule_batch import ImageInputs
 from scratchpad.model_executor.forward_info import ForwardBatch
+from scratchpad.scheduler.schedule_batch import MultimodalInputs
+from scratchpad.model_executor.utils import add_prefix
 from .llama import LlamaDecoderLayer, LlamaMLP
 
 
@@ -144,63 +145,13 @@ class MllamaPrecomputedPositionEmbedding(nn.Module):
         return hidden_state
 
 
-class MllamaVisionSdpaAttention(nn.Module):
-    def __init__(self, config: config_mllama.MllamaVisionConfig):
-        super().__init__()
-
-        model_parallel_size = get_tensor_model_parallel_world_size()
-        self.embed_dim = config.hidden_size
-        self.num_heads = config.attention_heads
-        self.head_dim = config.hidden_size // config.attention_heads
-        self.num_local_heads = self.num_heads // model_parallel_size
-        self.q_size = self.num_local_heads * self.head_dim
-        self.kv_size = self.num_local_heads * self.head_dim
-
-        self.qkv_proj = QKVParallelLinear(
-            self.embed_dim,
-            self.head_dim,
-            self.num_heads,
-            bias=False,
-        )
-        self.o_proj = RowParallelLinear(
-            self.num_heads * self.head_dim,
-            self.embed_dim,
-            bias=False,
-            input_is_parallel=True,
-        )
-
-    def forward(
-        self,
-        hidden_state: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        qkv, _ = self.qkv_proj(hidden_state)
-        q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        q = q.view(
-            q.shape[0], q.shape[1], self.num_local_heads, self.head_dim
-        ).transpose(1, 2)
-        k = k.view(
-            k.shape[0], k.shape[1], self.num_local_heads, self.head_dim
-        ).transpose(1, 2)
-        v = v.view(
-            v.shape[0], v.shape[1], self.num_local_heads, self.head_dim
-        ).transpose(1, 2)
-
-        # TODO: remove padding in image encoder
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attention_mask, dropout_p=0.0
-        )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(
-            attn_output.shape[0], attn_output.shape[1], -1
-        )
-        output, _ = self.o_proj(attn_output)
-        return output
-
-
 class MllamaVisionMLP(nn.Module):
-    def __init__(self, config, quant_config: Optional[QuantizationConfig] = None):
+    def __init__(
+        self,
+        config,
+        quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+    ):
         super().__init__()
         self.config = config
         self.activation_fn = get_act_fn(config.hidden_act)
@@ -209,12 +160,14 @@ class MllamaVisionMLP(nn.Module):
             config.intermediate_size,
             bias=True,
             quant_config=quant_config,
+            prefix=add_prefix("fc1", prefix),
         )
         self.fc2 = RowParallelLinear(
             config.intermediate_size,
             config.hidden_size,
             bias=True,
             quant_config=quant_config,
+            prefix=add_prefix("fc2", prefix),
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -227,7 +180,10 @@ class MllamaVisionMLP(nn.Module):
 
 class MllamaVisionEncoderLayer(nn.Module):
     def __init__(
-        self, config: config_mllama.MllamaVisionConfig, is_gated: bool = False
+        self,
+        config: config_mllama.MllamaVisionConfig,
+        is_gated: bool = False,
+        prefix: str = "",
     ):
         super().__init__()
 
@@ -236,8 +192,19 @@ class MllamaVisionEncoderLayer(nn.Module):
         self.is_gated = is_gated
         self.intermediate_size = config.intermediate_size
 
-        self.self_attn = MllamaVisionSdpaAttention(config)
-        self.mlp = MllamaVisionMLP(config)
+        self.self_attn = VisionAttention(
+            self.hidden_size,
+            self.num_attention_heads,
+            self.hidden_size,
+            use_qkv_parallel=True,
+            quant_config=None,
+            dropout=0.0,
+            use_context_forward=False,
+            softmax_in_single_precision=False,
+            flatten_batch=False,
+            prefix=add_prefix("self_attn", prefix),
+        )
+        self.mlp = MllamaVisionMLP(config, prefix=add_prefix("mlp", prefix))
 
         self.input_layernorm = nn.LayerNorm(self.hidden_size, eps=config.norm_eps)
         self.post_attention_layernorm = nn.LayerNorm(
@@ -278,11 +245,17 @@ class MllamaVisionEncoder(nn.Module):
         num_layers=32,
         is_gated=False,
         output_hidden_states=None,
+        prefix: str = "",
     ):
         super().__init__()
         self.config = config
         self.layers = nn.ModuleList(
-            [MllamaVisionEncoderLayer(config, is_gated) for _ in range(num_layers)]
+            [
+                MllamaVisionEncoderLayer(
+                    config, is_gated, prefix=add_prefix(f"layers.{i}", prefix)
+                )
+                for i in range(num_layers)
+            ]
         )
         self.output_hidden_states = output_hidden_states or []
 
@@ -308,7 +281,7 @@ class MllamaVisionEncoder(nn.Module):
 
 
 class MllamaVisionModel(nn.Module):
-    def __init__(self, config: config_mllama.MllamaVisionConfig):
+    def __init__(self, config: config_mllama.MllamaVisionConfig, prefix: str = ""):
         super().__init__()
         self.image_size = config.image_size
         self.patch_size = config.patch_size
@@ -348,9 +321,13 @@ class MllamaVisionModel(nn.Module):
             config.num_hidden_layers,
             is_gated=False,
             output_hidden_states=config.intermediate_layers_indices,
+            prefix=add_prefix("transformer", prefix),
         )
         self.global_transformer = MllamaVisionEncoder(
-            config, config.num_global_layers, is_gated=True
+            config,
+            config.num_global_layers,
+            is_gated=True,
+            prefix=add_prefix("global_transformer", prefix),
         )
 
     def apply_class_embedding(self, hidden_state: torch.Tensor) -> torch.Tensor:
@@ -512,6 +489,7 @@ class MllamaTextCrossAttention(nn.Module):
         config: Optional[config_mllama.MllamaTextConfig] = None,
         layer_id: Optional[int] = None,
         quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
     ):
         super().__init__()
         self.config = config
@@ -537,6 +515,7 @@ class MllamaTextCrossAttention(nn.Module):
             self.num_key_value_heads,
             bias=False,
             quant_config=quant_config,
+            prefix=add_prefix("qkv_proj", prefix),
         )
         self.o_proj = RowParallelLinear(
             self.num_heads * self.head_dim,
@@ -544,6 +523,7 @@ class MllamaTextCrossAttention(nn.Module):
             bias=False,
             input_is_parallel=True,
             quant_config=quant_config,
+            prefix=add_prefix("o_proj", prefix),
         )
         # vllm.model_executor.layers.layernorm.RMSNorm has precision issue,
         # use huggingface's instead
@@ -558,6 +538,7 @@ class MllamaTextCrossAttention(nn.Module):
             self.num_local_key_value_heads,
             layer_id=layer_id,
             is_cross_attention=True,
+            prefix=add_prefix("attn", prefix),
         )
 
     def forward(
@@ -599,6 +580,7 @@ class MllamaCrossAttentionDecoderLayer(torch.nn.Module):
         config: config_mllama.MllamaTextConfig,
         layer_id: int,
         quant_config: Optional[QuantizationConfig],
+        prefix: str = "",
     ) -> None:
         super().__init__()
         self.layer_id = layer_id
@@ -606,6 +588,7 @@ class MllamaCrossAttentionDecoderLayer(torch.nn.Module):
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
+            prefix=add_prefix("cross_attn", prefix),
         )
 
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -616,6 +599,7 @@ class MllamaCrossAttentionDecoderLayer(torch.nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
             quant_config=quant_config,
+            prefix=add_prefix("mlp", prefix),
         )
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
@@ -658,13 +642,15 @@ class MllamaTextModel(nn.Module):
         self,
         config: config_mllama.MllamaTextConfig,
         quant_config: Optional[QuantizationConfig],
-        cache_config=None,
+        prefix: str = "",
     ):
         super().__init__()
         self.padding_id = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.embed_tokens = VocabParallelEmbedding(
-            config.vocab_size + 8, config.hidden_size
+            config.vocab_size + 8,
+            config.hidden_size,
+            prefix=add_prefix("embed_tokens", prefix),
         )
         self.cross_attention_layers = config.cross_attention_layers
 
@@ -673,14 +659,20 @@ class MllamaTextModel(nn.Module):
             if layer_id in self.cross_attention_layers:
                 layers.append(
                     MllamaCrossAttentionDecoderLayer(
-                        config, layer_id, quant_config=quant_config
+                        config,
+                        layer_id,
+                        quant_config=quant_config,
+                        prefix=add_prefix(f"layers.{layer_id}", prefix),
                     )
                 )
             else:
                 # TODO: force LlamaDecoderLayer to config.attention_bias=False
                 layers.append(
                     LlamaDecoderLayer(
-                        config, quant_config=quant_config, layer_id=layer_id
+                        config,
+                        quant_config=quant_config,
+                        layer_id=layer_id,
+                        prefix=add_prefix(f"layers.{layer_id}", prefix),
                     )
                 )
 
@@ -736,17 +728,20 @@ class MllamaForCausalLM(nn.Module):
         self,
         config: config_mllama.MllamaTextConfig,
         quant_config: Optional[QuantizationConfig],
-        cache_config=None,
+        prefix: str = "",
     ):
         super().__init__()
         self.vocab_size = config.vocab_size
-        self.model = MllamaTextModel(config, cache_config, quant_config)
+        self.model = MllamaTextModel(
+            config, quant_config, prefix=add_prefix("model", prefix)
+        )
         self.lm_head = ParallelLMHead(
             config.vocab_size,
             config.hidden_size,
             org_num_embeddings=config.vocab_size,
             padding_size=DEFAULT_VOCAB_PADDING_SIZE,
             quant_config=quant_config,
+            prefix=add_prefix("lm_head", prefix),
         )
 
     def forward(
@@ -776,7 +771,7 @@ class MllamaForConditionalGeneration(nn.Module):
         self,
         config: config_mllama.MllamaConfig,
         quant_config: Optional[QuantizationConfig] = None,
-        cache_config=None,
+        prefix: str = "",
     ):
         super().__init__()
         self.vocab_size = config.text_config.vocab_size
@@ -788,11 +783,13 @@ class MllamaForConditionalGeneration(nn.Module):
         )
         self.image_size = config.vision_config.image_size
 
-        self.vision_model = MllamaVisionModel(config.vision_config)
+        self.vision_model = MllamaVisionModel(
+            config.vision_config, prefix=add_prefix("vision_model", prefix)
+        )
         self.language_model = MllamaForCausalLM(
             config.text_config,
-            cache_config=cache_config,
             quant_config=quant_config,
+            prefix=add_prefix("language_model", prefix),
         )
         self.multi_modal_projector = nn.Linear(
             config.vision_config.vision_output_dim,
@@ -802,14 +799,16 @@ class MllamaForConditionalGeneration(nn.Module):
         self.logits_processor = LogitsProcessor(config.text_config)
         self.capture_mode = False
 
-    def pad_input_ids(self, input_ids: List[int], image_inputs: ImageInputs):
-        pixel_values = image_inputs.pixel_values
-        pad_values = image_inputs.pad_values
+    def pad_input_ids(self, input_ids: List[int], mm_inputs: MultimodalInputs):
+        pixel_values = torch.cat(
+            [item.pixel_values for item in mm_inputs.mm_items], dim=0
+        )
+        pad_values = [item.pad_value for item in mm_inputs.mm_items]
 
         num_concurrent_media, num_tiles = pixel_values.shape[1:3]
         num_patches = self.vision_model.num_patches
         image_len = num_concurrent_media * num_tiles * num_patches
-        image_inputs.num_image_tokens = image_len
+        mm_inputs.num_image_tokens = image_len
 
         pad_ids = pad_values * ((image_len + len(pad_values)) // len(pad_values))
 
@@ -821,10 +820,16 @@ class MllamaForConditionalGeneration(nn.Module):
 
         # pixel_values: shape (bs, num_image, num_tiles, 3, image_res, image_res)
         max_num_images = max_num_tiles = bs = 0
-        for i, im in enumerate(forward_batch.image_inputs):
-            if not forward_batch.encoder_cached[i] and im is not None:
-                max_num_images = max(max_num_images, im.pixel_values.shape[1])
-                max_num_tiles = max(max_num_tiles, im.pixel_values.shape[2])
+        for i, mm_input in enumerate(forward_batch.mm_inputs):
+
+            if not forward_batch.encoder_cached[i] and mm_input is not None:
+                pixel_values = torch.cat(
+                    [item.pixel_values for item in mm_input.mm_items], dim=0
+                )
+                # max_num_images = max(max_num_images, sum(1 if item.is_image() else 0 for item in mm_input.items))
+                max_num_images = max(max_num_images, pixel_values.shape[1])
+
+                max_num_tiles = max(max_num_tiles, pixel_values.shape[2])
                 bs += 1
 
         if max_num_images * max_num_tiles * bs == 0:
@@ -848,17 +853,24 @@ class MllamaForConditionalGeneration(nn.Module):
             )
             i = 0
             encoder_lens_need = []
-            for k, im in enumerate(forward_batch.image_inputs):
-                if forward_batch.encoder_cached[k] or im is None:
+
+            for k, mm_input in enumerate(forward_batch.mm_inputs):
+                if forward_batch.encoder_cached[k] or mm_input is None:
                     continue
 
                 encoder_lens_need.append(forward_batch.encoder_lens[k])
-                for j in range(im.pixel_values.shape[1]):
-                    img = im.pixel_values[0, j]
+                pixel_values = torch.cat(
+                    [item.pixel_values for item in mm_input.mm_items], dim=0
+                )
+                for j in range(pixel_values.shape[1]):
+                    img = pixel_values[0, j]
                     num_tiles = img.shape[0]
                     batched_images[i, j, :num_tiles] = img
-                    batched_ar_ids[i, j] = im.aspect_ratio_ids[0, j]
-                    batched_ar_mask[i, j, :num_tiles] = im.aspect_ratio_mask[0, j]
+                    batched_ar_ids[i, j] = mm_input.mm_items[0].aspect_ratio_id[0, j]
+
+                    batched_ar_mask[i, j, :num_tiles] = mm_input.mm_items[
+                        0
+                    ].aspect_ratio_mask[0, j]
                 i += 1
 
         return batched_images, batched_ar_ids, batched_ar_mask, encoder_lens_need
@@ -1003,6 +1015,10 @@ class MllamaForConditionalGeneration(nn.Module):
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
+                if "vision_model" in name:
+                    # adapt to VisionAttention
+                    name = name.replace("self_attn.o_proj", "self_attn.proj")
+
                 param = params_dict.pop(name)
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
