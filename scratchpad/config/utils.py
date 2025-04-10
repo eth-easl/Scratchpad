@@ -26,9 +26,13 @@ def _get_and_verify_dtype(
         dtype = dtype.lower()
         if dtype == "auto":
             if config_dtype == torch.float32:
-                if config.model_type == "gemma2":
+                if config.model_type.startswith("gemma"):
+                    if config.model_type == "gemma":
+                        gemma_version = ""
+                    else:
+                        gemma_version = config.model_type[5]
                     logger.info(
-                        "For Gemma 2, we downcast float32 to bfloat16 instead "
+                        f"For Gemma {gemma_version}, we downcast float32 to bfloat16 instead "
                         "of float16 by default. Please specify `dtype` if you "
                         "want to use float16."
                     )
@@ -52,15 +56,15 @@ def _get_and_verify_dtype(
     if torch_dtype != config_dtype:
         if torch_dtype == torch.float32:
             # Upcasting to float32 is allowed.
-            logger.info(f"Upcasting {config_dtype} to {torch_dtype}.")
+            logger.info("Upcasting %s to %s.", config_dtype, torch_dtype)
             pass
         elif config_dtype == torch.float32:
             # Downcasting from float32 to float16 or bfloat16 is allowed.
-            logger.info(f"Downcasting {config_dtype} to {torch_dtype}.")
+            logger.info("Downcasting %s to %s.", config_dtype, torch_dtype)
             pass
         else:
             # Casting between float16 and bfloat16 is allowed with a warning.
-            logger.warning(f"Casting {config_dtype} to {torch_dtype}.")
+            logger.warning("Casting %s to %s.", config_dtype, torch_dtype)
 
     return torch_dtype
 
@@ -226,21 +230,10 @@ def get_served_model_name(
 
 
 multimodal_model_archs = [
-    "DeepseekVL2ForCausalLM",
     "Gemma3ForConditionalGeneration",
-    "Grok1VForCausalLM",
-    "Grok1AForCausalLM",
-    "LlavaLlamaForCausalLM",
-    "LlavaMistralForCausalLM",
-    "LlavaQwenForCausalLM",
-    "LlavaVidForCausalLM",
-    "MiniCPMO",
-    "MiniCPMV",
-    "MultiModalityCausalLM",
     "MllamaForConditionalGeneration",
     "Qwen2VLForConditionalGeneration",
     "Qwen2_5_VLForConditionalGeneration",
-    "CLIPModel",
 ]
 
 

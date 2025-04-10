@@ -1,6 +1,4 @@
-import logging
 from typing import List, Tuple
-
 import torch
 from xgrammar import (
     CompiledGrammar,
@@ -13,8 +11,7 @@ from xgrammar import (
 )
 
 from .base_backend import BaseGrammarObject, BaseGrammarBackend
-
-logger = logging.getLogger(__name__)
+from scratchpad.utils import logger
 
 
 MAX_ROLLBACK_TOKENS = 200
@@ -104,7 +101,7 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
                 else:
                     ctx = self.grammar_compiler.compile_json_schema(schema=key_string)
             except RuntimeError as e:
-                logging.warning(
+                logger.warning(
                     f"Skip invalid json_schema: json_schema={key_string}, {e=}"
                 )
                 return None
@@ -112,7 +109,7 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
             try:
                 ctx = self.grammar_compiler.compile_grammar(key_string)
             except RuntimeError as e:
-                logging.warning(f"Skip invalid ebnf: ebnf={key_string}, {e=}")
+                logger.warning(f"Skip invalid ebnf: ebnf={key_string}, {e=}")
                 return None
         elif key_type == "regex":
             try:
@@ -120,7 +117,7 @@ class XGrammarGrammarBackend(BaseGrammarBackend):
                     Grammar.from_regex(key_string)
                 )
             except RuntimeError as e:
-                logging.warning(f"Skip invalid regex: regex={key_string}, {e=}")
+                logger.warning(f"Skip invalid regex: regex={key_string}, {e=}")
                 return None
         else:
             raise ValueError(f"Invalid key_type: {key_type}")

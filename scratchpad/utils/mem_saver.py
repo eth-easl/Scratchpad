@@ -1,6 +1,6 @@
-import logging
 from abc import ABC
 from contextlib import contextmanager
+from scratchpad.utils import logger
 
 try:
     import torch_memory_saver
@@ -8,8 +8,6 @@ try:
     _primary_memory_saver = torch_memory_saver.TorchMemorySaver()
 except ImportError:
     pass
-
-logger = logging.getLogger(__name__)
 
 
 class TorchMemorySaverAdapter(ABC):
