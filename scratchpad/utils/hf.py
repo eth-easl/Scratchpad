@@ -61,6 +61,10 @@ def get_config(
     revision: Optional[str] = None,
     model_override_args: Optional[dict] = None,
 ):
+    from scratchpad.nn.models.swissai.config import SwissAIConfig
+
+    AutoConfig.register("swissai", SwissAIConfig)
+
     config = AutoConfig.from_pretrained(
         model, trust_remote_code=trust_remote_code, revision=revision
     )

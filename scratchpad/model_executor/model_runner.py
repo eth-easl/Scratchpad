@@ -142,7 +142,9 @@ class ModelRunner:
             dist_init_method = f"tcp://{self.server_args.dist_init_addr}"
         else:
             dist_init_method = f"tcp://127.0.0.1:{self.dist_port}"
+
         set_custom_all_reduce(not self.server_args.disable_custom_all_reduce)
+
         init_distributed_environment(
             backend=backend,
             world_size=self.tp_size,
@@ -151,6 +153,7 @@ class ModelRunner:
             distributed_init_method=dist_init_method,
         )
         initialize_model_parallel(tensor_model_parallel_size=self.tp_size)
+
         min_per_gpu_memory = get_available_gpu_memory(
             self.device, self.gpu_id, distributed=self.tp_size > 1
         )

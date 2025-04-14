@@ -31,6 +31,35 @@ class SiluAndMul(CustomOp):
         return out
 
 
+class XIELU(CustomOp):
+    """
+    Applies the xIELU activation function
+    Shapes:
+        x: (num_tokens, d) or (batch_size, seq_len, d)
+        return: (num_tokens, d) or (batch_size, seq_len, d)
+    """
+
+    def __init__(self, alpha_p_init=0.8, alpha_n_init=0.8, beta=0.5, eps=-1e-6):
+        super().__init__()
+        self.alpha_p = nn.Parameter(
+            torch.log(torch.exp(torch.tensor(alpha_p_init)) - 1.0).unsqueeze(0)
+        )
+        self.alpha_n = nn.Parameter(
+            torch.log(torch.exp(torch.tensor(alpha_n_init - beta)) - 1.0).unsqueeze(0)
+        )
+        self.beta = beta
+        self.eps = torch.tensor(eps, dtype=torch.bfloat16, device="cuda")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        alpha_p = F.softplus(self.alpha_p)
+        alpha_n = self.beta + F.softplus(self.alpha_n)
+        return torch.where(
+            x > 0,
+            alpha_p * x * x + self.beta * x,
+            alpha_n * torch.expm1(torch.min(x, self.eps)) - alpha_n * x + self.beta * x,
+        )
+
+
 class GeluAndMul(CustomOp):
     def __init__(self, approximate="tanh"):
         super().__init__()

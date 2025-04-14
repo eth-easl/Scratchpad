@@ -2,6 +2,7 @@ import inspect
 import yaml
 import typer
 import dataclasses
+from transformers import AutoConfig
 
 
 def conf_callback(ctx: typer.Context, param: typer.CallbackParam, value: str) -> str:
@@ -80,3 +81,9 @@ def dataclass_to_cli(func):
     wrapped.__doc__ = func.__doc__ + "\n" + ""
     wrapped.__name__ = func.__name__
     return wrapped
+
+
+def register_hf_configs():
+    from scratchpad.nn.models.swissai.config import SwissAIConfig
+
+    AutoConfig.register("swissai", SwissAIConfig)

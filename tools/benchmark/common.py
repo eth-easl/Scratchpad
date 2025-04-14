@@ -104,7 +104,6 @@ async def async_request_openai_completions(
         headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
         output = RequestFuncOutput()
         output.prompt_len = request_func_input.prompt_len
-
         generated_text = ""
         st = time.perf_counter()
         most_recent_timestamp = st

@@ -7,7 +7,6 @@ from typing import List, Tuple, Union, TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from scratchpad.nn.attention.radix_attention import RadixAttention
 
-
 GB = 1024 * 1024 * 1024
 
 
