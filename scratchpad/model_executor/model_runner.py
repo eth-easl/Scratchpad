@@ -27,6 +27,7 @@ from scratchpad.memory import (
     HeterogeneousMHATokenToKVPool,
     ReqToTokenPool,
     TokenToKVPoolAllocator,
+    init_parameter_offload_manager,
 )
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.model_executor.speculative.spec_info import SpeculativeAlgorithm
@@ -128,6 +129,8 @@ class ModelRunner:
             self.cuda_graph_runner = None
             self.init_attention_backend()
 
+        self.init_parameter_offloading()
+
     def init_torch_distributed(self):
         logger.info("Init torch distributed begin.")
         # Init torch distributed
@@ -159,8 +162,7 @@ class ModelRunner:
         )
         self.tp_group = get_tp_group()
 
-        # Currently, there is a bug with mulit-node tensor parallelsim + padded cuda graph,
-        # so we disable padding in cuda graph.
+        # Currently, there is a bug with mulit-node tensor parallelsim + padded cuda graph, so we disable padding in cuda graph.
         if self.device == "cuda" and not all(
             in_the_same_node_as(self.tp_group.cpu_group, source_rank=0)
         ):
@@ -569,3 +571,89 @@ class ModelRunner:
         if rope_scaling is None:
             return False
         return rope_scaling.get("type", None) == "mrope"
+
+    def init_parameter_offloading(self):
+        """Initialize parameter offloading if enabled in server args."""
+        if not self.server_args.enable_cpu_offload:
+            logger.info("Parameter CPU offloading is disabled")
+            return
+
+        # Initialize the parameter offload manager
+        offload_ratio = self.server_args.cpu_offload_ratio
+        enable_prefetch = self.server_args.enable_prefetch
+        prefetch_window = self.server_args.prefetch_window
+
+        # Create offload manager
+        self.param_offload_manager = init_parameter_offload_manager(
+            enable_offload=True,
+            enable_prefetch=enable_prefetch,
+            cpu_offload_ratio=offload_ratio,
+            prefetch_window=prefetch_window,
+        )
+
+        # Process specific layer module names if provided
+        offload_modules = []
+        if self.server_args.offload_layer_modules:
+            offload_modules = self.server_args.offload_layer_modules.split(",")
+
+        # If specific modules are provided, register only those
+        if offload_modules:
+            for module_name in offload_modules:
+                for name, module in self.model.named_modules():
+                    if module_name in name:
+                        # Extract layer number if possible for priority
+                        parts = name.split(".")
+                        layer_num = 0
+                        for i, part in enumerate(parts):
+                            if part.isdigit():
+                                layer_num = int(part)
+                                break
+
+                        priority = (
+                            layer_num + 1
+                        )  # Higher layer number = higher priority
+                        self.param_offload_manager.register_module(
+                            name, module, priority=priority
+                        )
+        else:
+            # Register transformer layers by default
+            self.param_offload_manager.register_model_layers(self.model)
+
+        # Start the offloading process
+        self.param_offload_manager.start_offloading()
+
+        # Register forward hooks to dynamically load parameters when needed
+        self._register_offload_hooks()
+
+        logger.info(
+            f"Parameter offloading initialized with {offload_ratio*100:.1f}% parameters offloaded to CPU. "
+            f"Prefetching is {'enabled' if enable_prefetch else 'disabled'}"
+        )
+
+    def _register_offload_hooks(self):
+        """Register pre/post forward hooks for parameter offloading."""
+        if (
+            not hasattr(self, "param_offload_manager")
+            or self.param_offload_manager is None
+        ):
+            return
+
+        # Register pre-forward hooks for all offloaded modules
+        for name, module in self.model.named_modules():
+            if name in self.param_offload_manager.modules:
+                # Create hook that captures module name
+                def make_pre_hook(module_name):
+                    def hook(module, input):
+                        self.param_offload_manager.pre_forward_hook(module_name)
+
+                    return hook
+
+                def make_post_hook(module_name):
+                    def hook(module, input, output):
+                        self.param_offload_manager.post_forward_hook(module_name)
+
+                    return hook
+
+                # Register the hooks
+                module.register_forward_pre_hook(make_pre_hook(name))
+                module.register_forward_hook(make_post_hook(name))

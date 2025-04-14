@@ -18,6 +18,7 @@ from scratchpad.nn.quantization import get_quantization_config
 import huggingface_hub
 from torch import nn
 from torch.func import functional_call
+from scratchpad.memory import get_parameter_offload_manager
 
 if TYPE_CHECKING:
     from scratchpad.nn.quantization import QuantizationConfig
@@ -306,10 +307,24 @@ def make_layers(
     prefix: str = "",
 ) -> Tuple[int, int, torch.nn.ModuleList]:
     """Make a list of layers with the given layer function"""
-    modules = torch.nn.ModuleList(
-        [
-            maybe_offload_to_cpu(layer_fn(idx=idx, prefix=add_prefix(idx, prefix)))
-            for idx in range(num_hidden_layers)
-        ]
-    )
+    param_offload_manager = get_parameter_offload_manager()
+
+    # Create modules
+    modules = torch.nn.ModuleList()
+    for idx in range(num_hidden_layers):
+        name = add_prefix(str(idx), prefix)
+        module = layer_fn(idx=idx, prefix=name)
+
+        # If parameter offloading is enabled, register the module
+        if param_offload_manager is not None:
+            # Higher layer numbers get higher priority (we typically want to keep early layers in GPU)
+            param_offload_manager.register_module(
+                name=name, module=module, priority=idx + 1
+            )
+        else:
+            # Use original offloading mechanism if parameter manager is not initialized
+            module = maybe_offload_to_cpu(module)
+
+        modules.append(module)
+
     return modules
