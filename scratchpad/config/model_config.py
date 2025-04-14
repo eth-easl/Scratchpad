@@ -2,7 +2,6 @@ from enum import IntEnum, auto
 from typing import Optional
 from typing import List, Set
 from transformers import PretrainedConfig
-
 from scratchpad.utils import get_config, get_context_length
 
 
@@ -59,6 +58,7 @@ class ModelConfig:
         self.trust_remote_code = trust_remote_code
         self.revision = revision
         self.model_override_args = model_override_args
+
         self.hf_config = get_config(
             self.path,
             trust_remote_code,
