@@ -1,2 +1,0 @@
-flashinfer @https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/flashinfer-0.1.6-cp310-cp310-linux_x86_64.whl
-triteia @https://filedn.eu/lougUsdPvd1uJK2jfOYWogH/pypi/triteia-0.1.0-cp310-cp310-linux_x86_64.whl

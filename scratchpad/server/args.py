@@ -132,8 +132,9 @@ class ServerArgs:
     cpu_offload_ratio: float = 0.7  # Percentage of parameters to offload
     enable_prefetch: bool = True  # Whether to prefetch parameters from CPU to GPU
     prefetch_window: int = 2  # Number of layers to prefetch ahead
-    offload_layer_modules: str = (
-        ""  # Comma-separated list of layer module names to offload
+    offload_layer_modules: str = "layers"
+    strict_device_match: bool = (
+        True  # Whether to enforce parameters are on expected device
     )
 
     # others

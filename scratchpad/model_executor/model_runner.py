@@ -116,6 +116,7 @@ class ModelRunner:
         self.sampler = Sampler()
         self.load_model()
         self.init_toppings_manager()
+        self.init_parameter_offloading()
         self.init_memory_pool(
             min_per_gpu_memory,
             server_args.max_running_requests,
@@ -128,8 +129,6 @@ class ModelRunner:
         else:
             self.cuda_graph_runner = None
             self.init_attention_backend()
-
-        self.init_parameter_offloading()
 
     def init_torch_distributed(self):
         logger.info("Init torch distributed begin.")
@@ -580,8 +579,8 @@ class ModelRunner:
 
         # Initialize the parameter offload manager
         offload_ratio = self.server_args.cpu_offload_ratio
-        enable_prefetch = self.server_args.enable_prefetch
         prefetch_window = self.server_args.prefetch_window
+        enable_prefetch = self.server_args.enable_prefetch
 
         # Create offload manager
         self.param_offload_manager = init_parameter_offload_manager(
@@ -589,6 +588,7 @@ class ModelRunner:
             enable_prefetch=enable_prefetch,
             cpu_offload_ratio=offload_ratio,
             prefetch_window=prefetch_window,
+            strict_device_match=self.server_args.strict_device_match,
         )
 
         # Process specific layer module names if provided
@@ -602,8 +602,10 @@ class ModelRunner:
                 for name, module in self.model.named_modules():
                     if module_name in name:
                         # Extract layer number if possible for priority
+                        layer_num = (
+                            0  # Default value in case we can't find a layer number
+                        )
                         parts = name.split(".")
-                        layer_num = 0
                         for i, part in enumerate(parts):
                             if part.isdigit():
                                 layer_num = int(part)

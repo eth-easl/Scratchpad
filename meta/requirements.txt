@@ -22,6 +22,7 @@ tenacity
 orjson
 xgrammar>=0.1.13
 nvidia-cuda-nvrtc-cu12
+nvidia-cublas-cu12
 cuda-python
 setproctitle
 torch-memory-saver

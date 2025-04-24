@@ -47,17 +47,33 @@ class ModuleState:
 
         self.pin_memory = is_pin_memory_available()
 
-        # Save original parameters
+        # Track module size
+        self.module_size_bytes = 0
+
+        # Save original parameter metadata (but not the actual tensor data)
         for name, param in module.named_parameters():
+            param_size = param.data.numel() * param.data.element_size()
+            self.module_size_bytes += param_size
             self.param_states[name] = {
-                "data": param.data,
-                "device": param.data.device,
+                "device": param.data.device,  # Only store device info, not the tensor itself
+                "shape": param.data.shape,  # Store shape for debugging
+                "dtype": param.data.dtype,  # Store dtype for debugging
                 "offloaded": False,
+                "size_bytes": param_size,  # Store size for memory management
             }
+            # We don't store param.data itself to avoid reference leaks
+
+    def get_size_bytes(self) -> int:
+        """Get the total size of module parameters in bytes."""
+        return self.module_size_bytes
 
     def offload_to_cpu(self, module: nn.Module) -> int:
         """Offload module parameters to CPU and return bytes saved."""
         bytes_saved = 0
+
+        # Log memory before offloading
+        before_allocated = torch.cuda.memory_allocated()
+        before_reserved = torch.cuda.memory_reserved()
 
         for name, param in module.named_parameters():
             if param.device.type != "cpu":
@@ -71,34 +87,67 @@ class ModuleState:
                     pin_memory=self.pin_memory,
                 )
 
+                # Calculate bytes to be saved before copying
+                param_size = param.data.numel() * param.data.element_size()
                 # Copy data to CPU
                 cpu_tensor.copy_(param.data)
-
+                # Store reference to original data to explicitly delete it
+                original_data = param.data
                 # Update parameter data
                 param.data = cpu_tensor
-
-                # Calculate bytes saved
-                bytes_saved += param.data.numel() * param.data.element_size()
-
+                # Explicitly delete the original tensor to free GPU memory
+                del original_data
+                # Update bytes saved
+                bytes_saved += param_size
                 # Update state
                 self.param_states[name]["offloaded"] = True
+
+        if bytes_saved > 0:
+            # Force Python garbage collection to clean up any dangling references
+            import gc
+
+            gc.collect()
+            # Now clear CUDA cache
+            torch.cuda.empty_cache()
 
         return bytes_saved
 
     def load_to_gpu(self, module: nn.Module) -> int:
         """Load module parameters back to GPU and return bytes loaded."""
         bytes_loaded = 0
+        successful_load = True
 
+        # First try to load parameters
         for name, param in module.named_parameters():
             if param.device.type == "cpu":
-                # Move data back to original device
-                param.data = param.data.to(self.device, non_blocking=True)
+                try:
+                    # Move data back to original device
+                    param.data = param.data.to(self.device, non_blocking=True)
+                    # Calculate bytes loaded
+                    bytes_loaded += param.data.numel() * param.data.element_size()
+                    # Update state
+                    self.param_states[name]["offloaded"] = False
+                except RuntimeError as e:
+                    # If we encounter a memory error, report it but don't crash
+                    logger.error(f"GPU memory error when loading parameters: {e}")
+                    # Ensure we don't lose the CPU copy if GPU loading fails
+                    successful_load = False
+                    torch.cuda.empty_cache()
+                    return 0
 
-                # Calculate bytes loaded
-                bytes_loaded += param.data.numel() * param.data.element_size()
+        # If we've loaded parameters non-blocking, we need to synchronize to ensure they're ready
+        if bytes_loaded > 0:
+            # Verify all parameters are actually on GPU
+            torch.cuda.synchronize()
+            for name, param in module.named_parameters():
+                if param.device != self.device:
+                    logger.warning(
+                        f"Parameter {name} failed to move to {self.device}, still on {param.device}"
+                    )
+                    successful_load = False
 
-                # Update state
-                self.param_states[name]["offloaded"] = False
+        if not successful_load:
+            return 0
 
         return bytes_loaded
 
@@ -112,11 +161,13 @@ class ParameterOffloadManager:
         enable_prefetch: bool = True,
         cpu_offload_ratio: float = 0.7,
         prefetch_window: int = 2,
+        strict_device_match: bool = True,  # Whether to ensure strict device matching
     ):
         self.enable_offload = enable_offload
         self.enable_prefetch = enable_prefetch and enable_offload
         self.cpu_offload_ratio = cpu_offload_ratio
         self.prefetch_window = prefetch_window
+        self.strict_device_match = strict_device_match
 
         # Store module information
         self.modules: Dict[str, nn.Module] = {}
@@ -129,13 +180,16 @@ class ParameterOffloadManager:
         self.total_offloaded_bytes: int = 0
         self.total_parameter_bytes: int = 0
 
+        # Lock for synchronization
+        self.offload_lock = threading.Lock()
+
         # Prefetching queue and thread
         self.prefetch_queue = queue.Queue()
         self.prefetch_thread = None
         self.stop_prefetch = threading.Event()
 
         logger.info(
-            f"Parameter offloading initialized (enabled={enable_offload}, prefetch={enable_prefetch})"
+            f"Parameter offloading initialized (enabled={enable_offload}, prefetch={enable_prefetch}, strict_match={strict_device_match})"
         )
 
     def register_module(
@@ -174,6 +228,7 @@ class ParameterOffloadManager:
         for name, module in model.named_modules():
             if layer_prefix in name and isinstance(module, nn.Module):
                 # Extract layer number - assuming format like layers.1, decoder.layers.2, etc.
+                layer_num = 0  # Default value if we can't find a layer number
                 parts = name.split(".")
                 for i, part in enumerate(parts):
                     if (
@@ -182,9 +237,11 @@ class ParameterOffloadManager:
                         and parts[i + 1].isdigit()
                     ):
                         layer_num = int(parts[i + 1])
-                        # Higher layer numbers get higher priority (we typically want to keep early layers in GPU)
-                        priority = layer_num + 1
-                        self.register_module(name, module, priority=priority)
+                        break
+
+                # Higher layer numbers get higher priority (we typically want to keep early layers in GPU)
+                priority = layer_num + 1
+                self.register_module(name, module, priority=priority)
 
         # Sort execution order by expected execution order (layer numbers)
         self.execution_order.sort(
@@ -230,9 +287,10 @@ class ParameterOffloadManager:
             self.prefetch_thread.start()
 
         logger.info(
-            f"Offloaded {self.total_offloaded_bytes/1024/1024:.2f}MB of parameters to CPU "
+            f"Offloaded {self.total_offloaded_bytes/1024/1024/1024:.2f}GB of parameters to CPU "
             f"({self.total_offloaded_bytes/self.total_parameter_bytes*100:.1f}% of total)"
         )
+        torch.cuda.empty_cache()
 
     def stop_offloading(self) -> None:
         """Stop offloading and load all parameters back to GPU."""
@@ -271,14 +329,135 @@ class ParameterOffloadManager:
 
         # Ensure module is on GPU
         if not self.usage_info[module_name].on_gpu:
-            module = self.modules[module_name]
-            module_state = self.module_states[module_name]
-            module_state.load_to_gpu(module)
-            self.usage_info[module_name].on_gpu = True
+            with self.offload_lock:
+                module = self.modules[module_name]
+                module_state = self.module_states[module_name]
+
+                # Get size of module we want to load
+                module_size = module_state.get_size_bytes()
+
+                # Check if we need to free up GPU memory first
+                free_memory = (
+                    torch.cuda.get_device_properties(0).total_memory
+                    - torch.cuda.memory_allocated()
+                )
+
+                # Add a buffer to account for fragmentation and other overhead
+                required_memory = int(module_size * 1.2)  # 20% buffer
+
+                # If we don't have enough free memory, offload other modules
+                if free_memory < required_memory:
+                    logger.info(
+                        f"Need to free {(required_memory-free_memory)/1024/1024:.2f}MB for module {module_name}"
+                    )
+                    self._offload_least_used_modules(required_memory - free_memory)
+
+                # Try to load the module to GPU
+                try:
+                    bytes_loaded = module_state.load_to_gpu(module)
+
+                    if bytes_loaded > 0:
+                        self.usage_info[module_name].on_gpu = True
+                        logger.debug(
+                            f"Loaded module {module_name} to GPU ({bytes_loaded/1024/1024:.2f}MB)"
+                        )
+                    else:
+                        if self.strict_device_match:
+                            # If strict matching is required and loading failed, we need to take corrective action
+                            logger.warning(
+                                f"Failed to load module {module_name} to GPU - still on CPU"
+                            )
+                            # Try again with more aggressive memory clearing
+                            torch.cuda.empty_cache()
+                            # Try to free even more memory
+                            additional_memory = (
+                                required_memory * 0.5
+                            )  # Try to free 50% more
+                            self._offload_least_used_modules(additional_memory)
+                            # Try loading one more time
+                            bytes_loaded = module_state.load_to_gpu(module)
+                            if bytes_loaded > 0:
+                                self.usage_info[module_name].on_gpu = True
+                                logger.debug(
+                                    f"Loaded module {module_name} to GPU on second attempt ({bytes_loaded/1024/1024:.2f}MB)"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Still failed to load module {module_name} to GPU after second attempt"
+                                )
+                        else:
+                            # If strict matching is not required, just log the warning
+                            logger.warning(
+                                f"Failed to load module {module_name} to GPU - still on CPU"
+                            )
+                except Exception as e:
+                    logger.error(f"Error loading module {module_name} to GPU: {e}")
+
+                # When strict device matching is required, ensure all tensors in module are on the correct device
+                if self.strict_device_match:
+                    # Verify all module parameters are on the correct device
+                    for name, param in module.named_parameters():
+                        expected_device = module_state.device
+                        if param.device != expected_device:
+                            logger.warning(
+                                f"Parameter {name} is on wrong device: {param.device} (expected {expected_device})"
+                            )
+                            if hasattr(torch.cuda, "OutOfMemoryError"):
+                                # This might fail with OOM, handle gracefully
+                                try:
+                                    # Force sync copy to ensure parameter is moved
+                                    param.data = param.data.to(
+                                        expected_device, non_blocking=False
+                                    )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Couldn't move parameter {name} to {expected_device}: {e}"
+                                    )
 
         # Request prefetch of next modules if prefetching is enabled
         if self.enable_prefetch and self.current_layer_idx >= 0:
             self._queue_prefetch()
+
+    def _offload_least_used_modules(self, required_bytes: int) -> int:
+        """Offload least recently used modules to free up GPU memory."""
+        if not self.modules:
+            return 0
+
+        # Sort modules by last accessed time (oldest first) and whether they're on GPU
+        candidates = [
+            (name, info)
+            for name, info in self.usage_info.items()
+            if name in self.modules
+            and info.on_gpu
+            and name != self.execution_order[self.current_layer_idx]
+        ]
+
+        if not candidates:
+            logger.warning("No candidate modules to offload")
+            return 0
+
+        # Sort by priority (low priority first) and last access time (oldest first)
+        candidates.sort(key=lambda x: (x[1].priority_score, x[1].last_accessed))
+
+        # Offload modules until we've freed enough memory
+        bytes_freed = 0
+        for name, _ in candidates:
+            if bytes_freed >= required_bytes:
+                break
+
+            module = self.modules[name]
+            module_state = self.module_states[name]
+
+            logger.info(f"Offloading module {name} to make space")
+            bytes_saved = module_state.offload_to_cpu(module)
+            bytes_freed += bytes_saved
+            self.usage_info[name].on_gpu = False
+            self.total_offloaded_bytes += bytes_saved
+
+        logger.info(
+            f"Freed {bytes_freed/1024/1024:.2f}MB GPU memory by offloading modules"
+        )
+        return bytes_freed
 
     def post_forward_hook(self, module_name: str) -> None:
         """Hook called after a module's forward pass."""
@@ -318,15 +497,56 @@ class ParameterOffloadManager:
                     self.prefetch_queue.task_done()
                     continue
 
-                # Load module to GPU
+                # Load module to GPU with memory management
                 module = self.modules[module_name]
                 module_state = self.module_states[module_name]
-                module_state.load_to_gpu(module)
 
-                # Update state
-                self.usage_info[module_name].on_gpu = True
+                # Get module size and check available memory
+                module_size = module_state.get_size_bytes()
+                free_memory = (
+                    torch.cuda.get_device_properties(0).total_memory
+                    - torch.cuda.memory_allocated()
+                )
+                required_memory = int(module_size * 1.2)  # Add 20% buffer
+
+                # If we don't have enough memory, try to offload other modules
+                if free_memory < required_memory:
+                    logger.debug(
+                        f"Prefetch: Need to free memory for module {module_name}"
+                    )
+                    try:
+                        # Lock to prevent concurrent offloading from main thread
+                        bytes_freed = self._offload_least_used_modules(
+                            required_memory - free_memory
+                        )
+                        if bytes_freed < (required_memory - free_memory):
+                            logger.warning(
+                                f"Prefetch: Could not free enough memory for {module_name}"
+                            )
+                            self.usage_info[module_name].is_prefetching = False
+                            self.prefetch_queue.task_done()
+                            continue
+                    except Exception as e:
+                        logger.error(f"Error during prefetch memory management: {e}")
+                        self.usage_info[module_name].is_prefetching = False
+                        self.prefetch_queue.task_done()
+                        continue
+
+                # Try to load to GPU now that we've made space
+                bytes_loaded = module_state.load_to_gpu(module)
+                if bytes_loaded > 0:
+                    # Update state
+                    self.usage_info[module_name].on_gpu = True
+                    logger.debug(
+                        f"Prefetched module {module_name} to GPU ({bytes_loaded/1024/1024:.2f}MB)"
+                    )
+                else:
+                    logger.warning(
+                        f"Prefetch: Failed to load {module_name} to GPU despite freeing memory"
+                    )
+
+                # Reset prefetch flag
                 self.usage_info[module_name].is_prefetching = False
-
                 # Mark task as done
                 self.prefetch_queue.task_done()
 
@@ -348,6 +568,7 @@ def init_parameter_offload_manager(
     enable_prefetch: bool = True,
     cpu_offload_ratio: float = 0.7,
     prefetch_window: int = 2,
+    strict_device_match: bool = True,  # Add new parameter
 ) -> ParameterOffloadManager:
     """Initialize the global parameter offload manager."""
     global parameter_offload_manager
@@ -356,6 +577,7 @@ def init_parameter_offload_manager(
         enable_prefetch=enable_prefetch,
         cpu_offload_ratio=cpu_offload_ratio,
         prefetch_window=prefetch_window,
+        strict_device_match=strict_device_match,  # Pass the parameter
     )
     return parameter_offload_manager
 
