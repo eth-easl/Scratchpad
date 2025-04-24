@@ -26,6 +26,5 @@ nvidia-cublas-cu12
 cuda-python
 setproctitle
 torch-memory-saver
-sgl-kernel
 decord
 soundfile
