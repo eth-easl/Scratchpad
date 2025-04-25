@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/pytorch:24.05-py3 AS base
+FROM nvcr.io/nvidia/pytorch:24.12-py3 AS base
 
 LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
 LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.licenses=Apache-2.0
 LABEL org.opencontainers.image.architecture=amd64
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TRITEIA_COMPUTE_CAP=90
+ENV TRITEIA_COMPUTE_CAP=80
 ENV TORCH_CUDA_ARCH_LIST="8.0 8.6 9.0 9.0+PTX"
 ENV FLASHINFER_ENABLE_AOT="1"
 
