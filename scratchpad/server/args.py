@@ -8,7 +8,7 @@ import tempfile
 @dataclass
 class ServerArgs:
     host: str = "0.0.0.0"
-    port: int = 3000
+    port: int = 8080
     debug: bool = False
     server_id: str = "default"
     device: str = "cuda"

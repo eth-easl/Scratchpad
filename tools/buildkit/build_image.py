@@ -28,7 +28,7 @@ def main():
         args.buildtool,
         "build",
         "-f",
-        f"docker/Dockerfile.{arch}-cuda",
+        f"meta/docker/Dockerfile.{arch}-cuda",
         ".",
         "-t",
         f"ghcr.io/xiaozheyao/scratchpad:{args.version}dev-{arch}",
@@ -38,7 +38,7 @@ def main():
 
     # Set environment variable for Docker buildkit
     build_env = os.environ.copy()
-    build_env["DOCKER_BUILDKIT"] = "0"
+    # build_env["DOCKER_BUILDKIT"] = "0"
 
     # Execute build command
     subprocess.run(build_cmd, env=build_env, check=True)

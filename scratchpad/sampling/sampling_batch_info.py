@@ -189,21 +189,20 @@ class SamplingBatchInfo:
         # Move the mask to the device if needed
         self.vocab_mask = first_grammar.move_vocab_mask(self.vocab_mask, self.device)
 
-    def filter_batch(self, unfinished_indices: List[int], new_indices: torch.Tensor):
-        self.penalizer_orchestrator.filter(unfinished_indices, new_indices)
+    def filter_batch(self, keep_indices: List[int], keep_indices_device: torch.Tensor):
+        self.penalizer_orchestrator.filter(keep_indices_device)
+
         if self.has_custom_logit_processor:
-            self._filter_batch_custom_logit_processor(unfinished_indices, new_indices)
+            self._filter_batch_custom_logit_processor(keep_indices, keep_indices_device)
 
         for item in [
             "temperatures",
             "top_ps",
             "top_ks",
             "min_ps",
-            "logit_bias",
         ]:
             value = getattr(self, item, None)
-            if value is not None:  # logit_bias can be None
-                setattr(self, item, value[new_indices])
+            setattr(self, item, value[keep_indices_device])
 
     def _filter_batch_custom_logit_processor(
         self, unfinished_indices: List[int], new_indices: torch.Tensor

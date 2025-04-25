@@ -17,12 +17,6 @@ from scratchpad.nn.layers.logits_processor import (
 from scratchpad.utils import get_available_gpu_memory
 from .forward_info import ForwardMode, ForwardBatch, CaptureHiddenMode
 
-
-@torch.compile(dynamic=True)
-def clamp_position(seq_lens):
-    return torch.clamp((seq_lens - 1), min=0).to(torch.int64)
-
-
 if TYPE_CHECKING:
     from .model_runner import ModelRunner
     from scratchpad.distributed.parallel_state import GroupCoordinator
