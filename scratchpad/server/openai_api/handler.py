@@ -882,7 +882,6 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
-                print(f"Templated message: {templated_message}")
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
                 stop = request.stop
