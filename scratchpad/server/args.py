@@ -8,7 +8,7 @@ import tempfile
 @dataclass
 class ServerArgs:
     host: str = "0.0.0.0"
-    port: int = 3000
+    port: int = 8080
     debug: bool = False
     server_id: str = "default"
     device: str = "cuda"
@@ -126,6 +126,16 @@ class ServerArgs:
     # comma separated list of toppings, format: type:identifier:served_name
     init_toppings: Optional[str] = None
     allow_toppings_registration: bool = False
+
+    # CPU offloading settings
+    enable_cpu_offload: bool = False
+    cpu_offload_ratio: float = 0.7  # Percentage of parameters to offload
+    enable_prefetch: bool = True  # Whether to prefetch parameters from CPU to GPU
+    prefetch_window: int = 2  # Number of layers to prefetch ahead
+    offload_layer_modules: str = "layers"
+    strict_device_match: bool = (
+        True  # Whether to enforce parameters are on expected device
+    )
 
     # others
     crash_on_warnings: bool = False

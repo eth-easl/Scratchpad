@@ -6,15 +6,16 @@ from .logits_processor import LogitsProcessorOutput
 from scratchpad.scheduler.schedule_batch import global_args
 from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.utils import logger
-from sgl_kernel import (
+import torch.distributed as dist
+from typing import List
+from scratchpad.distributed import get_tensor_model_parallel_group
+
+from scratchpad.nn.kernels.sampling import (
     min_p_sampling_from_probs,
     top_k_renorm_prob,
     top_k_top_p_sampling_from_probs,
     top_p_renorm_prob,
 )
-import torch.distributed as dist
-from typing import List
-from scratchpad.distributed import get_tensor_model_parallel_group
 
 crash_on_warnings = global_args.crash_on_warnings
 
@@ -93,17 +94,14 @@ class Sampler(nn.Module):
                         probs, uniform_samples, sampling_info.min_ps
                     )
                 else:
-                    batch_next_token_ids, success = top_k_top_p_sampling_from_probs(
+                    check_nan = self.use_nan_detection
+                    batch_next_token_ids = top_k_top_p_sampling_from_probs(
                         probs,
-                        uniform_samples,
-                        sampling_info.top_ks,
-                        sampling_info.top_ps,
+                        top_k=sampling_info.top_ks,
+                        top_p=sampling_info.top_ps,
                         filter_apply_order="joint",
+                        check_nan=check_nan,
                     )
-
-                    if self.use_nan_detection and not torch.all(success):
-                        logger.warning("Detected errors during sampling!")
-                        batch_next_token_ids = torch.zeros_like(batch_next_token_ids)
 
             elif global_args.sampling_backend == "pytorch":
                 # A slower fallback implementation with torch native operations.

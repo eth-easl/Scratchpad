@@ -772,6 +772,7 @@ class MllamaForConditionalGeneration(nn.Module):
         config: config_mllama.MllamaConfig,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        cache_config=None,
     ):
         super().__init__()
         self.vocab_size = config.text_config.vocab_size

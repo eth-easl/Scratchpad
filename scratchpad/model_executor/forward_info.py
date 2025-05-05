@@ -1,13 +1,11 @@
 from enum import IntEnum, auto
 from dataclasses import dataclass
 import torch
-import numpy as np
 from typing import List, TYPE_CHECKING, Optional
 import triton
 import triton.language as tl
 from scratchpad.memory.pool import ReqToTokenPool, BaseTokenToKVPool
 from scratchpad.nn.layers.rotary_embedding import MRotaryEmbedding
-from scratchpad.utils import maybe_torch_compile
 from .speculative.spec_info import SpecInfo, SpeculativeAlgorithm
 
 if TYPE_CHECKING:
@@ -467,6 +465,6 @@ def compute_position_torch(
     return positions.to(torch.int64), extend_start_loc
 
 
-@maybe_torch_compile(dynamic=True)
+@torch.compile(dynamic=True)
 def clamp_position(seq_lens):
     return torch.clamp((seq_lens - 1), min=0).to(torch.int64)

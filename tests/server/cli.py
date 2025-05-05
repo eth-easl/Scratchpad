@@ -74,7 +74,7 @@ def main() -> None:
         description="Test OpenAI-compatible completions API"
     )
     parser.add_argument(
-        "--endpoint", default="http://localhost:3000/v1", help="API endpoint base URL"
+        "--endpoint", default="http://localhost:8080/v1", help="API endpoint base URL"
     )
     parser.add_argument(
         "--model",

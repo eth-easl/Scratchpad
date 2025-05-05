@@ -6,7 +6,8 @@ requests
 uvicorn
 zmq
 huggingface_hub
-transformers==4.48.0
+transformers
+triton==3.1.0
 outlines==0.0.46
 uvloop
 nvidia-ml-py
@@ -22,9 +23,9 @@ tenacity
 orjson
 xgrammar>=0.1.13
 nvidia-cuda-nvrtc-cu12
+nvidia-cublas-cu12
 cuda-python
 setproctitle
 torch-memory-saver
-sgl-kernel
 decord
 soundfile
