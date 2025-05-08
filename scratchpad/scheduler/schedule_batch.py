@@ -27,6 +27,7 @@ INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
 if TYPE_CHECKING:
     from scratchpad.managers.toppings_manager import ToppingsManager
     from scratchpad.constrained.base_backend import BaseGrammarObject
+    from scratchpad.server.args import ServerArgs
 
 
 class BaseFinishReason:
@@ -1115,30 +1116,44 @@ class ScheduleBatch:
 
         return self.token_to_kv_pool_allocator.available_size() >= tokens_required
 
-    def retract_decode(self):
-        sorted_indices = [i for i in range(len(self.reqs))]
+    def retract_decode(self, server_args: ServerArgs):
+        """Retract the decoding requests when there is not enough memory."""
+        sorted_indices = list(range(len(self.reqs)))
 
         # TODO(lsyin): improve retraction policy for radix cache
-        sorted_indices.sort(
-            key=lambda i: (
-                len(self.reqs[i].output_ids),
-                -len(self.reqs[i].origin_input_ids),
-            ),
-            reverse=True,
-        )
+        # For spec decoding, filter_batch API can only filter
+        # requests from the back, so we can only retract from the back.
+        # TODO(sang): Clean up finish path and support better retract
+        # policy.
+        if not server_args.speculative_algorithm:
+            sorted_indices.sort(
+                key=lambda i: (
+                    len(self.reqs[i].output_ids),
+                    -len(self.reqs[i].origin_input_ids),
+                ),
+                reverse=True,
+            )
+
+        def get_required_tokens(num_reqs: int):
+            headroom_for_spec_decode = 0
+            if server_args.speculative_algorithm:
+                raise NotImplementedError("Speculative decoding is not supported yet.")
+            return (
+                num_reqs * server_args.retract_decode_steps + headroom_for_spec_decode
+            )
 
         retracted_reqs = []
         seq_lens_cpu = self.seq_lens.cpu().numpy()
         first_iter = True
         while (
-            self.token_to_kv_pool.available_size()
-            < len(sorted_indices) * global_args.retract_decode_steps
+            self.token_to_kv_pool_allocator.available_size()
+            < get_required_tokens(len(sorted_indices))
             or first_iter
         ):
             if len(sorted_indices) == 1:
                 # Corner case: only one request left
                 assert (
-                    self.token_to_kv_pool.available_size() > 0
+                    self.token_to_kv_pool_allocator.available_size() > 0
                 ), "No space left for only one request"
                 break
 
@@ -1152,16 +1167,17 @@ class ScheduleBatch:
                 token_indices = self.req_to_token_pool.req_to_token[
                     req.req_pool_idx, : seq_lens_cpu[idx]
                 ]
-                self.token_to_kv_pool.free(token_indices)
+                self.token_to_kv_pool_allocator.free(token_indices)
                 self.req_to_token_pool.free(req.req_pool_idx)
-                del self.tree_cache.entries[req.rid]
             else:
                 # TODO: apply more fine-grained retraction
-                last_uncached_pos = len(req.prefix_indices)
+                last_uncached_pos = (
+                    len(req.prefix_indices) // server_args.page_size
+                ) * server_args.page_size
                 token_indices = self.req_to_token_pool.req_to_token[
                     req.req_pool_idx, last_uncached_pos : seq_lens_cpu[idx]
                 ]
-                self.token_to_kv_pool.free(token_indices)
+                self.token_to_kv_pool_allocator.free(token_indices)
                 self.req_to_token_pool.free(req.req_pool_idx)
 
                 # release the last node
@@ -1169,20 +1185,13 @@ class ScheduleBatch:
 
                 # NOTE(lsyin): we should use the newly evictable memory instantly.
                 residual_size = (
-                    len(sorted_indices) * global_args.retract_decode_steps
-                    - self.token_to_kv_pool.available_size()
+                    len(sorted_indices) * server_args.retract_decode_steps
+                    - self.token_to_kv_pool_allocator.available_size()
                 )
                 residual_size = max(0, residual_size)
-                self.tree_cache.evict(residual_size, self.token_to_kv_pool.free)
+                self.tree_cache.evict(residual_size)
 
-            req.prefix_indices = []
-            req.last_node = None
-            req.extend_input_len = 0
-            req.is_retracted = True
-
-            # For incremental logprobs
-            req.last_update_decode_tokens = 0
-            req.logprob_start_len = 10**9
+            req.reset_for_retract()
 
         self.filter_batch(keep_indices=sorted_indices)
 
@@ -1191,7 +1200,7 @@ class ScheduleBatch:
         total_max_new_tokens = sum(r.sampling_params.max_new_tokens for r in self.reqs)
 
         new_estimate_ratio = (
-            total_decoded_tokens + global_args.retract_decode_steps * len(self.reqs)
+            total_decoded_tokens + server_args.retract_decode_steps * len(self.reqs)
         ) / total_max_new_tokens
         new_estimate_ratio = min(1.0, new_estimate_ratio)
 
