@@ -1116,7 +1116,7 @@ class ScheduleBatch:
 
         return self.token_to_kv_pool_allocator.available_size() >= tokens_required
 
-    def retract_decode(self, server_args: ServerArgs):
+    def retract_decode(self, server_args: "ServerArgs"):
         """Retract the decoding requests when there is not enough memory."""
         sorted_indices = list(range(len(self.reqs)))
 
