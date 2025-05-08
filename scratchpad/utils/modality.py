@@ -9,7 +9,17 @@ import numpy as np
 from PIL import Image
 from typing import Union
 from .logger import logger
-from decord import VideoReader, cpu
+
+try:
+    from decord import VideoReader, cpu
+
+except ImportError:
+    logger.warning(
+        "decord is not installed. Video processing will be disabled. "
+        "Please install `decord` to enable video processing."
+    )
+    VideoReader = None
+    cpu = None
 
 
 def select_best_resolution(original_size, possible_resolutions):
