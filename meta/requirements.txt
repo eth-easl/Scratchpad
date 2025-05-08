@@ -25,5 +25,4 @@ nvidia-cuda-nvrtc-cu12
 nvidia-cublas-cu12
 cuda-python
 setproctitle
-torch-memory-saver
 soundfile
