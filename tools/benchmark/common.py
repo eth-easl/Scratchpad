@@ -205,7 +205,7 @@ def construct_dataset(
             response = conversations[2 * i + 1]["content"]
             req = RequestFuncInput(
                 prompt=prompt,
-                api_url=endpoint + "/completions",
+                api_url=endpoint + "/v1/completions",
                 prompt_len=len(tokenizer(prompt)["input_ids"]),
                 output_len=len(tokenizer(response)["input_ids"]),
                 model="",

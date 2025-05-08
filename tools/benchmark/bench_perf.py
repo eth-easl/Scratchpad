@@ -10,7 +10,6 @@ from tools.benchmark.common import (
     construct_dataset,
     get_request,
     async_request_openai_completions,
-    async_request_sp_sysinfo,
     RequestFuncOutput,
     RequestFuncInput,
     calculate_metrics,
@@ -109,8 +108,23 @@ async def run_benchmark(
     return metrics
 
 
+def get_model_name(args: Namespace):
+    res = requests.get(f"{args.endpoint}/v1/models")
+    if res.status_code == 200:
+        return res.json()["data"][0]["id"]
+    else:
+        raise ValueError(
+            f"Failed to get model name from endpoint {args.endpoint}. "
+            f"Status code: {res.status_code}, Response: {res.text}"
+        )
+
+
 def benchmark(args):
     print(args)
+    if args.model == "" and args.tokenizer == "":
+        args.model = get_model_name(args)
+        print(f"Model name is not provided. Using {args.model} as the model name.")
+        args.tokenizer = args.model
     if args.model == "":
         args.model = args.tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
@@ -146,8 +160,8 @@ def benchmark(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--endpoint", type=str, default="http://localhost:8080/")
-    parser.add_argument("--tokenizer", type=str, default="meta-llama/Llama-3.2-1B")
+    parser.add_argument("--endpoint", type=str, default="http://localhost:8080")
+    parser.add_argument("--tokenizer", type=str, default="")
     parser.add_argument("--model", type=str, default="")
     parser.add_argument(
         "--request-rate",

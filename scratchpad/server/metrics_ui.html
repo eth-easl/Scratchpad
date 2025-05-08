@@ -1,0 +1,112 @@
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Prometheus Metrics UI</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .chart-container { width: 600px; height: 300px; margin-bottom: 40px; }
+  </style>
+</head>
+<body>
+  <h1>Scratchpad Prometheus Metrics</h1>
+  <div class="chart-container"><canvas id="mempoolUsagePercentChart"></canvas></div>
+  <div class="chart-container"><canvas id="mempoolUsageChart"></canvas></div>
+  <div class="chart-container"><canvas id="avgGpuUtilizationChart"></canvas></div>
+  <div class="chart-container"><canvas id="avgGenThroughputChart"></canvas></div>
+  <div class="chart-container"><canvas id="numRequestsRunningChart"></canvas></div>
+  <div class="chart-container"><canvas id="numRequestsWaitingChart"></canvas></div>
+
+  <script>
+    const metricsUrl = 'http://localhost:8080/metrics';
+    const charts = {};
+    function createChart(ctx, label, color) {
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{ label, data: [], borderColor: color, fill: false, tension: 0.1 }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            x: { type: 'time', time: { unit: 'second', tooltipFormat: 'HH:mm:ss' } },
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+
+    function initCharts() {
+      charts.mempool_usage_percent = createChart(
+        document.getElementById('mempoolUsagePercentChart'),
+        'Memory Pool Usage (%)', 'rgba(75, 192, 192, 1)'
+      );
+      charts.mempool_usage = createChart(
+        document.getElementById('mempoolUsageChart'),
+        'Memory Pool Usage', 'rgba(153, 102, 255, 1)'
+      );
+      charts.avg_gpu_utilization = createChart(
+        document.getElementById('avgGpuUtilizationChart'),
+        'Avg GPU Utilization (%)', 'rgba(255, 159, 64, 1)'
+      );
+      charts.avg_generation_throughput_toks_per_s = createChart(
+        document.getElementById('avgGenThroughputChart'),
+        'Avg Generation Throughput (tokens/s)', 'rgba(54, 162, 235, 1)'
+      );
+      charts.num_requests_running = createChart(
+        document.getElementById('numRequestsRunningChart'),
+        'Requests Running', 'rgba(255, 99, 132, 1)'
+      );
+      charts.num_requests_waiting = createChart(
+        document.getElementById('numRequestsWaitingChart'),
+        'Requests Waiting', 'rgba(201, 203, 207, 1)'
+      );
+    }
+
+    function parseMetrics(text) {
+      const result = {};
+      text.split('\n').forEach(line => {
+        if (line.startsWith('scratchpad:')) {
+          const [metricWithLabels, valueStr] = line.split(' ');
+          const metric = metricWithLabels.split('{')[0].split(':')[1];
+          const val = parseFloat(valueStr);
+          if (!isNaN(val)) result[metric] = val;
+        }
+      });
+      return result;
+    }
+
+    async function updateMetrics() {
+      try {
+        const res = await fetch(metricsUrl);
+        const text = await res.text();
+        const data = parseMetrics(text);
+        const now = new Date();
+        Object.keys(data).forEach(key => {
+          const chart = charts[key];
+          if (chart) {
+            chart.data.labels.push(now);
+            chart.data.datasets[0].data.push(data[key]);
+            if (chart.data.labels.length > 20) {
+              chart.data.labels.shift();
+              chart.data.datasets[0].data.shift();
+            }
+            chart.update();
+          }
+        });
+      } catch (e) {
+        console.error('Failed to fetch metrics:', e);
+      }
+    }
+
+    window.onload = () => {
+      initCharts();
+      updateMetrics();
+      setInterval(updateMetrics, 2000);
+    };
+  </script>
+</body>
+</html>

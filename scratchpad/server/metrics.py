@@ -176,6 +176,7 @@ class PrometheusStatLogger(StatLoggerBase):
     def log(self, stats: Stats):
         """Logs to prometheus and tracked stats every iteration."""
         # Log to prometheus.
+        print(f"logging {stats}")
         self._log_prometheus(stats)
 
     def info(self, type: str, obj: SupportsMetricsInfo) -> None:
