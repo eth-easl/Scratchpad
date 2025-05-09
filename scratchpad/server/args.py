@@ -1,6 +1,6 @@
 import json
-from dataclasses import dataclass, field
-from typing import Optional, List, Union
+from dataclasses import dataclass
+from typing import Optional, List, Union, Dict
 from scratchpad.utils.logger import logger
 import tempfile
 
@@ -17,7 +17,8 @@ class ServerArgs:
     api_key: Optional[str] = None
     served_model_name: str = "auto"
     trust_remote_code: bool = True
-    json_model_override_args: str = "{}"
+    # json_model_override_args: str = "{}"
+    model_override_args: str = "{}"
     is_embedding: bool = False
     context_length: int = 4096
     skip_tokenizer_init: bool = False
@@ -162,9 +163,12 @@ class ServerArgs:
         if self.detokenizer_ipc_name == "auto":
             self.detokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
         try:
-            self.json_model_override_args = json.loads(self.json_model_override_args)
-        except:
-            logger.warning("Failed to parse json_model_override_args")
+            self.json_model_override_args = json.loads(self.model_override_args)
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            logger.warning(f"Failed to parse model_override_args: {e}")
             self.json_model_override_args = {}
 
         if self.grammar_backend not in ["xgrammar", "outlines"]:

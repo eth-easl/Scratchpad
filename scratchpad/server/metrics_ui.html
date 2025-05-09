@@ -1,27 +1,66 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Prometheus Metrics UI</title>
+  <title>Scratchpad Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1"></script>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    .chart-container { width: 600px; height: 300px; margin-bottom: 40px; }
-  </style>
+  <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-  <h1>Scratchpad Prometheus Metrics</h1>
-  <div class="chart-container"><canvas id="mempoolUsagePercentChart"></canvas></div>
-  <div class="chart-container"><canvas id="mempoolUsageChart"></canvas></div>
-  <div class="chart-container"><canvas id="avgGpuUtilizationChart"></canvas></div>
-  <div class="chart-container"><canvas id="avgGenThroughputChart"></canvas></div>
-  <div class="chart-container"><canvas id="numRequestsRunningChart"></canvas></div>
-  <div class="chart-container"><canvas id="numRequestsWaitingChart"></canvas></div>
+<body class="bg-gray-100 min-h-screen">
+  <div class="container mx-auto px-4 py-8 gap-8">
+    <h1 class="text-3xl font-bold text-gray-800 mb-8">Scratchpad Dashboard</h1>
+
+    <!-- Metrics Charts Section -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="mempoolUsagePercentChart"></canvas>
+      </div>
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="mempoolUsageChart"></canvas>
+      </div>
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="avgGpuUtilizationChart"></canvas>
+      </div>
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="avgGenThroughputChart"></canvas>
+      </div>
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="numRequestsRunningChart"></canvas>
+      </div>
+      <div class="bg-white rounded-lg shadow-md p-6">
+        <canvas id="numRequestsWaitingChart"></canvas>
+      </div>
+    </div>
+
+    <div class="flex justify-between items-center mt-8">
+    </div>
+
+    <!-- System Info Section -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+      <h2 class="text-2xl font-semibold text-gray-700 mb-4">System Information</h2>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200" id="systemInfoTable">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Property</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+            </tr>
+          </thead>
+          <tbody class="bg-white divide-y divide-gray-200">
+            <!-- Table rows will be populated by JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
   <script>
-    const metricsUrl = 'http://localhost:8080/metrics';
+    const metricsUrl = '/metrics';
+    const systemInfoUrl = '/system_info';
     const charts = {};
+
     function createChart(ctx, label, color) {
       return new Chart(ctx, {
         type: 'line',
@@ -46,11 +85,11 @@
       );
       charts.mempool_usage = createChart(
         document.getElementById('mempoolUsageChart'),
-        'Memory Pool Usage', 'rgba(153, 102, 255, 1)'
+        'Memory Pool Usage (#Token)', 'rgba(153, 102, 255, 1)'
       );
       charts.avg_gpu_utilization = createChart(
         document.getElementById('avgGpuUtilizationChart'),
-        'Avg GPU Utilization (%)', 'rgba(255, 159, 64, 1)'
+        'Avg GPU(0) Utilization (%)', 'rgba(255, 159, 64, 1)'
       );
       charts.avg_generation_throughput_toks_per_s = createChart(
         document.getElementById('avgGenThroughputChart'),
@@ -79,6 +118,37 @@
       return result;
     }
 
+    async function updateSystemInfo() {
+      try {
+        const res = await fetch(systemInfoUrl);
+        const data = await res.json();
+        const tableBody = document.getElementById('systemInfoTable').getElementsByTagName('tbody')[0];
+        tableBody.innerHTML = '';
+
+        Object.entries(data.system_info).forEach(([key, value]) => {
+          const row = tableBody.insertRow();
+          const cell1 = row.insertCell(0);
+          const cell2 = row.insertCell(1);
+
+          cell1.className = 'px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900';
+          cell2.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
+
+          cell1.textContent = key;
+          let displayValue = value;
+          if (value === null) {
+            displayValue = 'null';
+          } else if (typeof value === 'object') {
+            displayValue = JSON.stringify(value, null, 2);
+          } else {
+            displayValue = value.toString();
+          }
+          cell2.textContent = displayValue;
+        });
+      } catch (e) {
+        console.error('Failed to fetch system info:', e);
+      }
+    }
+
     async function updateMetrics() {
       try {
         const res = await fetch(metricsUrl);
@@ -104,8 +174,9 @@
 
     window.onload = () => {
       initCharts();
+      updateSystemInfo();
       updateMetrics();
-      setInterval(updateMetrics, 2000);
+      setInterval(updateMetrics, 1000);
     };
   </script>
 </body>

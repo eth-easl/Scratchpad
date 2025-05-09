@@ -586,6 +586,7 @@ class Scheduler:
         return True
 
     def log_stats(self, stats):
+        print(f"stats: {stats}")
         for logger in self.loggers:
             logger.log(stats)
 
@@ -631,7 +632,7 @@ class Scheduler:
         )
         stats = Stats(
             now=time.time(),
-            running_requests=len(self.running_batch.reqs),
+            running_requests=running_bs,
             queued_requests=len(self.waiting_queue),
             token_usage=num_used / self.max_total_num_tokens,
             used_token_pool=num_used,
