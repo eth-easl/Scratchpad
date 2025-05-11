@@ -23,6 +23,9 @@ from scratchpad.nn.layers.vocab_parallel_embedding import (
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.model_executor.model_loader import default_weight_loader
 from scratchpad.config.cache_config import CacheConfig
+from scratchpad.model_executor.utils import add_prefix, make_layers
+
+Qwen2Config = None
 
 
 class Qwen2MLP(nn.Module):
@@ -32,6 +35,7 @@ class Qwen2MLP(nn.Module):
         intermediate_size: int,
         hidden_act: str,
         quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
     ) -> None:
         super().__init__()
         self.gate_up_proj = MergedColumnParallelLinear(
@@ -39,12 +43,14 @@ class Qwen2MLP(nn.Module):
             [intermediate_size] * 2,
             bias=False,
             quant_config=quant_config,
+            prefix=add_prefix("gate_up_proj", prefix),
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
             hidden_size,
             bias=False,
             quant_config=quant_config,
+            prefix=add_prefix("down_proj", prefix),
         )
         if hidden_act != "silu":
             raise ValueError(
@@ -202,6 +208,8 @@ class Qwen2Model(nn.Module):
         self,
         config,
         quant_config: Optional[QuantizationConfig] = None,
+        prefix: str = "",
+        decoder_layer_type: type[nn.Module] = Qwen2DecoderLayer,
     ) -> None:
         super().__init__()
         self.config = config
@@ -211,16 +219,30 @@ class Qwen2Model(nn.Module):
             config.vocab_size,
             config.hidden_size,
             quant_config=quant_config,
+            prefix=add_prefix("embed_tokens", prefix),
         )
-        self.layers = nn.ModuleList(
-            [
-                Qwen2DecoderLayer(
-                    layer_id=idx, config=config, quant_config=quant_config
-                )
-                for idx in range(config.num_hidden_layers)
-            ]
+        # Use the provided decoder layer type or default to Qwen2DecoderLayer
+        decoder_layer_type = decoder_layer_type or Qwen2DecoderLayer
+        self.layers = make_layers(
+            config.num_hidden_layers,
+            lambda idx, prefix: decoder_layer_type(
+                layer_id=idx,
+                config=config,
+                quant_config=quant_config,
+                prefix=prefix,
+            ),
+            prefix=add_prefix("layers", prefix),
         )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def get_input_embedding(self, input_ids: torch.Tensor) -> torch.Tensor:
+        if hasattr(self.config, "scale_emb"):
+            return self.get_input_embeddings()(input_ids) * self.config.scale_emb
+        else:
+            return self.get_input_embeddings()(input_ids)
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.embed_tokens
 
     def forward(
         self,
@@ -247,7 +269,6 @@ class Qwen2Model(nn.Module):
 
 
 class Qwen2ForCausalLM(nn.Module):
-
     # BitandBytes specific attributes
     default_bitsandbytes_target_modules = [
         ".gate_proj.",
@@ -271,20 +292,31 @@ class Qwen2ForCausalLM(nn.Module):
         self,
         config,
         quant_config: Optional[QuantizationConfig] = None,
-        cache_config: Optional[CacheConfig] = None,
+        prefix: str = "",
     ) -> None:
         super().__init__()
         self.config = config
         self.quant_config = quant_config
-        self.model = Qwen2Model(config, quant_config=quant_config)
+        self.model = Qwen2Model(
+            config, quant_config=quant_config, prefix=add_prefix("model", prefix)
+        )
         if config.tie_word_embeddings:
             self.lm_head = self.model.embed_tokens
         else:
             self.lm_head = ParallelLMHead(
-                config.vocab_size, config.hidden_size, quant_config=quant_config
+                config.vocab_size,
+                config.hidden_size,
+                quant_config=quant_config,
+                prefix=add_prefix("lm_head", prefix),
             )
         self.logits_processor = LogitsProcessor(config)
         self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
+
+    def get_input_embedding(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return self.model.get_input_embedding(input_ids)
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.embed_tokens
 
     @torch.no_grad()
     def forward(
@@ -321,6 +353,8 @@ class Qwen2ForCausalLM(nn.Module):
                 # Models trained using ColossalAI may include these tensors in
                 # the checkpoint. Skip them.
                 continue
+            if self.config.tie_word_embeddings and "lm_head.weight" in name:
+                continue
             if name.startswith("model.vision_tower") and name not in params_dict:
                 continue
 
@@ -342,6 +376,20 @@ class Qwen2ForCausalLM(nn.Module):
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
+
+    def get_embed_and_head(self):
+        return self.model.embed_tokens.weight, self.lm_head.weight
+
+    def set_embed_and_head(self, embed, head):
+        del self.model.embed_tokens.weight
+        del self.lm_head.weight
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    def load_kv_cache_scales(self, quantization_param_path: str) -> None:
+        self.model.load_kv_cache_scales(quantization_param_path)
 
 
 EntryClass = Qwen2ForCausalLM

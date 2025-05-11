@@ -241,6 +241,7 @@ class Qwen3ForCausalLM(nn.Module):
         self,
         config,
         quant_config: Optional[QuantizationConfig] = None,
+        cache_config: Optional[CacheConfig] = None,
         prefix: str = "",
     ) -> None:
         super().__init__()

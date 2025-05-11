@@ -27,7 +27,7 @@ class ServerArgs:
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
     stream_interval: int = 1
-    watchdog_timeout: float = 60
+    watchdog_timeout: float = 20
     decode_log_interval: int = 10
     # memory and scheduling
     chunked_prefill_size: int = 8192
@@ -115,7 +115,7 @@ class ServerArgs:
     enable_system_controller: bool = False
     use_heterogeneous_pool: bool = False
     controller_port: int = 30005
-    enable_overlap_schedule: bool = False
+    enable_overlap_schedule: bool = True
     enable_double_sparsity: bool = False
     disable_nan_detection: bool = False
     # Topping config

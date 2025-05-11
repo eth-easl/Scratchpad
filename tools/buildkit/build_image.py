@@ -16,7 +16,10 @@ def main():
         "--upload", action="store_true", help="Upload the image after building"
     )
     parser.add_argument(
-        "--multistage", action="store_true", help="Use multi-stage Dockerfile"
+        "--multistage",
+        action="store_true",
+        help="Use multi-stage Dockerfile",
+        default=False,
     )
     args = parser.parse_args()
     # if version not start with v, add v in front of it
