@@ -6,7 +6,7 @@ from enum import Enum, auto
 import triton.language as tl
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union, TYPE_CHECKING, Set, Any
-
+import threading
 from scratchpad.memory.base_prefix_cache import BasePrefixCache
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.pool import TokenToKVPoolAllocator, ReqToTokenPool
@@ -609,6 +609,9 @@ class ScheduleBatch:
     # the check of whether to prefill new requests.
     # This is an optimization to reduce the overhead of the prefill check.
     batch_is_full: bool = False
+
+    # events:
+    launch_done: Optional[threading.Event] = None
 
     # Sampling info
     sampling_info: SamplingBatchInfo = None
@@ -1451,6 +1454,7 @@ class ScheduleBatch:
                 )
             ),
             extend_input_logprob_token_ids=self.extend_input_logprob_token_ids,
+            launch_done=self.launch_done,
         )
 
     def copy(self):
@@ -1475,6 +1479,7 @@ class ScheduleBatch:
 
 @dataclass
 class ModelWorkerBatch:
+
     # The batch id
     bid: int
     # The forward mode
@@ -1532,6 +1537,9 @@ class ModelWorkerBatch:
     spec_info: Optional[Any] = None
     # If set, the output of the batch contains the hidden states of the run.
     capture_hidden_mode: CaptureHiddenMode = None
+
+    # overlapping scheduling
+    launch_done: Optional[threading.Event] = None
 
 
 @triton.jit

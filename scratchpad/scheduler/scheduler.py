@@ -7,7 +7,7 @@ import threading
 import traceback
 import setproctitle
 import faulthandler
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent import futures
 import multiprocessing
 from http import HTTPStatus
@@ -32,6 +32,7 @@ from scratchpad.scheduler.policy_scheduler import (
     AddReqResult,
 )
 from scratchpad.model_executor.speculative.spec_info import SpeculativeAlgorithm
+from scratchpad.model_executor.forward_info import ForwardMode
 from scratchpad.server.metrics import PrometheusStatLogger
 from scratchpad.memory.chunk_cache import ChunkCache
 from scratchpad.memory.radix_cache import RadixCache
@@ -48,6 +49,7 @@ from scratchpad.utils import (
 )
 from scratchpad.utils.platforms.cuda import get_gpu_utilization
 from ..managers.tp_worker import TpModelWorker
+from ..managers.tp_worker_client import TpModelWorkerClient
 from ..managers.structs import (
     AbortReq,
     BatchEmbeddingOut,
@@ -169,7 +171,7 @@ class Scheduler:
                     trust_remote_code=server_args.trust_remote_code,
                 )
         self.draft_worker = None
-        self.tp_worker = TpModelWorker(
+        self.tp_worker = TpModelWorkerClient(
             server_args=server_args,
             gpu_id=gpu_id,
             tp_rank=tp_rank,
@@ -229,6 +231,7 @@ class Scheduler:
         self.last_decode_stats_tic = time.time()
         self.last_prefill_stats_tic = time.time()
         self.return_health_check_ct = 0
+        self.current_stream = torch.get_device_module(self.device).current_stream()
         self.num_prefill_tokens = 0
         self.stream_interval = server_args.stream_interval
 
@@ -375,6 +378,50 @@ class Scheduler:
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
+                # When the server is idle, do self-check and re-init some states
+                self.check_memory()
+                self.new_token_ratio = self.init_new_token_ratio
+
+            self.last_batch = batch
+
+    @torch.inference_mode()
+    def event_loop_overlap(self):
+        """A scheduler loop that overlaps the CPU processing and GPU computation."""
+        self.result_queue = deque()
+
+        while True:
+            recv_reqs = self.recv_requests()
+            self.process_input_requests(recv_reqs)
+
+            batch = self.get_next_batch_to_run()
+            self.cur_batch = batch
+
+            if batch:
+                batch.launch_done = threading.Event()
+                result = self.run_batch(batch)
+                self.result_queue.append((batch.copy(), result))
+
+                if self.last_batch is None:
+                    # Create a dummy first batch to start the pipeline for overlap schedule.
+                    # It is now used for triggering the sampling_info_done event.
+                    tmp_batch = ScheduleBatch(
+                        reqs=None,
+                        forward_mode=ForwardMode.DUMMY_FIRST,
+                        next_batch_sampling_info=self.tp_worker.cur_sampling_info,
+                    )
+                    self.process_batch_result(tmp_batch, None, batch.launch_done)
+
+            if self.last_batch:
+                # Process the results of the last batch
+                tmp_batch, tmp_result = self.result_queue.popleft()
+                tmp_batch.next_batch_sampling_info = (
+                    self.tp_worker.cur_sampling_info if batch else None
+                )
+                # NOTE: we should use current launched batch's launch_done event Instead of the last batch's
+                self.process_batch_result(
+                    tmp_batch, tmp_result, batch.launch_done if batch else None
+                )
+            elif batch is None:
                 # When the server is idle, do self-check and re-init some states
                 self.check_memory()
                 self.new_token_ratio = self.init_new_token_ratio
@@ -586,7 +633,6 @@ class Scheduler:
         return True
 
     def log_stats(self, stats):
-        print(f"stats: {stats}")
         for logger in self.loggers:
             logger.log(stats)
 
@@ -991,18 +1037,22 @@ class Scheduler:
         self,
         batch: ScheduleBatch,
         result: Union[GenerationBatchResult, EmbeddingBatchResult],
+        launch_done: Optional[threading.Event] = None,
     ):
         if batch.forward_mode.is_decode():
-            self.process_batch_result_decode(batch, result)
+            self.process_batch_result_decode(batch, result, launch_done)
+
         elif batch.forward_mode.is_extend():
-            self.process_batch_result_prefill(batch, result)
+            self.process_batch_result_prefill(batch, result, launch_done)
+
         elif batch.forward_mode.is_idle():
             if self.enable_overlap:
-                self.tp_worker.resolve_batch_result(result.bid)
+                self.tp_worker.resolve_last_batch_result(launch_done)
                 if batch.next_batch_sampling_info:
                     batch.next_batch_sampling_info.update_regex_vocab_mask()
                     self.current_stream.synchronize()
                     batch.next_batch_sampling_info.sampling_info_done.set()
+
         elif batch.forward_mode.is_dummy_first():
             batch.next_batch_sampling_info.update_regex_vocab_mask()
             self.current_stream.synchronize()
@@ -1015,8 +1065,14 @@ class Scheduler:
             self.return_health_check_ct -= 1
             self.send_to_tokenizer.send_pyobj(HealthCheckOutput())
 
-    def process_batch_result_prefill(self, batch: ScheduleBatch, result):
+    def process_batch_result_prefill(
+        self,
+        batch: ScheduleBatch,
+        result,
+        launch_done: Optional[threading.Event] = None,
+    ):
         skip_stream_req = None
+
         if self.is_generation:
             (
                 logits_output,
@@ -1033,7 +1089,12 @@ class Scheduler:
             )
 
             if self.enable_overlap:
-                logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
+                (
+                    logits_output,
+                    next_token_ids,
+                ) = self.tp_worker.resolve_last_batch_result(
+                    launch_done,
+                )
             else:
                 # Move next_token_ids and logprobs to cpu
                 next_token_ids = next_token_ids.tolist()
@@ -1161,13 +1222,13 @@ class Scheduler:
                 else:
                     # being chunked reqs' prefill is not finished
                     req.is_chunked -= 1
-
         self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 
     def process_batch_result_decode(
         self,
         batch: ScheduleBatch,
         result: GenerationBatchResult,
+        launch_done: Optional[threading.Event] = None,
     ):
         logits_output, next_token_ids, bid = (
             result.logits_output,
@@ -1177,7 +1238,9 @@ class Scheduler:
         self.num_generated_tokens += len(batch.reqs)
 
         if self.enable_overlap:
-            logits_output, next_token_ids = self.tp_worker.resolve_batch_result(bid)
+            logits_output, next_token_ids = self.tp_worker.resolve_last_batch_result(
+                launch_done
+            )
             next_token_logprobs = logits_output.next_token_logprobs
         elif batch.spec_algorithm.is_none():
             # spec decoding handles output logprobs inside verify process.
@@ -1647,7 +1710,7 @@ def run_scheduler_process(
             server_args, gpu_id, tp_rank, dp_rank=None, loggers=loggers
         )
         pipe_writer.send("ready")
-        scheduler.event_loop_normal()
+        scheduler.event_loop_overlap()
     except ValueError as e:
         traceback.print_exc()
         logger.info(f"Scheduler process exited: {e}")

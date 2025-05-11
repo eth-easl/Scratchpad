@@ -33,6 +33,7 @@ class ForwardMode(IntEnum):
 
     # A dummy first batch to start the pipeline for overlap scheduler.
     # It is now used for triggering the sampling_info_done event for the first prefill batch.
+    DUMMY_FIRST = auto()
 
     def is_extend(self):
         # print(f"self {self}, {ForwardMode.EXTEND}")

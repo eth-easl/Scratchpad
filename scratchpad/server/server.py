@@ -36,8 +36,6 @@ from scratchpad.managers.structs import GenerateReqInput
 
 from .args import ServerArgs
 
-# setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
-
 app = FastAPI()
 mount_metrics(app)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
