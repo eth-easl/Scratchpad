@@ -11,7 +11,6 @@ from collections import defaultdict
 from concurrent import futures
 import multiprocessing
 from http import HTTPStatus
-from collections import deque
 from dataclasses import asdict, dataclass
 from functools import cached_property
 from typing import List, Optional, TYPE_CHECKING, Union
@@ -47,6 +46,7 @@ from scratchpad.utils import (
     logger,
     get_zmq_socket,
 )
+from scratchpad.utils.platforms.cuda import get_gpu_utilization
 from ..managers.tp_worker import TpModelWorker
 from ..managers.structs import (
     AbortReq,
@@ -586,6 +586,7 @@ class Scheduler:
         return True
 
     def log_stats(self, stats):
+        print(f"stats: {stats}")
         for logger in self.loggers:
             logger.log(stats)
 
@@ -629,7 +630,16 @@ class Scheduler:
         self._largest_prefill_len = max(
             self._largest_prefill_len, adder.log_input_tokens
         )
-
+        stats = Stats(
+            now=time.time(),
+            running_requests=running_bs,
+            queued_requests=len(self.waiting_queue),
+            token_usage=num_used / self.max_total_num_tokens,
+            used_token_pool=num_used,
+            generation_throughput=self.last_gen_throughput,
+            gpu_utilization=get_gpu_utilization(0),
+        )
+        self.log_stats(stats)
         f = (
             f"Prefill batch. "
             f"#new-seq: {len(can_run_list)}, "
@@ -678,7 +688,16 @@ class Scheduler:
                 f"gen throughput (token/s): {self.last_gen_throughput:.2f}, "
                 f"#queue-req: {len(self.waiting_queue)}, "
             )
-
+        stats = Stats(
+            now=time.time(),
+            generation_throughput=self.last_gen_throughput,
+            running_requests=num_running_reqs,
+            queued_requests=len(self.waiting_queue),
+            token_usage=num_used / self.max_total_num_tokens,
+            used_token_pool=num_used,
+            gpu_utilization=get_gpu_utilization(0),
+        )
+        self.log_stats(stats)
         logger.info(msg)
 
     def check_memory(self):

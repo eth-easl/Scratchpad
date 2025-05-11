@@ -9,7 +9,7 @@ from dataclasses import asdict
 from fastapi import FastAPI, Request, File, Form, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse, HTMLResponse
 
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
@@ -36,7 +36,7 @@ from scratchpad.managers.structs import GenerateReqInput
 
 from .args import ServerArgs
 
-setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
+# setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
 
 app = FastAPI()
 mount_metrics(app)
@@ -64,12 +64,21 @@ def get_model_cards():
 
 @app.get("/system_info")
 async def system_info():
-    return JSONResponse(status_code=200, content={"system_info": asdict(server_args)})
+    sys_info = asdict(server_args)
+    # drop api_key
+    sys_info.pop("api_key", None)
+    return JSONResponse(status_code=200, content={"system_info": sys_info})
 
 
 @app.get("/health")
 async def health() -> Response:
     return Response(status_code=200, content="OK")
+
+
+@app.get("/")
+async def root():
+    with open("scratchpad/server/metrics_ui.html", "r") as f:
+        return HTMLResponse(content=f.read())
 
 
 async def generate_request(obj: GenerateReqInput, request: Request):

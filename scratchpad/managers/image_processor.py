@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Union, TYPE_CHECKING
 from dataclasses import dataclass
 import PIL
-from decord import VideoReader, cpu
+
 from PIL import Image
 from scratchpad.utils import (
     get_processor,
@@ -23,6 +23,17 @@ from scratchpad.utils import (
 
 if TYPE_CHECKING:
     from scratchpad.server.args import ServerArgs
+
+try:
+    from decord import VideoReader, cpu
+
+except ImportError:
+    logger.warning(
+        "decord is not installed. Video processing will be disabled. "
+        "Please install `decord` to enable video processing."
+    )
+    VideoReader = None
+    cpu = None
 
 global global_processor
 
