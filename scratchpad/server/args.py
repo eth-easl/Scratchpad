@@ -86,6 +86,7 @@ class ServerArgs:
     cuda_graph_bs: Optional[List[int]] = None
     cuda_graph_max_bs: Optional[int] = None
     speculative_algorithm: Optional[str] = None
+    enable_cache_report: bool = True
     # debugging
 
     enable_nan_detection: bool = True

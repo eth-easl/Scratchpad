@@ -30,7 +30,7 @@ def make_chat_completion_request(
     model: str,
     prompt: str,  # User's message content
     temperature: float = 0.7,
-    max_tokens: int = 100,
+    max_tokens: int = 2048,
     top_p: float = 1.0,
     frequency_penalty: float = 0.0,
     presence_penalty: float = 0.0,
@@ -98,7 +98,7 @@ def main() -> None:
         "--temperature", type=float, default=0.7, help="Temperature for sampling"
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=150, help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=2048, help="Maximum tokens to generate"
     )
     parser.add_argument(
         "--top-p", type=float, default=1.0, help="Top-p sampling parameter"
