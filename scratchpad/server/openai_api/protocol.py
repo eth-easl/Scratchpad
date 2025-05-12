@@ -1,7 +1,7 @@
 import time
 from typing import Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 from typing_extensions import Literal
 
 
@@ -30,12 +30,25 @@ class ToolCall(BaseModel):
     function: FunctionResponse
 
 
+class StructuresResponseFormat(BaseModel):
+    begin: str
+    schema_: Optional[Dict[str, object]] = Field(alias="schema", default=None)
+    end: str
+
+
+class StructuralTagResponseFormat(BaseModel):
+    type: Literal["structural_tag"]
+    structures: List[StructuresResponseFormat]
+    triggers: List[str]
+
+
 class Function(BaseModel):
     """Function descriptions."""
 
     description: Optional[str] = Field(default=None, examples=[None])
-    name: str
+    name: Optional[str] = None
     parameters: Optional[object] = None
+    strict: bool = False
 
 
 class Tool(BaseModel):
@@ -287,7 +300,8 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
     n: Optional[int] = 1
     presence_penalty: Optional[float] = 0.0
-    response_format: Optional[ResponseFormat] = None
+    response_format: Optional[Union[ResponseFormat, StructuralTagResponseFormat]] = None
+
     seed: Optional[int] = None
     stop: Optional[Union[str, List[str]]] = Field(default_factory=list)
     stream: Optional[bool] = False
@@ -311,11 +325,14 @@ class ChatCompletionRequest(BaseModel):
     top_k: Optional[int] = None
     ignore_eos: bool = False
     no_stop_trim: bool = False
+    separate_reasoning: bool = True
 
 
 class ChatMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
 class ChatCompletionResponseChoice(BaseModel):
@@ -337,13 +354,18 @@ class ChatCompletionResponse(BaseModel):
 class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     logprobs: Optional[Union[LogProbs, ChoiceLogprobs]] = None
-    finish_reason: Optional[str] = None
+    finish_reason: Optional[
+        Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
+    ] = None
+    matched_stop: Union[None, int, str] = None
 
 
 class ChatCompletionStreamResponse(BaseModel):

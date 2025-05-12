@@ -1,4 +1,4 @@
-FROM ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86 AS base
+FROM nvcr.io/nvidia/pytorch:24.09-py3 AS nv
 
 LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
 LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
@@ -10,8 +10,9 @@ RUN apt update && apt upgrade -y
 WORKDIR /scratchpad
 COPY . .
 
-# Install all packages from the collected wheels.
-# This replaces the previous steps of cloning repositories and installing from source/requirements files.
+# copy wheels from ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86
+COPY --from=ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86 /wheels /wheels
+
 RUN pip install --no-cache-dir /wheels/flashinfer_python-0.2.3-cp38-abi3-linux_x86_64.whl && \
     pip install --no-cache-dir /wheels/triteia-0.1.0-cp310-cp310-linux_x86_64.whl
 

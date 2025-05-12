@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CLI utility to test an OpenAI-compatible API through the /completions endpoint.
+CLI utility to test an OpenAI-compatible API through the /chat/completions endpoint.
 """
 
 import argparse
@@ -14,21 +14,21 @@ def fetch_models(base_url: str) -> List[str]:
     """Fetch available models from the API."""
     try:
         response = requests.get(f"{base_url}/models")
-        if response.status_code == 200:
-            models_data = response.json()
-            return [model["id"] for model in models_data.get("data", [])]
-        else:
-            print(f"Failed to fetch models: {response.status_code} {response.text}")
-            return []
-    except Exception as e:
+        response.raise_for_status()  # Raise an exception for bad status codes
+        models_data = response.json()
+        return [model["id"] for model in models_data.get("data", [])]
+    except requests.exceptions.RequestException as e:
         print(f"Error fetching models: {e}")
+        return []
+    except json.JSONDecodeError:
+        print(f"Error decoding models JSON response.")
         return []
 
 
-def make_completion_request(
+def make_chat_completion_request(
     base_url: str,
     model: str,
-    prompt: str,
+    prompt: str,  # User's message content
     temperature: float = 0.7,
     max_tokens: int = 100,
     top_p: float = 1.0,
@@ -37,19 +37,20 @@ def make_completion_request(
     stop: Optional[List[str]] = None,
     stream: bool = False,
     api_key: str = "sk_test_123",
-):
-    """Make a request to the completions endpoint."""
+) -> Union[Dict[str, Any], requests.Response, None]:
+    """Make a request to the chat completions endpoint."""
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
 
     payload = {
         "model": model,
-        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
         "top_p": top_p,
         "frequency_penalty": frequency_penalty,
         "presence_penalty": presence_penalty,
         "stream": stream,
+        "extra_body": {"separate_reasoning": True},
     }
 
     if stop:
@@ -57,21 +58,30 @@ def make_completion_request(
 
     try:
         response = requests.post(
-            f"{base_url}/completions", headers=headers, json=payload, stream=stream
+            f"{base_url}/chat/completions", headers=headers, json=payload, stream=stream
         )
-        if response.status_code == 200:
-            return response.json()
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+
+        if stream:
+            return response  # Return the raw response object for streaming
         else:
-            print(f"Error: {response.status_code} {response.text}")
-            return {"error": response.text}
-    except Exception as e:
-        print(f"Error making request: {e}")
-        return {"error": str(e)}
+            return response.json()  # Return parsed JSON for non-streaming
+    except requests.exceptions.HTTPError as e:
+        print(
+            f"HTTP Error: {e.response.status_code} {e.response.text}", file=sys.stderr
+        )
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"Error making request: {e}", file=sys.stderr)
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON response: {e}", file=sys.stderr)
+        return None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Test OpenAI-compatible completions API"
+        description="Test OpenAI-compatible chat completions API"
     )
     parser.add_argument(
         "--endpoint", default="http://localhost:8080/v1", help="API endpoint base URL"
@@ -79,16 +89,16 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default="auto",
-        help="Model name (use 'auto' to fetch available models)",
+        help="Model name (use 'auto' to fetch first available model)",
     )
     parser.add_argument(
-        "--prompt", help="The prompt to complete", default="Alan Turing is"
+        "--prompt", help="The user message to send", default="Tell me a joke about AI."
     )
     parser.add_argument(
-        "--temperature", type=float, default=0.1, help="Temperature for sampling"
+        "--temperature", type=float, default=0.7, help="Temperature for sampling"
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=100, help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=150, help="Maximum tokens to generate"
     )
     parser.add_argument(
         "--top-p", type=float, default=1.0, help="Top-p sampling parameter"
@@ -105,19 +115,20 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Auto-detect model if needed
     if args.model == "auto":
+        print(f"Fetching available models from {args.endpoint}...")
         models = fetch_models(args.endpoint)
         if models:
             args.model = models[0]
             print(f"Using model: {args.model}")
         else:
-            print("No models found and no model specified. Exiting.")
+            print(
+                "No models found or failed to fetch models. Please specify a model manually. Exiting."
+            )
             sys.exit(1)
 
-    # Make the completion request
     if args.stream:
-        for chunk in make_completion_request(
+        response_stream = make_chat_completion_request(
             args.endpoint,
             args.model,
             args.prompt,
@@ -127,36 +138,84 @@ def main() -> None:
             args.frequency_penalty,
             args.presence_penalty,
             args.stop,
-            args.stream,
-            args.api_key,
-        ):
-            if "choices" in chunk and len(chunk["choices"]) > 0:
-                text = chunk["choices"][0].get("text", "")
-                print(text, end="")
-                sys.stdout.flush()
-        print()  # Final newline
-    else:
-        print(f"Making request to {args.endpoint}/completions")
-        result = make_completion_request(
-            args.endpoint,
-            args.model,
-            args.prompt,
-            args.temperature,
-            args.max_tokens,
-            args.top_p,
-            args.frequency_penalty,
-            args.presence_penalty,
-            args.stop,
-            False,
+            True,  # stream = True
             args.api_key,
         )
-        # Print the full response in pretty format
-        print(json.dumps(result, indent=2))
+        if isinstance(response_stream, requests.Response):
+            full_response_text = ""
+            print("\nStreaming response:")
+            for line in response_stream.iter_lines():
+                if line:
+                    line_str = line.decode("utf-8")
+                    if line_str.startswith("data: "):
+                        line_str = line_str[len("data: ") :].strip()
+                    if line_str == "[DONE]":
+                        break
+                    if not line_str:  # Skip empty lines that might occur
+                        continue
+                    try:
+                        chunk = json.loads(line_str)
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                print(content, end="")
+                                full_response_text += content
+                                sys.stdout.flush()
+                    except json.JSONDecodeError:
+                        print(
+                            f"\nError decoding stream chunk: '{line_str}'",
+                            file=sys.stderr,
+                        )
+                        continue
+            print()  # Final newline
+            # print(f"\nFull streamed text:\n{full_response_text}") # Optional: print full text at end
+        elif response_stream is None:
+            print("Failed to get a streaming response.", file=sys.stderr)
+            sys.exit(1)
 
-        # Also print just the generated text for convenience
-        if "choices" in result and len(result["choices"]) > 0:
-            print("\nGenerated text:")
-            print(result["choices"][0].get("text", ""))
+    else:  # Non-streaming
+        print(
+            f"Making request to {args.endpoint}/chat/completions with model {args.model}..."
+        )
+        result = make_chat_completion_request(
+            args.endpoint,
+            args.model,
+            args.prompt,
+            args.temperature,
+            args.max_tokens,
+            args.top_p,
+            args.frequency_penalty,
+            args.presence_penalty,
+            args.stop,
+            False,  # stream = False
+            args.api_key,
+        )
+        if result and "error" not in result:
+            print("\nFull response JSON:")
+            print(json.dumps(result, indent=2))
+
+            if (
+                "choices" in result
+                and len(result["choices"]) > 0
+                and "message" in result["choices"][0]
+            ):
+                message_content = result["choices"][0]["message"].get("content")
+                if message_content:
+                    print("\nGenerated text:")
+                    print(message_content)
+                else:
+                    print("\nNo content found in the first choice's message.")
+            else:
+                print("\nCould not extract generated text from response.")
+        elif result and "error" in result:
+            print(f"API Error: {result.get('error')}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(
+                "Request failed or returned an unexpected structure.", file=sys.stderr
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":

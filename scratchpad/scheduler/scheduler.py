@@ -171,13 +171,23 @@ class Scheduler:
                     trust_remote_code=server_args.trust_remote_code,
                 )
         self.draft_worker = None
-        self.tp_worker = TpModelWorkerClient(
-            server_args=server_args,
-            gpu_id=gpu_id,
-            tp_rank=tp_rank,
-            dp_rank=dp_rank,
-            nccl_port=server_args.nccl_ports[0],
-        )
+
+        if self.enable_overlap:
+            self.tp_worker = TpModelWorkerClient(
+                server_args=server_args,
+                gpu_id=gpu_id,
+                tp_rank=tp_rank,
+                dp_rank=dp_rank,
+                nccl_port=server_args.nccl_ports[0],
+            )
+        else:
+            self.tp_worker = TpModelWorker(
+                gpu_id=gpu_id,
+                tp_rank=tp_rank,
+                server_args=server_args,
+                dp_rank=dp_rank,
+                nccl_port=server_args.nccl_ports[0],
+            )
 
         # Get token and memory info from the model worker
         (
