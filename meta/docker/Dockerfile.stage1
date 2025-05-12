@@ -1,0 +1,29 @@
+FROM nvcr.io/nvidia/pytorch:24.09-py3 AS base
+
+LABEL org.opencontainers.image.source=https://github.com/xiaozheyao/Scratchpad
+LABEL org.opencontainers.image.description="Scratchpad: Adaptive Serving of LMs"
+LABEL org.opencontainers.image.licenses=Apache-2.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TRITEIA_COMPUTE_CAP=80
+ENV TORCH_CUDA_ARCH_LIST="8.0 8.6 9.0 9.0a"
+ENV FLASHINFER_ENABLE_AOT="1"
+
+RUN apt update && apt upgrade -y
+
+RUN mkdir /wheels # Create a directory to store wheel files
+
+RUN pip install setuptools==75.6.0 packaging==23.2 ninja==1.11.1.3 build==1.2.2.post1 nvidia-cublas-cu12 uv
+
+# Clone and build wheel for flashinfer
+RUN git clone -b v0.2.3 https://github.com/flashinfer-ai/flashinfer.git --recursive && \
+    cd flashinfer && \
+    pip wheel --no-build-isolation --verbose . -w /wheels
+
+# Clone and build wheel for triteia
+RUN git clone https://github.com/eth-easl/triteia.git && \
+    cd triteia && \
+    git submodule update --init --recursive && \
+    pip wheel . -w /wheels
+
+WORKDIR /scratchpad

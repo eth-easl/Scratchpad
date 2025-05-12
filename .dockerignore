@@ -19,3 +19,6 @@ __pycache__/
 *.tar
 *.gz
 *.bz2
+.buildcache
+.pytest_cache
+.git
