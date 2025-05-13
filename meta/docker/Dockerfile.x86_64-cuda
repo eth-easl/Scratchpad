@@ -8,9 +8,8 @@ LABEL org.opencontainers.image.architecture=amd64
 RUN apt update && apt upgrade -y
 
 WORKDIR /scratchpad
-COPY . .
 
-# copy wheels from ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86
+COPY . .
 COPY --from=ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86 /wheels /wheels
 
 RUN pip install --no-cache-dir /wheels/flashinfer_python-0.2.3-cp38-abi3-linux_x86_64.whl && \
@@ -20,8 +19,5 @@ RUN pip install -r meta/requirements-extra.txt && \
     pip install -r meta/requirements-dev.txt && \
     pip install .
 
-# Uninstall pynvml as in the original Dockerfile
-RUN pip uninstall pynvml -y
-
-# Clean up the copied wheels directory to reduce final image size
-RUN rm -rf /wheels
+# cleanup
+RUN pip uninstall pynvml -y && rm -rf /wheels

@@ -1471,6 +1471,9 @@ async def v1_chat_completions(
         ret = [ret]
     tool_call_parser = "llama3" if "llama" in request.model.lower() else None
     reasoning_parser = "qwen3" if "qwen3" in request.model.lower() else None
+    tokenizer_manager.server_args.tool_call_parser = tool_call_parser
+    tokenizer_manager.server_args.reasoning_parser = reasoning_parser
+
     response = v1_chat_generate_response(
         request,
         ret,

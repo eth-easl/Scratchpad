@@ -141,6 +141,9 @@ class ServerArgs:
 
     # others
     crash_on_warnings: bool = False
+    # internal use, no need to set (should be auto-generated)
+    tool_call_parser: Optional[str] = None
+    reasoning_parser: Optional[str] = None
 
     def translate_auto(self):
         if self.served_model_name == "auto":

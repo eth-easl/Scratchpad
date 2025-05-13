@@ -98,7 +98,7 @@ def main() -> None:
         "--temperature", type=float, default=0.7, help="Temperature for sampling"
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=2048, help="Maximum tokens to generate"
+        "--max-tokens", type=int, default=128, help="Maximum tokens to generate"
     )
     parser.add_argument(
         "--top-p", type=float, default=1.0, help="Top-p sampling parameter"

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 async def run_post_startup_check(server_args: "ServerArgs", tokenizer_manager):
     """Sends a request to /v1/models after server startup to verify server health and API capabilities."""
 
-    initial_wait_seconds = 3.0
+    initial_wait_seconds = 5.0
     logger.info(
         f"Post-startup check: Initializing. Waiting {initial_wait_seconds}s for Uvicorn to be ready..."
     )
@@ -32,8 +32,8 @@ async def run_post_startup_check(server_args: "ServerArgs", tokenizer_manager):
         )
         return
 
-    health_check_url = f"http://{server_args.host}:{server_args.port}/health"
-    openai_models_check_url = f"http://{server_args.host}:{server_args.port}/v1/models"  # Changed to v1/models endpoint
+    health_check_url = f"http://localhost:{server_args.port}/health"
+    openai_models_check_url = f"http://localhost:{server_args.port}/v1/models"  # Changed to v1/models endpoint
     max_wait_seconds = 60
     poll_interval_seconds = 2
     elapsed_wait_seconds = 0
@@ -111,7 +111,7 @@ async def run_post_startup_check(server_args: "ServerArgs", tokenizer_manager):
                             logger.info(
                                 f"Post-startup: Attempting chat completion check with model '{model_id_for_chat}'."
                             )
-                            chat_completion_url = f"http://{server_args.host}:{server_args.port}/v1/chat/completions"
+                            chat_completion_url = f"http://localhost:{server_args.port}/v1/chat/completions"
                             chat_payload = {
                                 "model": model_id_for_chat,
                                 "messages": [
