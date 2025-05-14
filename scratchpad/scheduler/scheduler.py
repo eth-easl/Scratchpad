@@ -944,6 +944,9 @@ class Scheduler:
 
         return new_batch
 
+    def _extend_requests_to_queue(self, reqs: List[Req], is_retracted: bool = False):
+        self.waiting_queue.extend(reqs)
+
     def update_running_batch(self, batch: ScheduleBatch) -> Optional[ScheduleBatch]:
         """Update the current running decoding batch."""
         initial_bs = batch.batch_size()
