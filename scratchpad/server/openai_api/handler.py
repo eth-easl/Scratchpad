@@ -1067,7 +1067,6 @@ def v1_chat_generate_response(
                 )
 
         if tool_choice != "none" and tools:
-
             parser = FunctionCallParser(tools, tool_call_parser)
             if parser.has_tool_call(text):
                 if finish_reason["type"] == "stop":
@@ -1469,18 +1468,14 @@ async def v1_chat_completions(
         return create_error_response(str(e))
     if not isinstance(ret, list):
         ret = [ret]
-    tool_call_parser = "llama3" if "llama" in request.model.lower() else None
-    reasoning_parser = "qwen3" if "qwen3" in request.model.lower() else None
-    tokenizer_manager.server_args.tool_call_parser = tool_call_parser
-    tokenizer_manager.server_args.reasoning_parser = reasoning_parser
 
     response = v1_chat_generate_response(
         request,
         ret,
         created,
         cache_report=tokenizer_manager.server_args.enable_cache_report,
-        tool_call_parser=tool_call_parser,
-        reasoning_parser=reasoning_parser,
+        tool_call_parser=tokenizer_manager.server_args.tool_call_parser,
+        reasoning_parser=tokenizer_manager.server_args.reasoning_parser,
     )
 
     return response

@@ -777,8 +777,9 @@ class FunctionCallParser:
                 detectors.append(detector_class())
             else:
                 raise ValueError(f"Unsupported tool_call_parser: {tool_call_parser}")
+            self._enabled = True
         else:
-            raise ValueError("Tool Call Parser Not Given!")
+            self._enabled = False
 
         self.multi_format_parser = MultiFormatParser(detectors)
         self.tools = tools
@@ -792,6 +793,8 @@ class FunctionCallParser:
         :return: True if the text contains a tool call, False otherwise
         """
         # Check all detectors in the multi_format_parser
+        if not self._enabled:
+            return False
         for detector in self.multi_format_parser.detectors:
             if detector.has_tool_call(text):
                 return True
@@ -801,6 +804,8 @@ class FunctionCallParser:
         """
         Non-streaming call: one-time parsing
         """
+        if not self._enabled:
+            return full_text, []
         full_normal_text, calls = self.multi_format_parser.parse_once(
             full_text, self.tools
         )
@@ -810,6 +815,8 @@ class FunctionCallParser:
         """
         Streaming call: incremental parsing
         """
+        if not self._enabled:
+            return chunk_text, []
         normal_text, calls = self.multi_format_parser.parse_streaming_increment(
             chunk_text, self.tools
         )
@@ -819,11 +826,15 @@ class FunctionCallParser:
         """
         Returns a list of structure_info functions for each detector
         """
+        if not self._enabled:
+            return []
         return [
             detector.structure_info() for detector in self.multi_format_parser.detectors
         ]
 
     def get_structure_tag(self) -> StructuralTagResponseFormat:
+        if not self._enabled:
+            return None
         tool_structures: List[StructuresResponseFormat] = list()
         tool_trigger_set: Set[str] = set()
 

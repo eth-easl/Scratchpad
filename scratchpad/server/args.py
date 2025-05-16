@@ -142,8 +142,8 @@ class ServerArgs:
     # others
     crash_on_warnings: bool = False
     # internal use, no need to set (should be auto-generated)
-    tool_call_parser: Optional[str] = None
-    reasoning_parser: Optional[str] = None
+    tool_call_parser: Optional[str] = "auto"
+    reasoning_parser: Optional[str] = "auto"
 
     def translate_auto(self):
         if self.served_model_name == "auto":
@@ -181,6 +181,14 @@ class ServerArgs:
             )
         if self.cuda_graph_bs is None:
             self.cuda_graph_max_bs = 160
+        if self.tool_call_parser == "auto":
+            self.tool_call_parser = (
+                "llama3" if "llama" in self.served_model_name.lower() else None
+            )
+        if self.reasoning_parser == "auto":
+            self.reasoning_parser = (
+                "qwen3" if "qwen3" in self.served_model_name.lower() else None
+            )
 
     def update(self, args):
         for k, v in args.items():
