@@ -185,10 +185,12 @@ class ServerArgs:
             self.tool_call_parser = (
                 "llama3" if "llama" in self.served_model_name.lower() else None
             )
+            logger.info(f"Using tool_call_parser: {self.tool_call_parser}")
         if self.reasoning_parser == "auto":
             self.reasoning_parser = (
                 "qwen3" if "qwen3" in self.served_model_name.lower() else None
             )
+            logger.info(f"Using reasoning_parser: {self.reasoning_parser}")
 
     def update(self, args):
         for k, v in args.items():
