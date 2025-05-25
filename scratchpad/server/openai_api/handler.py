@@ -1065,8 +1065,8 @@ def v1_chat_generate_response(
                     HTTPStatus.BAD_REQUEST,
                     "Failed to parse reasoning related info to json format!",
                 )
-
         if tool_choice != "none" and tools:
+
             parser = FunctionCallParser(tools, tool_call_parser)
             if parser.has_tool_call(text):
                 if finish_reason["type"] == "stop":
