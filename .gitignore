@@ -8,3 +8,4 @@ pyrightconfig.json
 .data
 *.ipynb
 .coverage*
+.buildcache/

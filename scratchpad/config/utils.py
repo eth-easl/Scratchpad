@@ -26,9 +26,13 @@ def _get_and_verify_dtype(
         dtype = dtype.lower()
         if dtype == "auto":
             if config_dtype == torch.float32:
-                if config.model_type == "gemma2":
+                if config.model_type.startswith("gemma"):
+                    if config.model_type == "gemma":
+                        gemma_version = ""
+                    else:
+                        gemma_version = config.model_type[5]
                     logger.info(
-                        "For Gemma 2, we downcast float32 to bfloat16 instead "
+                        f"For Gemma {gemma_version}, we downcast float32 to bfloat16 instead "
                         "of float16 by default. Please specify `dtype` if you "
                         "want to use float16."
                     )
@@ -63,6 +67,13 @@ def _get_and_verify_dtype(
             logger.warning("Casting %s to %s.", config_dtype, torch_dtype)
 
     return torch_dtype
+
+
+def get_min_sliding_window(sliding_window: Union[int, list[Optional[int]]]) -> int:
+    if isinstance(sliding_window, list):
+        return min(s for s in sliding_window if s is not None)
+
+    return sliding_window
 
 
 def _get_and_verify_max_len(
@@ -216,3 +227,21 @@ def get_served_model_name(
     if isinstance(served_model_name, list):
         return served_model_name[0]
     return served_model_name
+
+
+multimodal_model_archs = [
+    "Gemma3ForConditionalGeneration",
+    "MllamaForConditionalGeneration",
+    "Qwen2VLForConditionalGeneration",
+    "Qwen2_5_VLForConditionalGeneration",
+]
+
+
+def is_multimodal_model(model_architectures: List[str]):
+    if any(
+        multi_model_arch in model_architectures
+        for multi_model_arch in multimodal_model_archs
+    ):
+        return True
+    else:
+        return False

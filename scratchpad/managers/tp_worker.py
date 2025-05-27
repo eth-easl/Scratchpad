@@ -10,8 +10,13 @@ from scratchpad.server.args import ServerArgs
 from scratchpad.model_executor.model_runner import ModelRunner
 from scratchpad.config.model_config import ModelConfig
 from scratchpad.scheduler.schedule_batch import ModelWorkerBatch
-from scratchpad.memory.het_pool import HeterogeneousMHATokenToKVPool
 from scratchpad.model_executor.forward_info import ForwardBatch
+from scratchpad.memory import (
+    ReqToTokenPool,
+    HeterogeneousMHATokenToKVPool,
+    TokenToKVPoolAllocator,
+)
+
 from .structs import UpdateWeightReqInput
 from typing import Optional
 from scratchpad.server.args import global_args
@@ -27,9 +32,12 @@ class TpModelWorker:
         server_args: ServerArgs,
         nccl_port: int,
         dp_rank: Optional[int] = 0,
+        req_to_token_pool: Optional[ReqToTokenPool] = None,
+        token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
         logger.info(f"Initalizing model worker on GPU {gpu_id}, tp_rank: {tp_rank}")
+
         self.tp_rank = tp_rank
         self.server_args = server_args
         # Init model and tokenizer
@@ -48,6 +56,8 @@ class TpModelWorker:
             tp_size=server_args.tp_size,
             nccl_port=nccl_port,
             server_args=server_args,
+            req_to_token_pool=req_to_token_pool,
+            token_to_kv_pool_allocator=token_to_kv_pool_allocator,
         )
         if server_args.skip_tokenizer_init:
             self.tokenizer = self.processor = None
@@ -148,12 +158,13 @@ class TpModelWorker:
     def get_memory_pool(self):
         return (
             self.model_runner.req_to_token_pool,
-            self.model_runner.token_to_kv_pool,
+            self.model_runner.token_to_kv_pool_allocator,
         )
 
     def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):
         forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
         logits_output = self.model_runner.forward(forward_batch)
+        model_worker_batch.launch_done.set()
         next_token_ids = self.model_runner.sample(logits_output, model_worker_batch)
         return logits_output, next_token_ids
 

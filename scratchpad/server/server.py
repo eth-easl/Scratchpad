@@ -1,6 +1,5 @@
 import asyncio
 import json
-import threading
 import uvloop
 import uvicorn
 from http import HTTPStatus
@@ -9,8 +8,8 @@ from dataclasses import asdict
 from fastapi import FastAPI, Request, File, Form, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
-
+from fastapi.responses import JSONResponse, Response, StreamingResponse, HTMLResponse
+from scratchpad.utils import logger
 from scratchpad.server.openai_api.handler import (
     load_chat_template_for_openai_api,
     v1_batches,
@@ -35,8 +34,7 @@ from scratchpad.server.controller import get_controller
 from scratchpad.managers.structs import GenerateReqInput
 
 from .args import ServerArgs
-
-setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
+from .utils import run_post_startup_check
 
 app = FastAPI()
 mount_metrics(app)
@@ -64,12 +62,21 @@ def get_model_cards():
 
 @app.get("/system_info")
 async def system_info():
-    return JSONResponse(status_code=200, content={"system_info": asdict(server_args)})
+    sys_info = asdict(server_args)
+    # drop api_key
+    sys_info.pop("api_key", None)
+    return JSONResponse(status_code=200, content={"system_info": sys_info})
 
 
 @app.get("/health")
 async def health() -> Response:
     return Response(status_code=200, content="OK")
+
+
+@app.get("/")
+async def root():
+    with open("scratchpad/server/metrics_ui.html", "r") as f:
+        return HTMLResponse(content=f.read())
 
 
 async def generate_request(obj: GenerateReqInput, request: Request):
@@ -102,10 +109,6 @@ async def generate_request(obj: GenerateReqInput, request: Request):
             return JSONResponse(
                 {"error": {"message": str(e)}}, status_code=HTTPStatus.BAD_REQUEST
             )
-
-
-app.post("/generate")(generate_request)
-app.put("/generate")(generate_request)
 
 
 @app.post("/v1/completions")
@@ -154,7 +157,9 @@ async def openai_v1_chat_completions(raw_request: Request):
         return JSONResponse(
             content=jsonable_encoder(
                 ErrorResponse(
-                    message=f"Model {model} not found", code=404, type="MODEL_NOT_FOUND"
+                    message=f"Model [{model}] not found",
+                    code=404,
+                    type="MODEL_NOT_FOUND",
                 )
             ),
             status_code=HTTPStatus.NOT_FOUND,
@@ -226,6 +231,18 @@ def launch_server(model_name, args: "ServerArgs"):
     if args.api_key:
         add_api_key_middleware(app, args.api_key)
 
+    # Define a wrapper startup event to launch the check in the background
+    async def _schedule_post_startup_check_task():
+        logger.info(
+            "FastAPI app 'startup' event triggered. Scheduling post-startup health check task."
+        )
+        asyncio.create_task(run_post_startup_check(server_args, tokenizer_manager))
+        # This handler returns quickly, allowing Uvicorn startup to proceed.
+
+    app.add_event_handler(
+        "startup", _schedule_post_startup_check_task
+    )  # Modified registration
+
     # Launch tensor parallel scheduler processes
     scheduler_procs = []
     scheduler_pipe_readers = []
@@ -269,6 +286,7 @@ def launch_server(model_name, args: "ServerArgs"):
         load_chat_template_for_openai_api(tokenizer_manager, server_args.chat_template)
     for i in range(len(scheduler_pipe_readers)):
         scheduler_pipe_readers[i].recv()
+
     uvicorn.run(
         app,
         host=args.host,

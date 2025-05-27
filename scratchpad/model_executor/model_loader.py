@@ -4,7 +4,18 @@ import torch
 from torch import nn
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Generator, cast, Iterable, List, Dict, Type, Any
+from typing import (
+    Optional,
+    Tuple,
+    Generator,
+    cast,
+    Iterable,
+    List,
+    Dict,
+    Type,
+    Any,
+    TYPE_CHECKING,
+)
 from contextlib import contextmanager
 from scratchpad.config import (
     LoadConfig,
@@ -18,11 +29,12 @@ from scratchpad.utils import (
     is_pin_memory_available,
     download_safetensors_index_file_from_hf,
     current_platform,
+    print_warning_once,
 )
 from transformers import PretrainedConfig
-from scratchpad.nn.quantization import QuantizationConfig
 from scratchpad.config.modality_config import MultiModalConfig
 from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
+
 from .utils import (
     set_default_torch_dtype,
     pt_weights_iterator,
@@ -32,6 +44,9 @@ from .utils import (
     get_model_architecture,
     get_quant_config,
 )
+
+if TYPE_CHECKING:
+    from scratchpad.nn.quantization import QuantizationConfig
 
 
 @contextmanager
@@ -133,7 +148,7 @@ def _get_model_initialization_kwargs(
 
 def _get_quantization_config(
     model_config: ModelConfig, load_config: LoadConfig
-) -> Optional[QuantizationConfig]:
+) -> Optional["QuantizationConfig"]:
     """Get the quantization config."""
     if model_config.quantization is not None:
         quant_config = get_quant_config(model_config, load_config)
@@ -163,7 +178,7 @@ def build_model(
     model_class: Type[nn.Module],
     hf_config: PretrainedConfig,
     cache_config: Optional[CacheConfig],
-    quant_config: Optional[QuantizationConfig],
+    quant_config: Optional["QuantizationConfig"],
     *,
     multimodal_config: Optional[MultiModalConfig],
 ) -> nn.Module:
@@ -383,3 +398,69 @@ def get_model(
     return loader.load_model(
         model_config=model_config, device_config=device_config, cache_config=None
     )
+
+
+def maybe_remap_kv_scale_name(name: str, params_dict: dict) -> Optional[str]:
+    """Remap the name of FP8 k/v_scale parameters.
+
+    This function handles the remapping of FP8 k/v_scale parameter names.
+    It detects if the given name ends with a suffix and attempts to remap
+    it to the expected name format in the model. If the remapped name is not
+    found in the params_dict, a warning is printed and None is returned.
+
+    Args:
+        name (str): The original loaded checkpoint parameter name.
+        params_dict (dict): Dictionary containing the model's named parameters.
+
+    Returns:
+        str: The remapped parameter name if successful, or the original name
+             if no remapping is needed.
+        None: If the remapped name is not found in params_dict.
+    """
+    if name.endswith(".kv_scale"):
+        print_warning_once(
+            "DEPRECATED. Found kv_scale in the checkpoint. "
+            "This format is deprecated in favor of separate k_scale and "
+            "v_scale tensors and will be removed in a future release. "
+            "Functionally, we will remap kv_scale to k_scale and duplicate "
+            "k_scale to v_scale"
+        )
+        # NOTE: we remap the deprecated kv_scale to k_scale
+        remapped_name = name.replace(".kv_scale", ".attn.k_scale")
+        if remapped_name not in params_dict:
+            print_warning_once(
+                f"Found kv_scale in the checkpoint (e.g. {name}), "
+                "but not found the expected name in the model "
+                f"(e.g. {remapped_name}). kv_scale is "
+                "not loaded."
+            )
+            return None
+        return remapped_name
+
+    possible_scale_names = [".k_scale", ".v_scale"]
+    modelopt_scale_names = [".self_attn.k_proj.k_scale", ".self_attn.v_proj.v_scale"]
+    for scale_name in possible_scale_names:
+        if name.endswith(scale_name):
+            # Check and remap the name based on modelopt scale names
+            if any(
+                modelopt_scale_name in name
+                for modelopt_scale_name in modelopt_scale_names
+            ):
+                remapped_name = name.replace(
+                    f".self_attn.{scale_name[1]}_proj{scale_name}",
+                    f".self_attn.attn{scale_name}",
+                )
+            else:
+                remapped_name = name.replace(scale_name, f".attn{scale_name}")
+            if remapped_name not in params_dict:
+                print_warning_once(
+                    f"Found {scale_name} in the checkpoint (e.g. {name}), "
+                    "but not found the expected name in the model "
+                    f"(e.g. {remapped_name}). {scale_name} is "
+                    "not loaded."
+                )
+                return None
+            return remapped_name
+
+    # If there were no matches, return the untouched param name
+    return name

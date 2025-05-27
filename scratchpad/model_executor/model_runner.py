@@ -1,12 +1,7 @@
 import gc
 import json
-import importlib
-import importlib.resources
-import pkgutil
-from functools import lru_cache
-from typing import Optional, Tuple, Type
+from typing import Optional
 import torch
-import torch.nn as nn
 from scratchpad.config import DeviceConfig, LoadConfig
 from scratchpad.config.vllm_model_config import ModelConfig as VllmModelConfig
 from scratchpad.distributed import (
@@ -17,7 +12,6 @@ from scratchpad.distributed import (
 )
 from scratchpad.distributed.parallel_state import in_the_same_node_as
 from .model_loader import get_model
-from scratchpad.nn.models import ModelRegistry
 
 from scratchpad.config.model_config import AttentionArch, ModelConfig
 from scratchpad.nn.attention import FlashInferAttnBackend, TritonAttnBackend
@@ -29,17 +23,17 @@ from scratchpad.memory.pool import (
     MLATokenToKVPool,
     ReqToTokenPool,
 )
-from scratchpad.memory.het_pool import (
+from scratchpad.memory import (
     HeterogeneousMHATokenToKVPool,
+    ReqToTokenPool,
+    TokenToKVPoolAllocator,
+    init_parameter_offload_manager,
 )
 from scratchpad.model_executor.forward_info import ForwardBatch
 from scratchpad.model_executor.speculative.spec_info import SpeculativeAlgorithm
-from scratchpad.sampling.sampling_batch_info import SamplingBatchInfo
 from scratchpad.server.args import ServerArgs
 from scratchpad.utils import (
     get_available_gpu_memory,
-    is_generation_model,
-    is_multimodal_model,
     enable_show_time_cost,
     logger,
 )
@@ -59,6 +53,8 @@ class ModelRunner:
         tp_size: int,
         nccl_port: int,
         server_args: ServerArgs,
+        req_to_token_pool: Optional[ReqToTokenPool] = None,
+        token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
         self.model_config = model_config
@@ -72,6 +68,9 @@ class ModelRunner:
         self.is_generation = model_config.is_generation
         self.is_multimodal = model_config.is_multimodal
         self.spec_algorithm = SpeculativeAlgorithm.NONE
+        self.page_size = server_args.page_size
+        self.req_to_token_pool = req_to_token_pool
+        self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
         logger.info(f"model config: {model_config}")
         # Model-specific adjustment
         if (
@@ -117,6 +116,7 @@ class ModelRunner:
         self.sampler = Sampler()
         self.load_model()
         self.init_toppings_manager()
+        self.init_parameter_offloading()
         self.init_memory_pool(
             min_per_gpu_memory,
             server_args.max_running_requests,
@@ -144,7 +144,9 @@ class ModelRunner:
             dist_init_method = f"tcp://{self.server_args.dist_init_addr}"
         else:
             dist_init_method = f"tcp://127.0.0.1:{self.dist_port}"
+
         set_custom_all_reduce(not self.server_args.disable_custom_all_reduce)
+
         init_distributed_environment(
             backend=backend,
             world_size=self.tp_size,
@@ -153,13 +155,13 @@ class ModelRunner:
             distributed_init_method=dist_init_method,
         )
         initialize_model_parallel(tensor_model_parallel_size=self.tp_size)
+
         min_per_gpu_memory = get_available_gpu_memory(
             self.device, self.gpu_id, distributed=self.tp_size > 1
         )
         self.tp_group = get_tp_group()
 
-        # Currently, there is a bug with mulit-node tensor parallelsim + padded cuda graph,
-        # so we disable padding in cuda graph.
+        # Currently, there is a bug with mulit-node tensor parallelsim + padded cuda graph, so we disable padding in cuda graph.
         if self.device == "cuda" and not all(
             in_the_same_node_as(self.tp_group.cpu_group, source_rank=0)
         ):
@@ -192,7 +194,7 @@ class ModelRunner:
                 )
                 self.server_args.dtype = "float16"
                 if torch.cuda.get_device_capability()[1] < 5:
-                    raise RuntimeError("SGLang only supports sm75 and above.")
+                    raise RuntimeError("SP only supports sm75 and above.")
 
         # Prepare the vllm model config
         self.load_config = LoadConfig(load_format=self.server_args.load_format)
@@ -414,24 +416,25 @@ class ModelRunner:
                 layer_num=self.model_config.num_hidden_layers,
                 device=self.device,
             )
-        elif self.server_args.use_heterogeneous_pool:
-            self.token_to_kv_pool = HeterogeneousMHATokenToKVPool(
-                self.max_total_num_tokens,
-                cpu_size=1024,
-                dtype=self.kv_cache_dtype,
-                head_num=self.model_config.get_num_kv_heads(self.tp_size),
-                head_dim=self.model_config.head_dim,
-                layer_num=self.model_config.num_hidden_layers,
-                device=self.device,
-            )
         else:
             self.token_to_kv_pool = MHATokenToKVPool(
                 self.max_total_num_tokens,
+                page_size=self.page_size,
                 dtype=self.kv_cache_dtype,
                 head_num=self.model_config.get_num_kv_heads(self.tp_size),
                 head_dim=self.model_config.head_dim,
                 layer_num=self.model_config.num_hidden_layers,
                 device=self.device,
+                enable_memory_saver=self.server_args.enable_memory_saver,
+            )
+        if self.token_to_kv_pool_allocator is None:
+            if self.page_size > 1:
+                raise NotImplementedError(f"page_size > 1 is not supported.")
+            self.token_to_kv_pool_allocator = TokenToKVPoolAllocator(
+                self.max_total_num_tokens,
+                dtype=self.kv_cache_dtype,
+                device=self.device,
+                kvcache=self.token_to_kv_pool,
             )
         logger.info(
             f"Memory pool end. "
@@ -552,9 +555,10 @@ class ModelRunner:
         # Sample the next tokens
         next_token_ids = self.sampler(
             logits_output,
-            sampling_info,
+            forward_batch.sampling_info,
             forward_batch.return_logprob,
             forward_batch.top_logprobs_nums,
+            forward_batch.token_ids_logprobs,
         )
         return next_token_ids
 
@@ -567,48 +571,91 @@ class ModelRunner:
             return False
         return rope_scaling.get("type", None) == "mrope"
 
+    def init_parameter_offloading(self):
+        """Initialize parameter offloading if enabled in server args."""
+        if not self.server_args.enable_cpu_offload:
+            logger.info("Parameter CPU offloading is disabled")
+            return
 
-@lru_cache()
-def import_model_classes():
-    model_arch_name_to_cls = {}
-    package_name = "scratchpad.nn.models"
-    package = importlib.import_module(package_name)
-    for _, name, ispkg in pkgutil.iter_modules(package.__path__, package_name + "."):
-        if not ispkg:
-            try:
-                module = importlib.import_module(name)
-            except Exception as e:
-                logger.warning(f"Ignore import error when loading {name}. " f"{e}")
-                continue
-            if hasattr(module, "EntryClass"):
-                entry = module.EntryClass
-                if isinstance(
-                    entry, list
-                ):  # To support multiple model classes in one module
-                    for tmp in entry:
-                        assert (
-                            tmp.__name__ not in model_arch_name_to_cls
-                        ), f"Duplicated model implementation for {tmp.__name__}"
-                        model_arch_name_to_cls[tmp.__name__] = tmp
-                else:
-                    assert (
-                        entry.__name__ not in model_arch_name_to_cls
-                    ), f"Duplicated model implementation for {entry.__name__}"
-                    model_arch_name_to_cls[entry.__name__] = entry
+        # Initialize the parameter offload manager
+        offload_ratio = self.server_args.cpu_offload_ratio
+        prefetch_window = self.server_args.prefetch_window
+        enable_prefetch = self.server_args.enable_prefetch
 
-    return model_arch_name_to_cls
-
-
-def load_model_cls_srt(model_arch: str) -> Optional[Type[nn.Module]]:
-    model_arch_name_to_cls = import_model_classes()
-
-    if model_arch not in model_arch_name_to_cls:
-        raise ValueError(
-            f"Unsupported architectures: {model_arch}. "
-            f"Supported list: {list(model_arch_name_to_cls.keys())}"
+        # Create offload manager
+        self.param_offload_manager = init_parameter_offload_manager(
+            enable_offload=True,
+            enable_prefetch=enable_prefetch,
+            cpu_offload_ratio=offload_ratio,
+            prefetch_window=prefetch_window,
+            strict_device_match=self.server_args.strict_device_match,
         )
-    return model_arch_name_to_cls[model_arch]
 
+        # Process specific layer module names if provided
+        offload_modules = []
+        if self.server_args.offload_layer_modules:
+            offload_modules = self.server_args.offload_layer_modules.split(",")
 
-# Monkey patch model loader
-setattr(ModelRegistry, "_try_load_model_cls", load_model_cls_srt)
+        # If specific modules are provided, register only those
+        if offload_modules:
+            for module_name in offload_modules:
+                for name, module in self.model.named_modules():
+                    if module_name in name:
+                        # Extract layer number if possible for priority
+                        layer_num = (
+                            0  # Default value in case we can't find a layer number
+                        )
+                        parts = name.split(".")
+                        for i, part in enumerate(parts):
+                            if part.isdigit():
+                                layer_num = int(part)
+                                break
+
+                        priority = (
+                            layer_num + 1
+                        )  # Higher layer number = higher priority
+                        self.param_offload_manager.register_module(
+                            name, module, priority=priority
+                        )
+        else:
+            # Register transformer layers by default
+            self.param_offload_manager.register_model_layers(self.model)
+
+        # Start the offloading process
+        self.param_offload_manager.start_offloading()
+
+        # Register forward hooks to dynamically load parameters when needed
+        self._register_offload_hooks()
+
+        logger.info(
+            f"Parameter offloading initialized with {offload_ratio*100:.1f}% parameters offloaded to CPU. "
+            f"Prefetching is {'enabled' if enable_prefetch else 'disabled'}"
+        )
+
+    def _register_offload_hooks(self):
+        """Register pre/post forward hooks for parameter offloading."""
+        if (
+            not hasattr(self, "param_offload_manager")
+            or self.param_offload_manager is None
+        ):
+            return
+
+        # Register pre-forward hooks for all offloaded modules
+        for name, module in self.model.named_modules():
+            if name in self.param_offload_manager.modules:
+                # Create hook that captures module name
+                def make_pre_hook(module_name):
+                    def hook(module, input):
+                        self.param_offload_manager.pre_forward_hook(module_name)
+
+                    return hook
+
+                def make_post_hook(module_name):
+                    def hook(module, input, output):
+                        self.param_offload_manager.post_forward_hook(module_name)
+
+                    return hook
+
+                # Register the hooks
+                module.register_forward_pre_hook(make_pre_hook(name))
+                module.register_forward_hook(make_post_hook(name))

@@ -1,13 +1,25 @@
+import os
 import ast
-import base64
 import math
+import base64
 import re
 from io import BytesIO
-import os
 import requests
 import numpy as np
 from PIL import Image
 from typing import Union
+from .logger import logger
+
+try:
+    from decord import VideoReader, cpu
+
+except ImportError:
+    logger.warning(
+        "decord is not installed. Video processing will be disabled. "
+        "Please install `decord` to enable video processing."
+    )
+    VideoReader = None
+    cpu = None
 
 
 def select_best_resolution(original_size, possible_resolutions):
@@ -416,3 +428,62 @@ def load_image(image_file: Union[str, bytes]):
         raise ValueError(f"Invalid image: {image}")
 
     return image, image_size
+
+
+def encode_video(video_path, frame_count_limit=None):
+    if not os.path.exists(video_path):
+        logger.error(f"Video {video_path} does not exist")
+        return []
+
+    if frame_count_limit == 0:
+        return []
+
+    def uniform_sample(l, n):
+        gap = len(l) / n
+        idxs = [int(i * gap + gap / 2) for i in range(n)]
+        return [l[i] for i in idxs]
+
+    vr = VideoReader(video_path, ctx=cpu(0))
+    sample_fps = round(vr.get_avg_fps() / 1)  # FPS
+    frame_indices = [i for i in range(0, len(vr), sample_fps)]
+    if frame_count_limit is not None and len(frame_indices) > frame_count_limit:
+        frame_indices = uniform_sample(frame_indices, frame_count_limit)
+
+    frames = vr.get_batch(frame_indices).asnumpy()
+    frames = [Image.fromarray(v.astype("uint8")) for v in frames]
+    return frames
+
+
+def load_audio(audio_file: str, sr: int = 16000, mono: bool = True) -> np.ndarray:
+    # Use soundfile here, since librosa use it under the hood,
+    # and librosa will not support audio loading in the future
+    import soundfile as sf
+    from scipy.signal import resample
+
+    # Load audio data
+    if isinstance(audio_file, bytes):
+        audio, original_sr = sf.read(BytesIO(audio_file))
+    elif audio_file.startswith("data:"):
+        audio_file = audio_file.split(",")[1]
+        audio, original_sr = sf.read(BytesIO(base64.b64decode(audio_file)))
+    elif audio_file.startswith("http://") or audio_file.startswith("https://"):
+        timeout = int(os.getenv("REQUEST_TIMEOUT", "5"))
+        response = requests.get(audio_file, stream=True, timeout=timeout)
+        audio_file = BytesIO(response.content)
+        response.close()
+        audio, original_sr = sf.read(audio_file)
+    elif isinstance(audio_file, str):
+        audio, original_sr = sf.read(audio_file)
+    else:
+        raise ValueError(f"Invalid audio format: {audio_file}")
+
+    # Resample audio if the original sample rate is different from the desired sample rate
+    if original_sr != sr:
+        num_samples = int(len(audio) * float(sr) / original_sr)
+        audio = resample(audio, num_samples)
+
+    # Convert to mono if requested and audio is stereo
+    if mono and len(audio.shape) > 1:
+        audio = np.mean(audio, axis=1)
+
+    return audio
