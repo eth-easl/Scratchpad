@@ -16,46 +16,66 @@ class BaseGrammarObject:
     pass
 
 
+INVALID_GRAMMAR_OBJ: BaseGrammarObject = BaseGrammarObject()
+
+
 class BaseGrammarBackend:
     def __init__(self):
         self.executor = ThreadPoolExecutor()
-        self.cache = {}
-        self.cache_lock = Lock()
+        self.cache: Dict[Tuple[str, str], CacheEntry] = {}
 
-    def init_value(self, key: Tuple[str, str]) -> BaseGrammarObject:
-        with self.cache_lock:
-            if key in self.cache:
-                cache_hit = True
-                entry = self.cache[key]
-            else:
-                cache_hit = False
-                entry = CacheEntry(None, Event())
-                self.cache[key] = entry
+    def _not_supported(self, key_type: str, key_string: str) -> None:
+        logger.warning(f"Skip unsupported {key_type=}, {key_string=}")
 
-        if cache_hit:
-            entry.event.wait()
+    def dispatch_fallback(
+        self, key_type: str, key_string: str
+    ) -> Optional[BaseGrammarObject]:
+        """
+        This function should not be reached in any case.
+        """
+        raise ValueError(f"Invalid key_type: {key_type}={key_string}")
+
+    def dispatch_json(self, key_string: str) -> Optional[BaseGrammarObject]:
+        return self._not_supported("json", key_string)
+
+    def dispatch_regex(self, key_string: str) -> Optional[BaseGrammarObject]:
+        return self._not_supported("regex", key_string)
+
+    def dispatch_ebnf(self, key_string: str) -> Optional[BaseGrammarObject]:
+        return self._not_supported("ebnf", key_string)
+
+    def dispatch_structural_tag(self, key_string: str) -> Optional[BaseGrammarObject]:
+        return self._not_supported("structural_tag", key_string)
+
+    def _init_value_dispatch(self, key: Tuple[str, str]) -> Optional[BaseGrammarObject]:
+        key_type, key_string = key
+        if key_type == "json":
+            return self.dispatch_json(key_string)
+        elif key_type == "regex":
+            return self.dispatch_regex(key_string)
+        elif key_type == "ebnf":
+            return self.dispatch_ebnf(key_string)
+        elif key_type == "structural_tag":
+            return self.dispatch_structural_tag(key_string)
+        elif key_type == "structural_pattern":
+            return self.dispatch_structural_pattern(key_string)
         else:
-            entry.value = self.init_value_impl(key)
-            entry.event.set()
-        return entry.value.copy() if entry.value else None
+            return self.dispatch_fallback(key_type, key_string)
 
-    def init_value_impl(self, key: Tuple[str, str]) -> BaseGrammarObject:
-        raise NotImplementedError()
+    def get_cached_or_future_value(
+        self, key: Tuple[str, str]
+    ) -> Optional[BaseGrammarObject]:
+        value = self.cache.get(key)
+        if value:
+            return value.copy(), True
+        value = self.executor.submit(self._init_value_dispatch, key)
+        return value, False
 
-    def get_cached_value(self, key: Tuple[str, str]) -> Optional[BaseGrammarObject]:
-        with self.cache_lock:
-            entry = self.cache.get(key)
-            if not entry or not entry.event.is_set():
-                return None
-            val = self.cache[key].value
-            return val.copy() if val else None
-
-    def get_future_value(self, key: Tuple[str, str]) -> Future:
-        return self.executor.submit(self.init_value, key)
+    def set_cache(self, key: Tuple[str, str], value: BaseGrammarObject):
+        self.cache[key] = value
 
     def reset(self):
-        with self.cache_lock:
-            self.cache.clear()
+        self.cache.clear()
 
 
 def create_grammar_backend(server_args: ServerArgs, tokenizer, vocab_size):

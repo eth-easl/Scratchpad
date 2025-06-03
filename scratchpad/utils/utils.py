@@ -475,3 +475,10 @@ def flatten_nested_list(nested_list):
 
 def get_compiler_backend() -> str:
     return "inductor"
+
+
+def get_device_core_count(device_id: int = 0) -> int:
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        return torch.cuda.get_device_properties(device_id).multi_processor_count
+
+    return 0

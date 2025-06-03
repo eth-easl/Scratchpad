@@ -60,7 +60,7 @@ class ForwardMode(IntEnum):
         return self.is_decode() or self.is_target_verify() or self.is_idle()
 
     def is_dummy_first(self):
-        return False
+        return self == 7
 
     def is_decode_or_idle(self):
         return self.is_decode() or self.is_idle()

@@ -16,7 +16,10 @@ from functools import cached_property
 from typing import List, Optional, TYPE_CHECKING, Union
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
-from scratchpad.constrained.base_backend import create_grammar_backend
+from scratchpad.constrained.base_backend import (
+    create_grammar_backend,
+    INVALID_GRAMMAR_OBJ,
+)
 from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
@@ -74,6 +77,7 @@ if TYPE_CHECKING:
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SP_IS_IN_CI", "false") == "true"
 TEST_RETRACT = os.getenv("SP_TEST_RETRACT", "false") == "true"
+GRAMMAR_TIMEOUT = float(os.environ.get("SP_GRAMMAR_TIMEOUT", 300))
 
 
 @dataclass
@@ -383,9 +387,10 @@ class Scheduler:
 
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
-
             if batch:
-                result = self.run_batch(batch)
+                result: EmbeddingBatchResult | GenerationBatchResult = self.run_batch(
+                    batch
+                )
                 self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
@@ -408,9 +413,10 @@ class Scheduler:
 
             if batch:
                 batch.launch_done = threading.Event()
-                result = self.run_batch(batch)
+                result: EmbeddingBatchResult | GenerationBatchResult = self.run_batch(
+                    batch
+                )
                 self.result_queue.append((batch.copy(), result))
-
                 if self.last_batch is None:
                     # Create a dummy first batch to start the pipeline for overlap schedule.
                     # It is now used for triggering the sampling_info_done event.
@@ -631,10 +637,15 @@ class Scheduler:
             elif req.sampling_params.structural_tag:
                 key = ("structural_tag", req.sampling_params.structural_tag)
 
-            req.grammar = self.grammar_backend.get_cached_value(key)
-            if not req.grammar:
-                req.grammar = self.grammar_backend.get_future_value(key)
+            value, cache_hit = self.grammar_backend.get_cached_or_future_value(key)
+            req.grammar = value
+            if not cache_hit:
+                req.grammar_key = key
                 add_to_grammar_queue = True
+            else:
+                if value is INVALID_GRAMMAR_OBJ:
+                    error_msg = f"invalid grammar object with cache hit for key={key}"
+                    req.set_finish_with_abort(error_msg)
 
         if add_to_grammar_queue:
             self.grammar_queue.append(req)
@@ -1038,6 +1049,7 @@ class Scheduler:
                 extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
                 bid=bid,
             )
+
         else:  # embedding or reward model
             model_worker_batch = batch.get_model_worker_batch()
             embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
@@ -1065,11 +1077,12 @@ class Scheduler:
                     batch.next_batch_sampling_info.update_regex_vocab_mask()
                     self.current_stream.synchronize()
                     batch.next_batch_sampling_info.sampling_info_done.set()
-
         elif batch.forward_mode.is_dummy_first():
             batch.next_batch_sampling_info.update_regex_vocab_mask()
             self.current_stream.synchronize()
             batch.next_batch_sampling_info.sampling_info_done.set()
+        else:
+            logger.error(f"Unexpected forward mode: {batch.forward_mode}")
 
         if self.return_health_check_ct:
             # Return some signal for the health check.
@@ -1612,26 +1625,67 @@ class Scheduler:
 
     def move_ready_grammar_requests(self):
         """Move requests whose grammar objects are ready from grammar_queue to waiting_queue."""
+
         num_ready_reqs = 0
+        num_timeout_reqs = 0
         for req in self.grammar_queue:
             try:
-                req.grammar = req.grammar.result(timeout=0.05)
+                if req.finished():  # It is aborted by AbortReq
+                    num_ready_reqs += 1
+                    continue
+                req.grammar = req.grammar.result(timeout=0.03)
+                self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                if req.grammar is INVALID_GRAMMAR_OBJ:
+                    req.set_finish_with_abort(
+                        f"Invalid grammar request: {req.grammar_key=}"
+                    )
                 num_ready_reqs += 1
             except futures._base.TimeoutError:
+                req.grammar_wait_ct += 1
+                # NOTE(lianmin): this timeout is the waiting time of the above line. It is
+                # not the waiting time from it enters the grammar queue.
+                if req.grammar_wait_ct > GRAMMAR_TIMEOUT / 0.03:
+                    num_timeout_reqs = 1
                 break
 
-        if self.tp_size > 1:
-            # Sync across TP ranks to make sure they have the same number of ready requests
-            tensor = torch.tensor(num_ready_reqs, dtype=torch.int32)
-            torch.distributed.all_reduce(
-                tensor, op=torch.distributed.ReduceOp.MAX, group=self.tp_cpu_group
-            )
-            num_ready_reqs_max = tensor.item()
-            for i in range(num_ready_reqs, num_ready_reqs_max):
-                self.grammar_queue[i].grammar = self.grammar_queue[i].grammar.result()
-            num_ready_reqs = num_ready_reqs_max
+        if self.server_args.enable_dp_attention:
+            tp_size = self.attn_tp_size
+            tp_group = self.attn_tp_cpu_group
+        else:
+            tp_size = self.tp_size
+            tp_group = self.tp_cpu_group
 
-        self.waiting_queue.extend(self.grammar_queue[:num_ready_reqs])
+        if tp_size > 1:
+            # Sync across TP ranks to make sure they have the same number of ready requests
+            tensor = torch.tensor([num_ready_reqs, num_timeout_reqs], dtype=torch.int32)
+            torch.distributed.all_reduce(
+                tensor, op=torch.distributed.ReduceOp.MAX, group=tp_group
+            )
+            num_ready_reqs_max, num_timeout_reqs_max = tensor.tolist()
+
+            for i in range(num_ready_reqs, num_ready_reqs_max):
+                req = self.grammar_queue[i]
+                if req.finished():  # It is aborted by AbortReq
+                    continue
+                req.grammar = req.grammar.result()
+                self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                if req.grammar is INVALID_GRAMMAR_OBJ:
+                    req.set_finish_with_abort(
+                        f"Invalid grammar request: {req.grammar_key=}"
+                    )
+        else:
+            num_ready_reqs_max = num_ready_reqs
+            num_timeout_reqs_max = num_timeout_reqs
+
+        for i in range(num_ready_reqs, num_ready_reqs + num_timeout_reqs_max):
+            req = self.grammar_queue[i]
+            req.grammar.cancel()
+            error_msg = f"Grammar preprocessing timed out for {req.grammar_key=}"
+            req.set_finish_with_abort(error_msg)
+            self.grammar_backend.set_cache(req.grammar_key, INVALID_GRAMMAR_OBJ)
+        num_ready_reqs = num_ready_reqs_max + num_timeout_reqs_max
+
+        self._extend_requests_to_queue(self.grammar_queue[:num_ready_reqs])
         self.grammar_queue = self.grammar_queue[num_ready_reqs:]
 
     def flush_cache_wrapped(self, recv_req: FlushCacheReq):
