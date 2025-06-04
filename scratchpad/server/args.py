@@ -181,15 +181,23 @@ class ServerArgs:
             )
         if self.cuda_graph_bs is None:
             self.cuda_graph_max_bs = 160
+
         if self.tool_call_parser == "auto":
-            self.tool_call_parser = (
-                "llama3" if "llama" in self.served_model_name.lower() else None
-            )
+            if "llama" in self.served_model_name.lower():
+                self.tool_call_parser = "llama3"
+            elif "qwen3" in self.served_model_name.lower():
+                self.tool_call_parser = "qwen3"
+            else:
+                self.tool_call_parser = None
             logger.info(f"Using tool_call_parser: {self.tool_call_parser}")
+
         if self.reasoning_parser == "auto":
-            self.reasoning_parser = (
-                "qwen3" if "qwen3" in self.served_model_name.lower() else None
-            )
+            if "qwen3" in self.served_model_name.lower():
+                self.reasoning_parser = "qwen3"
+            elif "llama" in self.served_model_name.lower():
+                self.reasoning_parser = "llama3"
+            else:
+                self.reasoning_parser = None
             logger.info(f"Using reasoning_parser: {self.reasoning_parser}")
 
     def update(self, args):
