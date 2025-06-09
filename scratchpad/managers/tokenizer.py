@@ -51,17 +51,35 @@ if TYPE_CHECKING:
 class ReqState:
     """Store the state a request."""
 
-    out_list: List
+    out_list: List[Dict[Any, Any]]
     finished: bool
     event: asyncio.Event
-    obj: Any
+    obj: Union[GenerateReqInput, EmbeddingReqInput]
 
     # For metrics
     created_time: float
-    first_token_time: Optional[float] = None
+    finished_time: float = 0.0
+    first_token_time: float = 0.0
+    last_time: float = 0.0
+    last_completion_tokens: int = 1
 
     # For streaming output
     last_output_offset: int = 0
+    # For incremental state update.
+    text: str = ""
+    output_ids: List[int] = dataclasses.field(default_factory=list)
+    input_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)
+    input_token_logprobs_idx: List[int] = dataclasses.field(default_factory=list)
+    output_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)
+    output_token_logprobs_idx: List[int] = dataclasses.field(default_factory=list)
+    input_top_logprobs_val: List[List[float]] = dataclasses.field(default_factory=list)
+    input_top_logprobs_idx: List[List[int]] = dataclasses.field(default_factory=list)
+    output_top_logprobs_val: List[List[float]] = dataclasses.field(default_factory=list)
+    output_top_logprobs_idx: List[List[int]] = dataclasses.field(default_factory=list)
+    input_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
+    input_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
+    output_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
+    output_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
 
 
 class TokenizerManager:
@@ -77,10 +95,16 @@ class TokenizerManager:
         # Init inter-process communication
         context = zmq.asyncio.Context(2)
         self.recv_from_detokenizer = get_zmq_socket(
-            context, zmq.PULL, server_args.tokenizer_ipc_name
+            context,
+            zmq.PULL,
+            server_args.tokenizer_ipc_name,
+            True,
         )
         self.send_to_scheduler = get_zmq_socket(
-            context, zmq.PUSH, server_args.scheduler_input_ipc_name
+            context,
+            zmq.PUSH,
+            server_args.scheduler_input_ipc_name,
+            True,
         )
 
         # Read model args
@@ -503,6 +527,7 @@ class TokenizerManager:
             recv_obj: Union[
                 BatchStrOut, BatchEmbeddingOut, BatchTokenIDOut, UpdateWeightReqOutput
             ] = await self.recv_from_detokenizer.recv_pyobj()
+
             if isinstance(recv_obj, UpdateWeightReqOutput):
                 if self.server_args.dp_size == 1:
                     self.model_update_result.set_result(recv_obj)
@@ -512,6 +537,7 @@ class TokenizerManager:
                     if len(self.model_update_tmp) == self.server_args.dp_size:
                         self.model_update_result.set_result(self.model_update_tmp)
                 continue
+
             elif isinstance(recv_obj, GetMemPoolSizeReqOutput):
                 if self.server_args.dp_size == 1:
                     self.mem_pool_size.set_result(recv_obj)
@@ -525,6 +551,7 @@ class TokenizerManager:
             assert isinstance(
                 recv_obj, (BatchStrOut, BatchEmbeddingOut, BatchTokenIDOut)
             ), f"Unexpected obj received: {type(recv_obj)}"
+
             for i, rid in enumerate(recv_obj.rids):
                 state = self.rid_to_state.get(rid, None)
                 if state is None:
@@ -537,13 +564,14 @@ class TokenizerManager:
                 if getattr(state.obj, "return_logprob", False):
                     self.convert_logprob_style(
                         meta_info,
+                        state,
                         state.obj.top_logprobs_num,
                         state.obj.token_ids_logprob,
-                        state.obj.return_text_in_logprobs,
+                        state.obj.return_text_in_logprobs
+                        and not self.server_args.skip_tokenizer_init,
                         recv_obj,
                         i,
                     )
-
                 if not isinstance(recv_obj, BatchEmbeddingOut):
                     meta_info.update(
                         {
@@ -551,7 +579,6 @@ class TokenizerManager:
                             "cached_tokens": recv_obj.cached_tokens[i],
                         }
                     )
-
                 if isinstance(recv_obj, BatchStrOut):
                     out_dict = {
                         "text": recv_obj.output_strs[i],
@@ -569,6 +596,7 @@ class TokenizerManager:
                         "embedding": recv_obj.embeddings[i],
                         "meta_info": meta_info,
                     }
+
                 state.out_list.append(out_dict)
                 state.finished = recv_obj.finished_reasons[i] is not None
                 state.event.set()
@@ -576,73 +604,124 @@ class TokenizerManager:
     def convert_logprob_style(
         self,
         meta_info: dict,
+        state: ReqState,
         top_logprobs_num: int,
         token_ids_logprob: List[int],
         return_text_in_logprobs: bool,
         recv_obj: BatchStrOut,
         recv_obj_index: int,
-    ):
+    ) -> None:
+        if len(recv_obj.input_token_logprobs_val) > 0:
+            state.input_token_logprobs_val.extend(
+                recv_obj.input_token_logprobs_val[recv_obj_index]
+            )
+            state.input_token_logprobs_idx.extend(
+                recv_obj.input_token_logprobs_idx[recv_obj_index]
+            )
+        state.output_token_logprobs_val.extend(
+            recv_obj.output_token_logprobs_val[recv_obj_index]
+        )
+        state.output_token_logprobs_idx.extend(
+            recv_obj.output_token_logprobs_idx[recv_obj_index]
+        )
         meta_info["input_token_logprobs"] = self.detokenize_logprob_tokens(
-            recv_obj.input_token_logprobs_val[recv_obj_index],
-            recv_obj.input_token_logprobs_idx[recv_obj_index],
+            state.input_token_logprobs_val,
+            state.input_token_logprobs_idx,
             return_text_in_logprobs,
         )
         meta_info["output_token_logprobs"] = self.detokenize_logprob_tokens(
-            recv_obj.output_token_logprobs_val[recv_obj_index],
-            recv_obj.output_token_logprobs_idx[recv_obj_index],
+            state.output_token_logprobs_val,
+            state.output_token_logprobs_idx,
             return_text_in_logprobs,
         )
 
         if top_logprobs_num > 0:
+            if len(recv_obj.input_top_logprobs_val) > 0:
+                state.input_top_logprobs_val.extend(
+                    recv_obj.input_top_logprobs_val[recv_obj_index]
+                )
+                state.input_top_logprobs_idx.extend(
+                    recv_obj.input_top_logprobs_idx[recv_obj_index]
+                )
+            state.output_top_logprobs_val.extend(
+                recv_obj.output_top_logprobs_val[recv_obj_index]
+            )
+            state.output_top_logprobs_idx.extend(
+                recv_obj.output_top_logprobs_idx[recv_obj_index]
+            )
             meta_info["input_top_logprobs"] = self.detokenize_top_logprobs_tokens(
-                recv_obj.input_top_logprobs_val[recv_obj_index],
-                recv_obj.input_top_logprobs_idx[recv_obj_index],
+                state.input_top_logprobs_val,
+                state.input_top_logprobs_idx,
                 return_text_in_logprobs,
             )
             meta_info["output_top_logprobs"] = self.detokenize_top_logprobs_tokens(
-                recv_obj.output_top_logprobs_val[recv_obj_index],
-                recv_obj.output_top_logprobs_idx[recv_obj_index],
+                state.output_top_logprobs_val,
+                state.output_top_logprobs_idx,
                 return_text_in_logprobs,
             )
 
         if token_ids_logprob is not None:
+            if len(recv_obj.input_token_ids_logprobs_val) > 0:
+                state.input_token_ids_logprobs_val.extend(
+                    recv_obj.input_token_ids_logprobs_val[recv_obj_index]
+                )
+                state.input_token_ids_logprobs_idx.extend(
+                    recv_obj.input_token_ids_logprobs_idx[recv_obj_index]
+                )
+            state.output_token_ids_logprobs_val.extend(
+                recv_obj.output_token_ids_logprobs_val[recv_obj_index]
+            )
+            state.output_token_ids_logprobs_idx.extend(
+                recv_obj.output_token_ids_logprobs_idx[recv_obj_index]
+            )
             meta_info["input_token_ids_logprobs"] = self.detokenize_top_logprobs_tokens(
-                recv_obj.input_token_ids_logprobs_val[recv_obj_index],
-                recv_obj.input_token_ids_logprobs_idx[recv_obj_index],
+                state.input_token_ids_logprobs_val,
+                state.input_token_ids_logprobs_idx,
                 return_text_in_logprobs,
             )
             meta_info[
                 "output_token_ids_logprobs"
             ] = self.detokenize_top_logprobs_tokens(
-                recv_obj.output_token_ids_logprobs_val[recv_obj_index],
-                recv_obj.output_token_ids_logprobs_idx[recv_obj_index],
+                state.output_token_ids_logprobs_val,
+                state.output_token_ids_logprobs_idx,
                 return_text_in_logprobs,
             )
 
     def detokenize_logprob_tokens(
-        self, token_logprobs: List[Tuple[float, int]], decode_to_text: bool
+        self,
+        token_logprobs_val: List[float],
+        token_logprobs_idx: List[int],
+        decode_to_text: bool,
     ):
-        # TODO(lianmin): This should run on DetokenizerManager
         if not decode_to_text:
-            return [(logprob, token_id, None) for logprob, token_id in token_logprobs]
+            return [
+                (logprob, token_id, None)
+                for logprob, token_id in zip(token_logprobs_val, token_logprobs_idx)
+            ]
+        else:
+            assert self.tokenizer is not None
+            token_texts = self.tokenizer.batch_decode(token_logprobs_idx)
+            return list(zip(token_logprobs_val, token_logprobs_idx, token_texts))
 
-        assert self.tokenizer is not None
-        token_ids = [tid for _, tid in token_logprobs]
-        token_texts = self.tokenizer.batch_decode(token_ids)
-        return [
-            (logprob, token_id, token_text)
-            for (logprob, token_id), token_text in zip(token_logprobs, token_texts)
-        ]
-
-    def detokenize_top_logprobs_tokens(self, top_logprobs, decode_to_text: bool):
+    def detokenize_top_logprobs_tokens(
+        self,
+        token_logprobs_val: List[float],
+        token_logprobs_idx: List[int],
+        decode_to_text: bool,
+    ):
         # TODO: The current implementation only batches the detokenization for top-k tokens per single position.
         # We should batch all top-k tokens in all positions.
-        for i, token_top_logprobs in enumerate(top_logprobs):
-            if token_top_logprobs:
-                top_logprobs[i] = self.detokenize_logprob_tokens(
-                    token_top_logprobs, decode_to_text
+        ret = []
+        for i in range(len(token_logprobs_val)):
+            if token_logprobs_val[i]:
+                ret.append(
+                    self.detokenize_logprob_tokens(
+                        token_logprobs_val[i], token_logprobs_idx[i], decode_to_text
+                    )
                 )
-        return top_logprobs
+            else:
+                ret.append(None)
+        return ret
 
 
 class SignalHandler:

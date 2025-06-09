@@ -389,7 +389,9 @@ def enable_show_time_cost():
     show_time_cost = True
 
 
-def get_zmq_socket(context: zmq.Context, socket_type: zmq.SocketType, endpoint: str):
+def get_zmq_socket(
+    context: zmq.Context, socket_type: zmq.SocketType, endpoint: str, bind: bool
+):
     mem = psutil.virtual_memory()
     total_mem = mem.total / 1024**3
     available_mem = mem.available / 1024**3
@@ -399,16 +401,31 @@ def get_zmq_socket(context: zmq.Context, socket_type: zmq.SocketType, endpoint: 
         buf_size = -1
 
     socket = context.socket(socket_type)
-    if socket_type == zmq.PUSH:
+    if endpoint.find("[") != -1:
+        socket.setsockopt(zmq.IPV6, 1)
+
+    def set_send_opt():
         socket.setsockopt(zmq.SNDHWM, 0)
         socket.setsockopt(zmq.SNDBUF, buf_size)
-        socket.connect(f"ipc://{endpoint}")
-    elif socket_type == zmq.PULL:
+
+    def set_recv_opt():
         socket.setsockopt(zmq.RCVHWM, 0)
         socket.setsockopt(zmq.RCVBUF, buf_size)
-        socket.bind(f"ipc://{endpoint}")
+
+    if socket_type == zmq.PUSH:
+        set_send_opt()
+    elif socket_type == zmq.PULL:
+        set_recv_opt()
+    elif socket_type == zmq.DEALER:
+        set_send_opt()
+        set_recv_opt()
     else:
         raise ValueError(f"Unsupported socket type: {socket_type}")
+
+    if bind:
+        socket.bind(endpoint)
+    else:
+        socket.connect(endpoint)
 
     return socket
 

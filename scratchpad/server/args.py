@@ -157,15 +157,19 @@ class ServerArgs:
         if self.sampling_backend is None:
             self.sampling_backend = "flashinfer"
         if self.random_seed is None:
-            self.random_seed = 0  # default seed
+            self.random_seed = 0
         if self.scheduler_input_ipc_name == "auto":
-            self.scheduler_input_ipc_name = tempfile.NamedTemporaryFile(
-                delete=False
-            ).name
+            self.scheduler_input_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         if self.tokenizer_ipc_name == "auto":
-            self.tokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+            self.tokenizer_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         if self.detokenizer_ipc_name == "auto":
-            self.detokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+            self.detokenizer_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         try:
             self.json_model_override_args = json.loads(self.model_override_args)
         except Exception as e:
@@ -194,8 +198,6 @@ class ServerArgs:
         if self.reasoning_parser == "auto":
             if "qwen3" in self.served_model_name.lower():
                 self.reasoning_parser = "qwen3"
-            elif "llama" in self.served_model_name.lower():
-                self.reasoning_parser = "llama3"
             else:
                 self.reasoning_parser = None
             logger.info(f"Using reasoning_parser: {self.reasoning_parser}")
