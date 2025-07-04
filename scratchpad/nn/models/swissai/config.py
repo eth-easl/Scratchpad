@@ -1,6 +1,6 @@
 # copied from https://github.com/swiss-ai/transformers/blob/1e0881a41d4fda838ece30f730130ddf10ba0913/src/transformers/models/swissai/configuration_swissai.py
 from transformers import PretrainedConfig, AutoConfig
-
+from ...modeling_rope_utils import rope_config_validation
 
 class SwissAIConfig(PretrainedConfig):
     r"""
@@ -128,34 +128,12 @@ class SwissAIConfig(PretrainedConfig):
         self.use_cache = use_cache
         self.rope_theta = rope_theta
         self.rope_scaling = rope_scaling
-        self._rope_scaling_validation()
+        if self.rope_scaling is not None and "type" in self.rope_scaling:
+             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
+        rope_config_validation(self)
         self.attention_bias = attention_bias
         self.attention_dropout = attention_dropout
 
         self.rms_norm_eps = rms_norm_eps
 
-    def _rope_scaling_validation(self):
-        """
-        Validate the `rope_scaling` configuration.
-        """
-        if self.rope_scaling is None:
-            return
-
-        if not isinstance(self.rope_scaling, dict) or len(self.rope_scaling) != 2:
-            raise ValueError(
-                f"`rope_scaling` must be a dictionary with two fields, `type` and `factor`, got {self.rope_scaling}"
-            )
-        rope_scaling_type = self.rope_scaling.get("type", None)
-        rope_scaling_factor = self.rope_scaling.get("factor", None)
-        if rope_scaling_type is None or rope_scaling_type not in ["linear", "dynamic"]:
-            raise ValueError(
-                f"`rope_scaling`'s type field must be one of ['linear', 'dynamic'], got {rope_scaling_type}"
-            )
-        if (
-            rope_scaling_factor is None
-            or not isinstance(rope_scaling_factor, float)
-            or rope_scaling_factor <= 1.0
-        ):
-            raise ValueError(
-                f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}"
-            )
+__all__ = ["SwissAIConfig"]
