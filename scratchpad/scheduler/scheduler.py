@@ -16,8 +16,10 @@ from functools import cached_property
 from typing import List, Optional, TYPE_CHECKING, Union
 from types import SimpleNamespace
 from scratchpad.config.model_config import ModelConfig
-from scratchpad.constrained.base_backend import create_grammar_backend
-from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
+from scratchpad.constrained.base_backend import (
+    create_grammar_backend,
+    INVALID_GRAMMAR_OBJ,
+)
 from scratchpad.scheduler.schedule_batch import (
     FINISH_ABORT,
     BaseFinishReason,
@@ -70,15 +72,17 @@ from .utils import validate_input_length
 
 if TYPE_CHECKING:
     from scratchpad.server.metric_types import StatLoggerBase
+    from scratchpad.nn.layers.logits_processor import LogitsProcessorOutput
 
 # Crash on warning if we are running CI tests
 crash_on_warning = os.getenv("SP_IS_IN_CI", "false") == "true"
 TEST_RETRACT = os.getenv("SP_TEST_RETRACT", "false") == "true"
+GRAMMAR_TIMEOUT = float(os.environ.get("SP_GRAMMAR_TIMEOUT", 300))
 
 
 @dataclass
 class GenerationBatchResult:
-    logits_output: LogitsProcessorOutput
+    logits_output: "LogitsProcessorOutput"
     next_token_ids: List[int]
     extend_input_len_per_req: List[int]
     extend_logprob_start_len_per_req: List[int]
@@ -127,18 +131,24 @@ class Scheduler:
 
         if self.tp_rank == 0:
             self.recv_from_tokenizer = get_zmq_socket(
-                context, zmq.PULL, server_args.scheduler_input_ipc_name
+                context, zmq.PULL, server_args.scheduler_input_ipc_name, False
             )
 
             if server_args.skip_tokenizer_init:
                 # Directly send to the tokenizer/api
                 self.send_to_detokenizer = get_zmq_socket(
-                    context, zmq.PUSH, server_args.tokenizer_ipc_name
+                    context,
+                    zmq.PUSH,
+                    server_args.tokenizer_ipc_name,
+                    False,
                 )
             else:
                 # Send to the detokenizer
                 self.send_to_detokenizer = get_zmq_socket(
-                    context, zmq.PUSH, server_args.detokenizer_ipc_name
+                    context,
+                    zmq.PUSH,
+                    server_args.detokenizer_ipc_name,
+                    False,
                 )
         else:
             self.recv_from_tokenizer = None
@@ -383,9 +393,10 @@ class Scheduler:
 
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
-
             if batch:
-                result = self.run_batch(batch)
+                result: EmbeddingBatchResult | GenerationBatchResult = self.run_batch(
+                    batch
+                )
                 self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
@@ -408,9 +419,10 @@ class Scheduler:
 
             if batch:
                 batch.launch_done = threading.Event()
-                result = self.run_batch(batch)
+                result: EmbeddingBatchResult | GenerationBatchResult = self.run_batch(
+                    batch
+                )
                 self.result_queue.append((batch.copy(), result))
-
                 if self.last_batch is None:
                     # Create a dummy first batch to start the pipeline for overlap schedule.
                     # It is now used for triggering the sampling_info_done event.
@@ -589,7 +601,6 @@ class Scheduler:
 
         # Copy more attributes
         if recv_req.logprob_start_len == -1 or not recv_req.return_logprob:
-            # By default, only return the logprobs for output tokens
             req.logprob_start_len = len(req.origin_input_ids) - 1
         else:
             req.logprob_start_len = recv_req.logprob_start_len
@@ -631,10 +642,15 @@ class Scheduler:
             elif req.sampling_params.structural_tag:
                 key = ("structural_tag", req.sampling_params.structural_tag)
 
-            req.grammar = self.grammar_backend.get_cached_value(key)
-            if not req.grammar:
-                req.grammar = self.grammar_backend.get_future_value(key)
+            value, cache_hit = self.grammar_backend.get_cached_or_future_value(key)
+            req.grammar = value
+            if not cache_hit:
+                req.grammar_key = key
                 add_to_grammar_queue = True
+            else:
+                if value is INVALID_GRAMMAR_OBJ:
+                    error_msg = f"invalid grammar object with cache hit for key={key}"
+                    req.set_finish_with_abort(error_msg)
 
         if add_to_grammar_queue:
             self.grammar_queue.append(req)
@@ -1038,6 +1054,7 @@ class Scheduler:
                 extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
                 bid=bid,
             )
+
         else:  # embedding or reward model
             model_worker_batch = batch.get_model_worker_batch()
             embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
@@ -1065,11 +1082,12 @@ class Scheduler:
                     batch.next_batch_sampling_info.update_regex_vocab_mask()
                     self.current_stream.synchronize()
                     batch.next_batch_sampling_info.sampling_info_done.set()
-
         elif batch.forward_mode.is_dummy_first():
             batch.next_batch_sampling_info.update_regex_vocab_mask()
             self.current_stream.synchronize()
             batch.next_batch_sampling_info.sampling_info_done.set()
+        else:
+            logger.error(f"Unexpected forward mode: {batch.forward_mode}")
 
         if self.return_health_check_ct:
             # Return some signal for the health check.
@@ -1237,6 +1255,171 @@ class Scheduler:
                     req.is_chunked -= 1
         self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 
+    def add_input_logprob_return_values(
+        self: "Scheduler",
+        i: int,
+        req: Req,
+        output: "LogitsProcessorOutput",
+        logprob_pt: int,
+        num_input_logprobs: int,
+        last_prefill_chunk: bool,  # If True, it means prefill is finished.
+    ):
+        """Incrementally add input logprobs to `req`.
+
+        Args:
+            i: The request index in a batch.
+            req: The request. Input logprobs inside req are modified as a
+                consequence of the API
+            fill_ids: The prefill ids processed.
+            output: Logit processor output that's used to compute input logprobs
+            last_prefill_chunk: True if it is the last prefill (when chunked).
+                Some of input logprob operation should only happen at the last
+                prefill (e.g., computing input token logprobs).
+        """
+        assert output.input_token_logprobs is not None
+        if req.input_token_logprobs is None:
+            req.input_token_logprobs = []
+        if req.temp_input_top_logprobs_val is None:
+            req.temp_input_top_logprobs_val = []
+        if req.temp_input_top_logprobs_idx is None:
+            req.temp_input_top_logprobs_idx = []
+        if req.temp_input_token_ids_logprobs_val is None:
+            req.temp_input_token_ids_logprobs_val = []
+        if req.temp_input_token_ids_logprobs_idx is None:
+            req.temp_input_token_ids_logprobs_idx = []
+
+        if req.input_token_logprobs_val is not None:
+            # The input logprob has been already computed. It only happens
+            # upon retract.
+            if req.top_logprobs_num > 0:
+                assert req.input_token_logprobs_val is not None
+            return
+
+        # Important for the performance.
+        assert isinstance(output.input_token_logprobs, tuple)
+        input_token_logprobs: Tuple[int] = output.input_token_logprobs
+        input_token_logprobs = input_token_logprobs[
+            logprob_pt : logprob_pt + num_input_logprobs
+        ]
+        req.input_token_logprobs.extend(input_token_logprobs)
+
+        if req.top_logprobs_num > 0:
+            req.temp_input_top_logprobs_val.append(output.input_top_logprobs_val[i])
+            req.temp_input_top_logprobs_idx.append(output.input_top_logprobs_idx[i])
+
+        if req.token_ids_logprob is not None:
+            req.temp_input_token_ids_logprobs_val.append(
+                output.input_token_ids_logprobs_val[i]
+            )
+            req.temp_input_token_ids_logprobs_idx.append(
+                output.input_token_ids_logprobs_idx[i]
+            )
+
+        if last_prefill_chunk:
+            input_token_logprobs = req.input_token_logprobs
+            req.input_token_logprobs = None
+            assert req.input_token_logprobs_val is None
+            assert req.input_token_logprobs_idx is None
+            assert req.input_top_logprobs_val is None
+            assert req.input_top_logprobs_idx is None
+
+            # Compute input_token_logprobs_val
+            # Always pad the first one with None.
+            req.input_token_logprobs_val = [None]
+            req.input_token_logprobs_val.extend(input_token_logprobs)
+            # The last input logprob is for sampling, so just pop it out.
+            req.input_token_logprobs_val.pop()
+
+            # Compute input_token_logprobs_idx
+            input_token_logprobs_idx = req.origin_input_ids[req.logprob_start_len :]
+            # Clip the padded hash values from image tokens.
+            # Otherwise, it will lead to detokenization errors.
+            input_token_logprobs_idx = [
+                x if x < self.model_config.vocab_size - 1 else 0
+                for x in input_token_logprobs_idx
+            ]
+            req.input_token_logprobs_idx = input_token_logprobs_idx
+
+            if req.top_logprobs_num > 0:
+                req.input_top_logprobs_val = [None]
+                req.input_top_logprobs_idx = [None]
+                assert len(req.temp_input_token_ids_logprobs_val) == len(
+                    req.temp_input_token_ids_logprobs_idx
+                )
+                for val, idx in zip(
+                    req.temp_input_top_logprobs_val,
+                    req.temp_input_top_logprobs_idx,
+                    strict=True,
+                ):
+                    req.input_top_logprobs_val.extend(val)
+                    req.input_top_logprobs_idx.extend(idx)
+
+                # Last token is a sample token.
+                req.input_top_logprobs_val.pop()
+                req.input_top_logprobs_idx.pop()
+                req.temp_input_top_logprobs_idx = None
+                req.temp_input_top_logprobs_val = None
+
+            if req.token_ids_logprob is not None:
+                req.input_token_ids_logprobs_val = [None]
+                req.input_token_ids_logprobs_idx = [None]
+
+                for val, idx in zip(
+                    req.temp_input_token_ids_logprobs_val,
+                    req.temp_input_token_ids_logprobs_idx,
+                    strict=True,
+                ):
+                    req.input_token_ids_logprobs_val.extend(val)
+                    req.input_token_ids_logprobs_idx.extend(idx)
+
+                # Last token is a sample token.
+                req.input_token_ids_logprobs_val.pop()
+                req.input_token_ids_logprobs_idx.pop()
+                req.temp_input_token_ids_logprobs_idx = None
+                req.temp_input_token_ids_logprobs_val = None
+
+            if req.return_logprob:
+                relevant_tokens_len = len(req.origin_input_ids) - req.logprob_start_len
+                assert len(req.input_token_logprobs_val) == relevant_tokens_len
+                assert len(req.input_token_logprobs_idx) == relevant_tokens_len
+                if req.top_logprobs_num > 0:
+                    assert len(req.input_top_logprobs_val) == relevant_tokens_len
+                    assert len(req.input_top_logprobs_idx) == relevant_tokens_len
+                if req.token_ids_logprob is not None:
+                    assert len(req.input_token_ids_logprobs_val) == relevant_tokens_len
+                    assert len(req.input_token_ids_logprobs_idx) == relevant_tokens_len
+
+    def add_logprob_return_values(
+        self: "Scheduler",
+        i: int,
+        req: Req,
+        pt: int,
+        next_token_ids: List[int],
+        num_input_logprobs: int,
+        output: "LogitsProcessorOutput",
+    ):
+        """Attach logprobs to the return values."""
+        req.output_token_logprobs_val.append(output.next_token_logprobs[i])
+        req.output_token_logprobs_idx.append(next_token_ids[i])
+
+        self.add_input_logprob_return_values(
+            i, req, output, pt, num_input_logprobs, last_prefill_chunk=True
+        )
+
+        if req.top_logprobs_num > 0:
+            req.output_top_logprobs_val.append(output.next_token_top_logprobs_val[i])
+            req.output_top_logprobs_idx.append(output.next_token_top_logprobs_idx[i])
+
+        if req.token_ids_logprob is not None:
+            req.output_token_ids_logprobs_val.append(
+                output.next_token_token_ids_logprobs_val[i]
+            )
+            req.output_token_ids_logprobs_idx.append(
+                output.next_token_token_ids_logprobs_idx[i]
+            )
+
+        return num_input_logprobs
+
     def process_batch_result_decode(
         self,
         batch: ScheduleBatch,
@@ -1335,79 +1518,6 @@ class Scheduler:
             and self.forward_ct_decode % self.server_args.decode_log_interval == 0
         ):
             self.log_decode_stats()
-
-    def add_logprob_return_values(
-        self,
-        i: int,
-        req: Req,
-        pt: int,
-        next_token_ids: List[int],
-        output: LogitsProcessorOutput,
-    ):
-        """Attach logprobs to the return values."""
-        req.output_token_logprobs.append(
-            (output.next_token_logprobs[i], next_token_ids[i])
-        )
-
-        # If logprob_start_len > 0, then first logprob_start_len prompt tokens will be ignored.
-        num_input_logprobs = req.extend_input_len - req.extend_logprob_start_len
-
-        if req.normalized_prompt_logprob is None:
-            req.normalized_prompt_logprob = output.normalized_prompt_logprobs[i]
-
-        if req.input_token_logprobs is None:
-            input_token_logprobs = output.input_token_logprobs[
-                pt : pt + num_input_logprobs - 1 - req.last_update_decode_tokens
-            ]
-            input_token_ids = req.fill_ids[
-                len(req.fill_ids)
-                - num_input_logprobs
-                + 1 : len(req.fill_ids)
-                - req.last_update_decode_tokens
-            ]
-            req.input_token_logprobs = list(zip(input_token_logprobs, input_token_ids))
-
-            if (
-                req.logprob_start_len == 0
-            ):  # The first token does not have logprob, pad it.
-                req.input_token_logprobs = [
-                    (None, req.fill_ids[0])
-                ] + req.input_token_logprobs
-
-        if req.last_update_decode_tokens != 0:
-            # Some decode tokens are re-computed in an extend batch
-            req.output_token_logprobs.extend(
-                list(
-                    zip(
-                        output.input_token_logprobs[
-                            pt
-                            + num_input_logprobs
-                            - 1
-                            - req.last_update_decode_tokens : pt
-                            + num_input_logprobs
-                            - 1
-                        ],
-                        req.fill_ids[
-                            len(req.fill_ids)
-                            - req.last_update_decode_tokens : len(req.fill_ids)
-                        ],
-                    )
-                )
-            )
-
-        if req.top_logprobs_num > 0:
-            if req.input_top_logprobs is None:
-                req.input_top_logprobs = output.input_top_logprobs[i]
-                if req.logprob_start_len == 0:
-                    req.input_top_logprobs = [None] + req.input_top_logprobs
-
-            if req.last_update_decode_tokens != 0:
-                req.output_top_logprobs.extend(
-                    output.input_top_logprobs[i][-req.last_update_decode_tokens :]
-                )
-            req.output_top_logprobs.append(output.output_top_logprobs[i])
-
-        return num_input_logprobs
 
     def stream_output(
         self, reqs: List[Req], return_logprob: bool, skip_req: Optional[Req] = None
@@ -1612,26 +1722,67 @@ class Scheduler:
 
     def move_ready_grammar_requests(self):
         """Move requests whose grammar objects are ready from grammar_queue to waiting_queue."""
+
         num_ready_reqs = 0
+        num_timeout_reqs = 0
         for req in self.grammar_queue:
             try:
-                req.grammar = req.grammar.result(timeout=0.05)
+                if req.finished():  # It is aborted by AbortReq
+                    num_ready_reqs += 1
+                    continue
+                req.grammar = req.grammar.result(timeout=0.03)
+                self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                if req.grammar is INVALID_GRAMMAR_OBJ:
+                    req.set_finish_with_abort(
+                        f"Invalid grammar request: {req.grammar_key=}"
+                    )
                 num_ready_reqs += 1
             except futures._base.TimeoutError:
+                req.grammar_wait_ct += 1
+                # NOTE(lianmin): this timeout is the waiting time of the above line. It is
+                # not the waiting time from it enters the grammar queue.
+                if req.grammar_wait_ct > GRAMMAR_TIMEOUT / 0.03:
+                    num_timeout_reqs = 1
                 break
 
-        if self.tp_size > 1:
-            # Sync across TP ranks to make sure they have the same number of ready requests
-            tensor = torch.tensor(num_ready_reqs, dtype=torch.int32)
-            torch.distributed.all_reduce(
-                tensor, op=torch.distributed.ReduceOp.MAX, group=self.tp_cpu_group
-            )
-            num_ready_reqs_max = tensor.item()
-            for i in range(num_ready_reqs, num_ready_reqs_max):
-                self.grammar_queue[i].grammar = self.grammar_queue[i].grammar.result()
-            num_ready_reqs = num_ready_reqs_max
+        if self.server_args.enable_dp_attention:
+            tp_size = self.attn_tp_size
+            tp_group = self.attn_tp_cpu_group
+        else:
+            tp_size = self.tp_size
+            tp_group = self.tp_cpu_group
 
-        self.waiting_queue.extend(self.grammar_queue[:num_ready_reqs])
+        if tp_size > 1:
+            # Sync across TP ranks to make sure they have the same number of ready requests
+            tensor = torch.tensor([num_ready_reqs, num_timeout_reqs], dtype=torch.int32)
+            torch.distributed.all_reduce(
+                tensor, op=torch.distributed.ReduceOp.MAX, group=tp_group
+            )
+            num_ready_reqs_max, num_timeout_reqs_max = tensor.tolist()
+
+            for i in range(num_ready_reqs, num_ready_reqs_max):
+                req = self.grammar_queue[i]
+                if req.finished():  # It is aborted by AbortReq
+                    continue
+                req.grammar = req.grammar.result()
+                self.grammar_backend.set_cache(req.grammar_key, req.grammar.copy())
+                if req.grammar is INVALID_GRAMMAR_OBJ:
+                    req.set_finish_with_abort(
+                        f"Invalid grammar request: {req.grammar_key=}"
+                    )
+        else:
+            num_ready_reqs_max = num_ready_reqs
+            num_timeout_reqs_max = num_timeout_reqs
+
+        for i in range(num_ready_reqs, num_ready_reqs + num_timeout_reqs_max):
+            req = self.grammar_queue[i]
+            req.grammar.cancel()
+            error_msg = f"Grammar preprocessing timed out for {req.grammar_key=}"
+            req.set_finish_with_abort(error_msg)
+            self.grammar_backend.set_cache(req.grammar_key, INVALID_GRAMMAR_OBJ)
+        num_ready_reqs = num_ready_reqs_max + num_timeout_reqs_max
+
+        self._extend_requests_to_queue(self.grammar_queue[:num_ready_reqs])
         self.grammar_queue = self.grammar_queue[num_ready_reqs:]
 
     def flush_cache_wrapped(self, recv_req: FlushCacheReq):
@@ -1728,6 +1879,6 @@ def run_scheduler_process(
         traceback.print_exc()
         logger.info(f"Scheduler process exited: {e}")
     except Exception:
-        msg = get_exception_traceback()
+        msg: str = get_exception_traceback()
         logger.error(msg)
         kill_parent_process()

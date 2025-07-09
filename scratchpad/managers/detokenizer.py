@@ -50,10 +50,10 @@ class DetokenizerManager:
         # Init inter-process communication
         context = zmq.Context(2)
         self.recv_from_scheduler = get_zmq_socket(
-            context, zmq.PULL, server_args.detokenizer_ipc_name
+            context, zmq.PULL, server_args.detokenizer_ipc_name, True
         )
         self.send_to_tokenizer = get_zmq_socket(
-            context, zmq.PUSH, server_args.tokenizer_ipc_name
+            context, zmq.PUSH, server_args.tokenizer_ipc_name, False
         )
 
         if server_args.skip_tokenizer_init:
@@ -228,6 +228,6 @@ def run_detokenizer_process(
         manager = DetokenizerManager(server_args)
         manager.event_loop()
     except Exception:
-        msg = get_exception_traceback()
+        msg: str = get_exception_traceback()
         logger.error(msg)
         kill_parent_process()

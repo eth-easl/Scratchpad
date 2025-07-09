@@ -25,5 +25,5 @@ nvidia-cuda-nvrtc-cu12
 cuda-python
 setproctitle
 soundfile
-triton==3.0.0
 partial_json_parser
+httpx

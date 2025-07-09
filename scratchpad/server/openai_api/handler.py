@@ -994,7 +994,6 @@ def v1_chat_generate_response(
     reasoning_parser=None,
 ):
     choices = []
-
     for idx, ret_item in enumerate(ret):
         logprobs = False
         if isinstance(request, list) and request[idx].logprobs:
@@ -1004,7 +1003,9 @@ def v1_chat_generate_response(
         if logprobs:
             logprobs = to_openai_style_logprobs(
                 output_token_logprobs=ret_item["meta_info"]["output_token_logprobs"],
-                output_top_logprobs=ret_item["meta_info"]["output_top_logprobs"],
+                output_top_logprobs=ret_item["meta_info"].get(
+                    "output_top_logprobs", None
+                ),
             )
             token_logprobs = []
             for token_idx, (token, logprob) in enumerate(
@@ -1032,8 +1033,7 @@ def v1_chat_generate_response(
                         top_logprobs=top_logprobs,
                     )
                 )
-
-            choice_logprobs = ChoiceLogprobs(content=token_logprobs)
+            choice_logprobs: ChoiceLogprobs = ChoiceLogprobs(content=token_logprobs)
         else:
             choice_logprobs = None
 

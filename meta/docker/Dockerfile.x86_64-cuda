@@ -10,7 +10,7 @@ RUN apt update && apt upgrade -y
 WORKDIR /scratchpad
 
 COPY . .
-COPY --from=ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86 /wheels /wheels
+COPY --from=ghcr.io/xiaozheyao/sp-builder:v0.1.6-x86_64 /wheels /wheels
 
 RUN pip install --no-cache-dir /wheels/flashinfer_python-0.2.3-cp38-abi3-linux_x86_64.whl && \
     pip install --no-cache-dir /wheels/triteia-0.1.0-cp310-cp310-linux_x86_64.whl

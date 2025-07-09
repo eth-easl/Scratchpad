@@ -13,6 +13,7 @@ from tools.benchmark.common import (
     RequestFuncOutput,
     RequestFuncInput,
     calculate_metrics,
+    async_request_openai_chat_completions,
 )
 from tools.benchmark.report import print_benchmark, write_benchmark
 
@@ -63,7 +64,6 @@ async def run_benchmark(
     goodput_config_dict: Dict[str, float],
     max_concurrency: Optional[int] = None,
 ):
-    # system_info = await async_request_sp_sysinfo(args.endpoint)
     pbar = tqdm(total=len(input_requests))
     tasks: List[asyncio.Task] = []
     semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
@@ -133,7 +133,8 @@ def benchmark(args):
     )
     for req in bench_requests:
         req.model = args.model
-    request_func = async_request_openai_completions
+    # request_func = async_request_openai_completions
+    request_func = async_request_openai_chat_completions
     gootput_config_dict = check_goodput_args(args)
     # check if server is ready
     server_ready = False

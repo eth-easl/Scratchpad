@@ -27,7 +27,7 @@ class ServerArgs:
     schedule_policy: str = "lpm"
     random_seed: Optional[int] = None
     stream_interval: int = 1
-    watchdog_timeout: float = 20
+    watchdog_timeout: float = 120
     decode_log_interval: int = 10
     # memory and scheduling
     chunked_prefill_size: int = 8192
@@ -157,15 +157,19 @@ class ServerArgs:
         if self.sampling_backend is None:
             self.sampling_backend = "flashinfer"
         if self.random_seed is None:
-            self.random_seed = 0  # default seed
+            self.random_seed = 0
         if self.scheduler_input_ipc_name == "auto":
-            self.scheduler_input_ipc_name = tempfile.NamedTemporaryFile(
-                delete=False
-            ).name
+            self.scheduler_input_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         if self.tokenizer_ipc_name == "auto":
-            self.tokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+            self.tokenizer_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         if self.detokenizer_ipc_name == "auto":
-            self.detokenizer_ipc_name = tempfile.NamedTemporaryFile(delete=False).name
+            self.detokenizer_ipc_name = (
+                f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}"
+            )
         try:
             self.json_model_override_args = json.loads(self.model_override_args)
         except Exception as e:
@@ -181,15 +185,21 @@ class ServerArgs:
             )
         if self.cuda_graph_bs is None:
             self.cuda_graph_max_bs = 160
+
         if self.tool_call_parser == "auto":
-            self.tool_call_parser = (
-                "llama3" if "llama" in self.served_model_name.lower() else None
-            )
+            if "llama" in self.served_model_name.lower():
+                self.tool_call_parser = "llama3"
+            elif "qwen3" in self.served_model_name.lower():
+                self.tool_call_parser = "qwen3"
+            else:
+                self.tool_call_parser = None
             logger.info(f"Using tool_call_parser: {self.tool_call_parser}")
+
         if self.reasoning_parser == "auto":
-            self.reasoning_parser = (
-                "qwen3" if "qwen3" in self.served_model_name.lower() else None
-            )
+            if "qwen3" in self.served_model_name.lower():
+                self.reasoning_parser = "qwen3"
+            else:
+                self.reasoning_parser = None
             logger.info(f"Using reasoning_parser: {self.reasoning_parser}")
 
     def update(self, args):
