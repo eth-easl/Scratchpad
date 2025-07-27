@@ -900,6 +900,7 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
+                request._raw_prompt_str = templated_message
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
                 stop = request.stop
@@ -1125,6 +1126,8 @@ def v1_chat_generate_response(
                 {"cached_tokens": cached_tokens} if cache_report else None
             ),
         ),
+        raw_prompt=request._raw_prompt_str if hasattr(request, "_raw_prompt_str") else None,
+        raw_response=ret[0]["text"] if hasattr(ret[0], "text") else None,
     )
     return response
 
