@@ -900,6 +900,7 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
+
                 request._raw_prompt_str = templated_message
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
@@ -1114,6 +1115,19 @@ def v1_chat_generate_response(
     )
     completion_tokens = sum(item["meta_info"]["completion_tokens"] for item in ret)
     cached_tokens = sum(item["meta_info"].get("cached_tokens", 0) for item in ret)
+    raw_prompts = []
+    if isinstance(request, list):
+        for req in request:
+            raw_prompt = req._raw_prompt_str if hasattr(req, "_raw_prompt_str") else None
+            raw_prompts.append(raw_prompt)
+    else:
+        raw_prompt = request._raw_prompt_str if hasattr(request, "_raw_prompt_str") else None
+        raw_prompts.append(raw_prompt)
+
+    raw_outputs = []
+    for ret_item in ret:
+        raw_output = ret_item["text"] if hasattr(ret_item, "text") else None
+        raw_outputs.append(raw_output)
     response = ChatCompletionResponse(
         id=ret[0]["meta_info"]["id"],
         model=request.model,
@@ -1125,9 +1139,9 @@ def v1_chat_generate_response(
             prompt_tokens_details=(
                 {"cached_tokens": cached_tokens} if cache_report else None
             ),
+        raw_prompt=raw_prompts,
+        raw_output=raw_outputs,
         ),
-        raw_prompt=request._raw_prompt_str if hasattr(request, "_raw_prompt_str") else None,
-        raw_response=ret[0]["text"] if hasattr(ret[0], "text") else None,
     )
     return response
 
