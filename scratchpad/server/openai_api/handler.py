@@ -16,6 +16,7 @@ limitations under the License.
 
 import os
 import time
+import logging
 import json
 import uuid
 import base64
@@ -294,7 +295,7 @@ async def process_batch(tokenizer_manager, batch_id: str, batch_request: BatchRe
             if not isinstance(ret, list):
                 ret = [ret]
             if end_point == "/v1/chat/completions":
-                responses = v1_chat_generate_response(request, ret, to_file=True)
+                responses = v1_chat_generate_response(request,  file_request_list, ret, to_file=True)
             else:
                 responses = v1_generate_response(
                     request, ret, tokenizer_manager, to_file=True
@@ -867,7 +868,8 @@ def v1_chat_generate_request(
                     ]
                 else:
                     tools = [item.function.model_dump() for item in request.tools]
-
+            
+            
             # Apply chat template and its stop strings.
             if chat_template_name is None:
                 openai_compatible_messages = []
@@ -900,7 +902,8 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
-
+                logging.info("Raw prompt string after chat template application: %s",
+                             templated_message)
                 request._raw_prompt_str = templated_message
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
@@ -908,6 +911,7 @@ def v1_chat_generate_request(
                 image_data = None
                 modalities = []
             else:
+                logging.info("Using chat template: %s", chat_template_name)
                 conv = generate_chat_conv(request, chat_template_name)
                 prompt = conv.get_prompt()
                 image_data = conv.image_data
@@ -989,6 +993,7 @@ def v1_chat_generate_request(
 
 def v1_chat_generate_response(
     request,
+    raw_requests,
     ret,
     to_file=False,
     cache_report=False,
@@ -997,6 +1002,8 @@ def v1_chat_generate_response(
 ):
     choices = []
     for idx, ret_item in enumerate(ret):
+        # print ret_item, make sure everything is a string so it can be logged
+        logging.info(f"Ret item: {ret_item['text']}")
         logprobs = False
         if isinstance(request, list) and request[idx].logprobs:
             logprobs = True
@@ -1043,6 +1050,7 @@ def v1_chat_generate_response(
 
         tool_calls = None
         text = ret_item["text"]
+        logging.info(f"Text in ret_item: {text}")
 
         if isinstance(request, list):
             tool_choice = request[idx].tool_choice
@@ -1126,8 +1134,20 @@ def v1_chat_generate_response(
 
     raw_outputs = []
     for ret_item in ret:
-        raw_output = ret_item["text"] if hasattr(ret_item, "text") else None
+        logging.info(f"Text in ret_item: {ret_item['text']}")
+        raw_output = ret_item["text"] if 'text' in ret_item else None
         raw_outputs.append(raw_output)
+    for idx, rp in enumerate(raw_outputs):
+        logging.info(f"Raw output for request {idx}: {rp}")
+    raw_outputs = raw_outputs[0] if len(raw_outputs) == 1 else raw_outputs
+    raw_prompts = raw_prompts[0] if len(raw_prompts) == 1 else raw_prompts
+    for key, value in ret[0]["meta_info"].items():
+        logging.info(f"Meta info key: {key}")
+    #logging.info("Meta info: ", ret_item["meta_info"])
+    debug_mode = False
+    if "debug_mode" in raw_requests[0]:
+        debug_mode = raw_requests[0]["debug_mode"]
+
     response = ChatCompletionResponse(
         id=ret[0]["meta_info"]["id"],
         model=request.model,
@@ -1139,9 +1159,9 @@ def v1_chat_generate_response(
             prompt_tokens_details=(
                 {"cached_tokens": cached_tokens} if cache_report else None
             ),
-        raw_prompt=raw_prompts,
-        raw_output=raw_outputs,
         ),
+        raw_prompt=raw_prompts if debug_mode else None,
+        raw_output=raw_outputs if debug_mode else None,
     )
     return response
 
@@ -1488,6 +1508,7 @@ async def v1_chat_completions(
 
     response = v1_chat_generate_response(
         request,
+        [request_json],
         ret,
         created,
         cache_report=tokenizer_manager.server_args.enable_cache_report,
