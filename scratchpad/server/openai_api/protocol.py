@@ -352,7 +352,8 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
     raw_prompt: Optional[str] = None
-    raw_output: Optional[str] = None
+    #TODO: Find a way to include the raw output, where special tokens are not excluded
+    # raw_output: Optional[str] = None
 
 
 class DeltaMessage(BaseModel):

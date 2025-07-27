@@ -16,7 +16,6 @@ limitations under the License.
 
 import os
 import time
-import logging
 import json
 import uuid
 import base64
@@ -902,8 +901,6 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
-                logging.info("Raw prompt string after chat template application: %s",
-                             templated_message)
                 request._raw_prompt_str = templated_message
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
@@ -911,7 +908,6 @@ def v1_chat_generate_request(
                 image_data = None
                 modalities = []
             else:
-                logging.info("Using chat template: %s", chat_template_name)
                 conv = generate_chat_conv(request, chat_template_name)
                 prompt = conv.get_prompt()
                 image_data = conv.image_data
@@ -1002,8 +998,7 @@ def v1_chat_generate_response(
 ):
     choices = []
     for idx, ret_item in enumerate(ret):
-        # print ret_item, make sure everything is a string so it can be logged
-        logging.info(f"Ret item: {ret_item['text']}")
+
         logprobs = False
         if isinstance(request, list) and request[idx].logprobs:
             logprobs = True
@@ -1050,7 +1045,6 @@ def v1_chat_generate_response(
 
         tool_calls = None
         text = ret_item["text"]
-        logging.info(f"Text in ret_item: {text}")
 
         if isinstance(request, list):
             tool_choice = request[idx].tool_choice
@@ -1132,18 +1126,14 @@ def v1_chat_generate_response(
         raw_prompt = request._raw_prompt_str if hasattr(request, "_raw_prompt_str") else None
         raw_prompts.append(raw_prompt)
 
-    raw_outputs = []
-    for ret_item in ret:
-        logging.info(f"Text in ret_item: {ret_item['text']}")
-        raw_output = ret_item["text"] if 'text' in ret_item else None
-        raw_outputs.append(raw_output)
-    for idx, rp in enumerate(raw_outputs):
-        logging.info(f"Raw output for request {idx}: {rp}")
-    raw_outputs = raw_outputs[0] if len(raw_outputs) == 1 else raw_outputs
+    #TODO: Find a way to include the raw outputs, where special tokens are not skipped
+    # raw_outputs = []
+    # for ret_item in ret:
+    #     raw_output = ret_item["text"] if 'text' in ret_item else None
+    #     raw_outputs.append(raw_output)
+    # raw_outputs = raw_outputs[0] if len(raw_outputs) == 1 else raw_outputs
     raw_prompts = raw_prompts[0] if len(raw_prompts) == 1 else raw_prompts
-    for key, value in ret[0]["meta_info"].items():
-        logging.info(f"Meta info key: {key}")
-    #logging.info("Meta info: ", ret_item["meta_info"])
+
     debug_mode = False
     if "debug_mode" in raw_requests[0]:
         debug_mode = raw_requests[0]["debug_mode"]
@@ -1161,7 +1151,8 @@ def v1_chat_generate_response(
             ),
         ),
         raw_prompt=raw_prompts if debug_mode else None,
-        raw_output=raw_outputs if debug_mode else None,
+        #TODO: Find a way to include the raw outputs, where special tokens are not skipped
+        #raw_output=raw_outputs if debug_mode else None,
     )
     return response
 
@@ -1173,6 +1164,10 @@ async def v1_chat_completions(
         request_json = await raw_request.json()
     except Exception as e:
         return create_error_response("Invalid request body, error: ", str(e))
+    if "debug_mode" in request_json:
+        debug_mode = request_json["debug_mode"]
+        request_json["skip_special_tokens"] = False
+    
     all_requests = [ChatCompletionRequest(**request_json)]
     created = int(time.time())
     adapted_request, request = v1_chat_generate_request(all_requests, tokenizer_manager)
