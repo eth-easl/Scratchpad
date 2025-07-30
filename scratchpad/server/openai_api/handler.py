@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import os
+import copy
 import time
 import json
 import uuid
@@ -294,7 +295,9 @@ async def process_batch(tokenizer_manager, batch_id: str, batch_request: BatchRe
             if not isinstance(ret, list):
                 ret = [ret]
             if end_point == "/v1/chat/completions":
-                responses = v1_chat_generate_response(request, ret, to_file=True)
+                responses = v1_chat_generate_response(
+                    request, file_request_list, ret, to_file=True
+                )
             else:
                 responses = v1_generate_response(
                     request, ret, tokenizer_manager, to_file=True
@@ -900,6 +903,7 @@ def v1_chat_generate_request(
                     add_generation_prompt=True,
                     tools=tools,
                 )
+                request._raw_prompt_str = templated_message
                 if assistant_prefix:
                     prompt_ids += tokenizer_manager.tokenizer.encode(assistant_prefix)
                 stop = request.stop
@@ -987,6 +991,7 @@ def v1_chat_generate_request(
 
 def v1_chat_generate_response(
     request,
+    raw_requests,
     ret,
     to_file=False,
     cache_report=False,
@@ -1041,7 +1046,7 @@ def v1_chat_generate_response(
 
         tool_calls = None
         text = ret_item["text"]
-
+        raw_outputs = copy.deepcopy(text)
         if isinstance(request, list):
             tool_choice = request[idx].tool_choice
             tools = request[idx].tools
@@ -1113,6 +1118,31 @@ def v1_chat_generate_response(
     )
     completion_tokens = sum(item["meta_info"]["completion_tokens"] for item in ret)
     cached_tokens = sum(item["meta_info"].get("cached_tokens", 0) for item in ret)
+    raw_prompts = []
+    if isinstance(request, list):
+        for req in request:
+            raw_prompt = (
+                req._raw_prompt_str if hasattr(req, "_raw_prompt_str") else None
+            )
+            raw_prompts.append(raw_prompt)
+    else:
+        raw_prompt = (
+            request._raw_prompt_str if hasattr(request, "_raw_prompt_str") else None
+        )
+        raw_prompts.append(raw_prompt)
+
+    # TODO: Find a way to include the raw outputs, where special tokens are not skipped
+    # raw_outputs = []
+    # for ret_item in ret:
+    #     raw_output = ret_item["text"] if 'text' in ret_item else None
+    #     raw_outputs.append(raw_output)
+    # raw_outputs = raw_outputs[0] if len(raw_outputs) == 1 else raw_outputs
+    raw_prompts = raw_prompts[0] if len(raw_prompts) == 1 else raw_prompts
+
+    return_raw = False
+    if "return_raw" in raw_requests[0]:
+        return_raw = raw_requests[0]["return_raw"]
+
     response = ChatCompletionResponse(
         id=ret[0]["meta_info"]["id"],
         model=request.model,
@@ -1125,6 +1155,10 @@ def v1_chat_generate_response(
                 {"cached_tokens": cached_tokens} if cache_report else None
             ),
         ),
+        raw_prompt=raw_prompts if return_raw else None,
+        raw_output=raw_outputs if return_raw else None,
+        # TODO: Find a way to include the raw outputs, where special tokens are not skipped
+        # raw_output=raw_outputs if debug_mode else None,
     )
     return response
 
@@ -1136,6 +1170,10 @@ async def v1_chat_completions(
         request_json = await raw_request.json()
     except Exception as e:
         return create_error_response("Invalid request body, error: ", str(e))
+    if "return_raw" in request_json:
+        return_raw = request_json["return_raw"]
+        request_json["skip_special_tokens"] = False
+
     all_requests = [ChatCompletionRequest(**request_json)]
     created = int(time.time())
     adapted_request, request = v1_chat_generate_request(all_requests, tokenizer_manager)
@@ -1471,6 +1509,7 @@ async def v1_chat_completions(
 
     response = v1_chat_generate_response(
         request,
+        [request_json],
         ret,
         created,
         cache_report=tokenizer_manager.server_args.enable_cache_report,
