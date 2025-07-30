@@ -27,3 +27,4 @@ setproctitle
 soundfile
 partial_json_parser
 httpx
+triton==3.0.0
