@@ -19,6 +19,19 @@ class MemoryPlanner:
         parallel_config=None,
         block_size: int = 16,
     ):
+        """
+        Initialize memory planner for KV cache management.
+
+        Args:
+            model_params: HuggingFace model configuration object
+            hardware_params: Hardware parameter dictionary with memory and compute specs
+            w_bit: Weight precision in bits
+            a_bit: Activation precision in bits
+            kv_bit: KV cache precision in bits
+            gpu_utilization: Target GPU utilization (0.0-1.0)
+            parallel_config: Tensor parallel configuration (not implemented)
+            block_size: Number of tokens per memory block
+        """
         self.model_params = model_params
         self.parallel_config = parallel_config
         self.hardware_params = hardware_params
@@ -32,6 +45,12 @@ class MemoryPlanner:
         self._max_num_blocks = self.get_max_num_blocks()
 
     def get_max_num_blocks(self):
+        """
+        Calculate the maximum number of KV cache blocks that can be allocated.
+
+        Returns:
+            int: Maximum number of blocks available for KV cache allocation
+        """
         # TODO(xiaozhe): we ignored the memory for activations
         # TODO(xiaozhe): add support for parallel configs
         total_memory = self.hardware_params["vmemory"]
@@ -49,10 +68,15 @@ class MemoryPlanner:
         total_block_memory_size = (
             block_memory_size * llama_config.get_num_hidden_layers(self.model_params)
         )
-
         return math.floor((total_memory - w_memory) / total_block_memory_size)
 
     def get_weights_memory(self):
+        """
+        Calculate the memory required to store model weights.
+
+        Returns:
+            float: Total memory in bytes required for all model weights
+        """
         mlp_weights = (
             3
             * llama_config.get_hidden_size(self.model_params)
@@ -102,11 +126,24 @@ class MemoryPlanner:
         )
 
     def print_status(self):
+        """
+        Print current memory allocation status for debugging.
+        """
+        print(f"Weights memory / Total memory: {naturalsize(self.get_weights_memory())} / {naturalsize(self.hardware_params['vmemory'])}")
         print(
             f"Allocated blocks/Total blocks: {self._allocated_blocks}/{self._max_num_blocks}"
         )
 
     def can_allocate_request(self, request: "GenerationRequest"):
+        """
+        Check if there is enough memory to allocate blocks for a request.
+
+        Args:
+            request: The GenerationRequest to check allocation for
+
+        Returns:
+            bool: True if allocation is possible, False otherwise
+        """
         if request.req_id not in self._allocation_map:
             # this is a new request
             num_required_blocks = math.ceil(request.input_length / self.block_size)
@@ -116,6 +153,12 @@ class MemoryPlanner:
             return self._max_num_blocks - self._allocated_blocks >= 1
 
     def allocate(self, request: "GenerationRequest"):
+        """
+        Allocate memory blocks for a request's KV cache.
+
+        Args:
+            request: The GenerationRequest to allocate memory for
+        """
         def _allocate_blocks(request_id: str, num_blocks: int):
             self._allocated_blocks += num_blocks
             if request_id not in self._allocation_map:
@@ -141,6 +184,12 @@ class MemoryPlanner:
         _allocate_blocks(request.req_id, 1)
 
     def free(self, request_ids: List[str]):
+        """
+        Free memory blocks allocated to completed requests.
+
+        Args:
+            request_ids: List of request IDs whose memory should be freed
+        """
         for req_id in request_ids:
             num_blocks = self._allocation_map.pop(req_id)
             self._allocated_blocks -= num_blocks

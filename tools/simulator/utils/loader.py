@@ -8,6 +8,18 @@ def load_trace(
         filter_invalid=True,
         override_model=None,
     ):
+    """
+    Load requests from a trace file and optionally synthesize arrival times.
+
+    Args:
+        trace_file: Path to JSONL file containing request data
+        arrival_rate: Optional arrival rate for Poisson process (requests/second)
+        filter_invalid: Whether to filter out invalid requests (zero or negative lengths)
+        override_model: Optional model name to override the model specified in trace
+
+    Returns:
+        List[GenerationRequest]: Loaded and processed requests
+    """
     requests = []
     with open(trace_file, "r") as f:
         data = [json.loads(x) for x in f.readlines()]
