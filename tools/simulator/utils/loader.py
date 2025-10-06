@@ -1,8 +1,13 @@
 import json
-from tools.simulator.core.request import GenerationRequest
-from tools.benchmark.arrival import PoissonProcess
+from core.request import GenerationRequest
+from core.arrival import PoissonProcess
 
-def load_trace(trace_file, arrival_rate=None):
+def load_trace(
+        trace_file,
+        arrival_rate=None,
+        filter_invalid=True,
+        override_model=None,
+    ):
     requests = []
     with open(trace_file, "r") as f:
         data = [json.loads(x) for x in f.readlines()]
@@ -17,10 +22,15 @@ def load_trace(trace_file, arrival_rate=None):
         print("Arrival rate not provided, assuming all requests arrive at time 0")
         workload = [0] * len(data)
     for idx, x in enumerate(data):
-        x["model"] = "meta-llama/Llama-2-7b-hf"
-        if not len(x["input"]) == 0 and not len(x["output"]) == 0:
-            request = GenerationRequest(
-                f"{idx}", x["model"], len(x["input"]), len(x["output"]), workload[idx]
-            )
-            requests.append(request)
+        if override_model is not None:
+            x["model"] = override_model
+        input_len = x["reported_token_input"]
+        output_len = x["reported_token_output"]
+        request = GenerationRequest(
+            f"{idx}", x["model"], input_len, output_len, workload[idx]
+        )
+        if filter_invalid and (input_len <= 0 or output_len <= 0):
+            continue
+        requests.append(request)
+    print(f"Loaded {len(requests)} requests from {trace_file}")
     return requests

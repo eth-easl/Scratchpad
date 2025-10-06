@@ -1,9 +1,8 @@
 from ._base import BaseGlobalToLocalPolicy
-from adaml.simulator.request import GenerationRequest
-from adaml.simulator.engine import LLMEngine
+from core.request import GenerationRequest
+from core.engine import LLMEngine
 from typing import Dict, List
 import numpy as np
-
 
 class RandomGTLPolicy(BaseGlobalToLocalPolicy):
     def __init__(self):

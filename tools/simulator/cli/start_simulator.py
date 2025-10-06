@@ -1,8 +1,8 @@
 import json
 from dataclasses import asdict
-from .core.global_engine import LLMGlobalEngine
-from .utils import load_trace
 from rich.console import Console
+from core.global_engine import LLMGlobalEngine
+from utils.loader import load_trace
 
 console = Console()
 
@@ -41,18 +41,17 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=str, help="Input file")
     parser.add_argument("--n-engines", type=int, help="Number of engines")
     parser.add_argument("--arrival-rate", help="Arrival rate", default=None)
-
     parser.add_argument(
         "--trace-output",
         type=str,
         help="Trace file",
-        default=".cache/replay_results/trace.json",
+        default=".local/replay_results/trace.json",
     )
     parser.add_argument(
         "--stats-output",
         type=str,
         help="Stats file",
-        default=".cache/replay_results/stats.json",
+        default=".local/replay_results/stats.json",
     )
     args = parser.parse_args()
     run_simulation(args)

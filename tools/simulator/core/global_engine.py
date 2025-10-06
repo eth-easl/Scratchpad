@@ -3,13 +3,13 @@ from collections import deque, defaultdict
 
 from .engine import LLMEngine
 from .request import GenerationRequest
-from .policies import EvenGTLPolicy
+from .policies import RandomGTLPolicy
 from .arrival import PoissonProcess
 
 from typing import Dict, Deque
 
 class LLMGlobalEngine:
-    def __init__(self, input_file: str, arrival_rate: float):
+    def __init__(self):
         self.engines = defaultdict(list[LLMEngine])
         self.timers = defaultdict(dict)
         self.pending_requests: Deque[GenerationRequest] = deque()
@@ -17,7 +17,7 @@ class LLMGlobalEngine:
         self.supported_models: set = set()
         self._trace = []
         self.total_requests = 0
-        self.policy = EvenGTLPolicy()
+        self.policy = RandomGTLPolicy()
         self.text2sql_requests: Dict[str, GenerationRequest] = {}
         self.arrival_rate = arrival_rate
         self.load_requests(input_file, arrival_rate)
@@ -32,32 +32,7 @@ class LLMGlobalEngine:
         self.policy.prepare(self.engines)
         self.timers[model_name][engine.engine_id] = 0
 
-    def load_requests(self, input_file: str, arrival_rate: float):
-        with open(input_file, 'r') as f:
-            data = json.load(f)
-        if arrival_rate is not None and arrival_rate > 0:
-            print(f"Synthesizing arrival time using Poisson process with ar {arrival_rate}")
-            pp = PoissonProcess(arrival_rate)
-            duration_needed = len(data) / arrival_rate
-            workload = pp.generate_workload(
-                0, duration_needed * 2
-            )  # multiply by 2 to be safe
-        else:
-            print("Arrival rate not provided, assuming all requests arrive at time 0")
-            workload = [0] * len(data)        
-        # for idx, request_data in enumerate([data[1]]):
-        for idx, request_data in enumerate(data):
-            request_data["model"] = "meta-llama/Llama-3.1-70B-Instruct"
-            text2sql_req = GenerationRequest(
-                req_id=f"text2sql_{idx}",
-                gen_requests_config=request_data["Text2SQLRequest"]
-            )
-            self.text2sql_requests[text2sql_req.req_id] = text2sql_req
-            first_requests = text2sql_req.create_current_stage_requests(request_data["model"], workload[idx])
-            for req in first_requests:
-                if req is not None:
-                    self.pending_requests.append(req)
-                    self.total_requests += 1
+    
     
     def handle_request_completion(self, request: GenerationRequest, current_time: float):
         if request.parent_request:

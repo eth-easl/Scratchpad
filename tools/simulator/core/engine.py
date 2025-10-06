@@ -1,9 +1,9 @@
 from copy import deepcopy
 from collections import deque
-from adaml.internal.analyzer import ModelAnalyzer
-from adaml.simulator.trace import TraceEvent
-from adaml.simulator.memory_planner import MemoryPlanner
-from adaml.internal.configs.hardware_params import hardware_params
+from internal.analyzer import ModelAnalyzer
+from .trace import TraceEvent
+from .memory_planner import MemoryPlanner
+from internal.configs.hardware_params import hardware_params
 from typing import List, Deque
 
 from .request import GenerationRequest

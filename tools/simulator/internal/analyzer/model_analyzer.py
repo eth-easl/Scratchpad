@@ -3,7 +3,7 @@ import math
 import importlib
 from transformers import AutoConfig
 
-from .hardware_params import hardware_params
+from internal.configs.hardware_params import hardware_params
 from .roofline import roofline_analyze
 
 ALL_DATA_NAMES = [
