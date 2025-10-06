@@ -1,12 +1,10 @@
 import json
 from dataclasses import asdict
-from tools.simulator.global_engine import LLMGlobalEngine
-from tools.simulator.utils import load_trace
-from scratchpad.utils.ui import make_table
+from .core.global_engine import LLMGlobalEngine
+from .utils import load_trace
 from rich.console import Console
 
 console = Console()
-
 
 def run_simulation(args):
     print(args)
@@ -35,9 +33,6 @@ def run_simulation(args):
 
     print(end="\n")
     print(f"--" * 10 + " Simulation Done " + "--" * 10)
-
-    console.print(make_table("Summary", server.summary))
-
 
 if __name__ == "__main__":
     import argparse
