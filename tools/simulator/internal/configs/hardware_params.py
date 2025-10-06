@@ -68,18 +68,6 @@ hardware_params = {
         "onchip_buffer": 33792e3,
         "vmemory": 80e9,
     },  # use SXM data
-    # "nvidia_H100_SXM": {
-    #     "bandwidth": 3072e9,
-    #     "FP16": 1979e12 / 2,
-    #     "INT8": 3958e12 / 2,
-    #     "onchip_buffer": 33792e3,
-    # },
-    # "nvidia_H100_PCIe": {
-    #     "bandwidth": 2048e9,
-    #     "FP16": 1513e12 / 2,
-    #     "INT8": 3026e12 / 2,
-    #     "onchip_buffer": 29184e3,
-    # },
     # https://images.nvidia.com/aem-dam/Solutions/Data-Center/l4/nvidia-ada-gpu-architecture-whitepaper-v2.1.pdf
     # Ada SM has 256 KB Register File, and 128 KB of L1/Shared Memory
     "nvidia_L40S": {
