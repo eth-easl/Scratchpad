@@ -1,12 +1,12 @@
+import humanize
 from transformers import AutoConfig
-from tools.simulator.utils import (
+from ..utils import (
     memory_matmul,
     flops_matmul,
     roofline_analyze,
     get_linear_layers,
 )
-from tools.simulator.config.hardware_params import hardware_params
-import humanize
+from ..internal.analyzer.hardware_params import hardware_params
 
 
 class RooflineSimulator:
@@ -63,7 +63,6 @@ class RooflineSimulator:
             self.config.num_key_value_heads,
             self.config.num_attention_heads,
         )
-
         for name, (ic, oc) in linear_layers.items():
             self._analyze_linear_module(
                 name,
@@ -87,7 +86,6 @@ class RooflineSimulator:
                 for k, v in values.items():
                     print(f"{k}: {humanize.intword(v)}")
                 print("\n")
-
 
 if __name__ == "__main__":
     roofline = RooflineSimulator("meta-llama/Llama-2-7b-hf", "nvidia_A100")
