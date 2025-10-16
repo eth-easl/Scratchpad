@@ -9,17 +9,35 @@ This is an LLM inference simulator that models the performance of Large Language
 ## Key Commands
 
 ### Running Simulations
+
+#### Node-based Architecture (Recommended)
 ```bash
-# Run the main simulator with default parameters
-python cli/start_simulator.py --input <trace_file> --n-engines <num_engines> --arrival-rate <rate>
+# Run with node-based environment configuration
+python cli/run_simulator.py --input <trace_file> --environment examples/env.json --arrival-rate <rate>
 
-# Example with typical parameters
-python cli/start_simulator.py --input trace.json --n-engines 4 --arrival-rate 1.0
+# Example with node-based configuration
+python cli/run_simulator.py --input examples/trace.jsonl --environment examples/env.json --arrival-rate 1.0
 
-# Output files are generated in .local/replay_results/ by default:
-# - trace.json: Chrome trace format events for visualization
-# - stats.json: Request statistics and performance metrics
+# Example with environment changes (dynamic GPU provisioning)
+python cli/run_simulator.py --input examples/trace.jsonl --environment examples/env.json --environment-change-file examples/env_changes.jsonl --arrival-rate 1.0
+
+# Limit number of requests for testing
+python cli/run_simulator.py --input examples/trace.jsonl --environment examples/env.json --arrival-rate 1.0 --limit 100
 ```
+
+#### Legacy Engine-based Architecture
+```bash
+# Run with legacy engine configuration (backward compatibility)
+python cli/run_simulator.py --input <trace_file> --n-engines <num_engines> --arrival-rate <rate>
+
+# Example with legacy configuration
+python cli/run_simulator.py --input trace.json --n-engines 4 --arrival-rate 1.0
+```
+
+#### Output Files
+Output files are generated in `.local/replay_results/` by default:
+- `trace.json`: Chrome trace format events for visualization
+- `stats.json`: Request statistics and performance metrics
 
 ### Roofline Analysis
 ```bash
@@ -40,15 +58,28 @@ pip install -r requirements.txt
 
 ### Core Components
 
-1. **LLMGlobalEngine** (`core/global_engine.py`): Central orchestrator that manages multiple LLM engines, handles request scheduling, and tracks global simulation state.
+#### Node-based Architecture (New)
+1. **NodeGlobalEngine** (`core/node_global_engine.py`): Central orchestrator that manages multiple compute nodes, handles request scheduling, and supports dynamic node re-provisioning.
 
-2. **LLMEngine** (`core/engine.py`): Individual inference engine that processes requests through prefill and decode phases, manages memory allocation, and generates trace events.
+2. **ComputeNode** (`core/node.py`): Represents a physical server with multiple GPUs, managing resource allocation, model loading, and request scheduling across the GPUs in the node.
 
-3. **GenerationRequest** (`core/request.py`): Represents a single inference request with metadata like input/output lengths, arrival time, and current status.
+3. **NodeMemoryPlanner** (`core/node.py`): Manages memory allocation across multiple GPUs in a node, considering both GPU memory and node-level constraints.
 
-4. **ModelAnalyzer** (`internal/analyzer/model_analyzer.py`): Performs roofline analysis to estimate inference times based on hardware parameters and model configurations.
+4. **Node Routing Policies** (`core/policies/routing/node_based.py`): Determines how requests are assigned to nodes. Includes random, least-loaded, round-robin, and best-fit policies.
 
-5. **Routing Policies** (`core/policies/`): Determines how requests are assigned to engines. Currently implements random routing, with extensible base class for other policies.
+5. **Node Re-provisioning Policies** (`core/policies/node_reprovisioning/`): Handles dynamic re-provisioning of nodes between different models when no suitable nodes are available.
+
+#### Legacy Engine-based Architecture
+6. **LLMGlobalEngine** (`core/global_engine.py`): Central orchestrator that manages multiple LLM engines, handles request scheduling, and tracks global simulation state.
+
+7. **LLMEngine** (`core/engine.py`): Individual inference engine that processes requests through prefill and decode phases, manages memory allocation, and generates trace events.
+
+#### Shared Components
+8. **GenerationRequest** (`core/request.py`): Represents a single inference request with metadata like input/output lengths, arrival time, and current status.
+
+9. **ModelAnalyzer** (`internal/analyzer/model_analyzer.py`): Performs roofline analysis to estimate inference times based on hardware parameters and model configurations.
+
+10. **Environment Configuration** (`core/env.py`): Supports both node-based and legacy GPU-based environment configurations with infrastructure constraints.
 
 ### Key Data Flow
 
@@ -107,9 +138,29 @@ The roofline analysis calculates:
 
 ## Testing and Validation
 
+### Example Files
+The simulator includes example configuration files in the `examples/` directory:
+- `env.json`: Node-based environment configuration with A100 and H100 clusters
+- `trace.jsonl`: Sample request trace for testing
+- `env_changes.jsonl`: Example dynamic environment changes for testing re-provisioning
+
+### Example Commands
+```bash
+# Test with node-based configuration (10 requests)
+python cli/run_simulator.py --input examples/trace.jsonl --environment examples/env.json --arrival-rate 1.0 --limit 10
+
+# Test with dynamic environment changes
+python cli/run_simulator.py --input examples/trace.jsonl --environment examples/env.json --environment-change-file examples/env_changes.jsonl --arrival-rate 0.5
+
+# Test legacy engine mode
+python cli/run_simulator.py --input examples/trace.jsonl --n-engines 2 --arrival-rate 1.0 --limit 10
+```
+
+### Output Analysis
 The simulator outputs:
-- Chrome trace format files for performance visualization
+- Chrome trace format files for performance visualization (load into `chrome://tracing`)
 - JSON statistics with latency, throughput, and queue metrics
-- SLO pass rates for multi-stage request processing
+- Node-level utilization and re-provisioning events
+- Model loading and unloading trace events
 
 Typical validation involves comparing simulated latencies against real hardware measurements for known models and hardware configurations.

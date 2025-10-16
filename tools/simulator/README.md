@@ -2,6 +2,10 @@ The LLM Simulator is a comprehensive performance modeling and simulation tool de
 
 The simulator consists of several key components that work together to model the complete lifecycle of LLM inference requests:
 
+## Contributor Guide
+
+See [`AGENTS.md`](AGENTS.md) for repository guidelines covering project layout, development workflows, testing expectations, and pull request conventions.
+
 - **Request Modeling**: Simulates incoming generation requests with configurable arrival patterns
 - **Engine Simulation**: Models LLM inference engines with prefill and decode phases
 - **Performance Analysis**: Provides roofline analysis and hardware-specific performance metrics

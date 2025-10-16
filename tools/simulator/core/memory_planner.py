@@ -7,6 +7,7 @@ import math
 if TYPE_CHECKING:
     from .request import GenerationRequest
 
+
 class MemoryPlanner:
     def __init__(
         self,
@@ -57,6 +58,14 @@ class MemoryPlanner:
         # memory for weights
         # per layer memory
         w_memory = self.get_weights_memory()
+
+        # Check if weights exceed total memory
+        if w_memory >= total_memory:
+            print(
+                f"Warning: Model weights ({naturalsize(w_memory)}) exceed GPU memory ({naturalsize(total_memory)}). No KV cache blocks available."
+            )
+            return 0
+
         block_memory_size = (
             2
             * self.block_size
@@ -68,7 +77,12 @@ class MemoryPlanner:
         total_block_memory_size = (
             block_memory_size * llama_config.get_num_hidden_layers(self.model_params)
         )
-        return math.floor((total_memory - w_memory) / total_block_memory_size)
+
+        available_memory = total_memory - w_memory
+        max_blocks = math.floor(available_memory / total_block_memory_size)
+
+        # Ensure we don't return negative values
+        return max(0, max_blocks)
 
     def get_weights_memory(self):
         """
@@ -129,7 +143,9 @@ class MemoryPlanner:
         """
         Print current memory allocation status for debugging.
         """
-        print(f"Weights memory / Total memory: {naturalsize(self.get_weights_memory())} / {naturalsize(self.hardware_params['vmemory'])}")
+        print(
+            f"Weights memory / Total memory: {naturalsize(self.get_weights_memory())} / {naturalsize(self.hardware_params['vmemory'])}"
+        )
         print(
             f"Allocated blocks/Total blocks: {self._allocated_blocks}/{self._max_num_blocks}"
         )
@@ -144,10 +160,17 @@ class MemoryPlanner:
         Returns:
             bool: True if allocation is possible, False otherwise
         """
+        # If no blocks are available, return False immediately
+        if self._max_num_blocks == 0:
+            return False
+
         if request.req_id not in self._allocation_map:
             # this is a new request
             num_required_blocks = math.ceil(request.input_length / self.block_size)
-            return self._max_num_blocks*0.95 - self._allocated_blocks >= num_required_blocks
+            return (
+                self._max_num_blocks * 0.95 - self._allocated_blocks
+                >= num_required_blocks
+            )
         else:
             # at least one block is available
             return self._max_num_blocks - self._allocated_blocks >= 1
@@ -159,6 +182,7 @@ class MemoryPlanner:
         Args:
             request: The GenerationRequest to allocate memory for
         """
+
         def _allocate_blocks(request_id: str, num_blocks: int):
             self._allocated_blocks += num_blocks
             if request_id not in self._allocation_map:

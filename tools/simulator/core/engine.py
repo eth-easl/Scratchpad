@@ -69,7 +69,7 @@ class LLMEngine:
         if start_at < request.arrive_at:
             start_at = request.arrive_at
         self.running.append(request)
-        request._prefill()        
+        request._prefill()
         prefill_result = self.analyzer.analyze(
             seqlen=request.input_length,
             batchsize=1,
@@ -83,8 +83,7 @@ class LLMEngine:
             request.set_generation_finished_at(start_at + prefill_time)
             self.memory_planner.free([request.req_id])
         return prefill_time + start_at, [request], memory_event
-    
-    
+
     def _decode(self, requests: List[GenerationRequest], start_at: float):
         max_batch_size = len(requests)
         decode_time = []
@@ -112,7 +111,7 @@ class LLMEngine:
         finished_at = max(decode_time) + start_at
         finished_lst = []
         for req in executable_requests:
-            finished = req._decode() #Check if the request is finished
+            finished = req._decode()  # Check if the request is finished
             if finished:
                 req.set_generation_finished_at(finished_at)
                 self.finished_requests += 1
@@ -122,7 +121,7 @@ class LLMEngine:
                 finished_lst.append(req)
         self.memory_planner.free(finished_requests_in_this_batch)
         return finished_at, executable_requests, memory_event, finished_lst
-    
+
     def step(self, start_at: float):
         """
         Execute one simulation step for this engine.
@@ -146,33 +145,47 @@ class LLMEngine:
         handled_requests = []
         # self.memory_planner.print_status()
 
-        if len(self.waiting) > 0 and self.memory_planner.can_allocate_request(self.waiting[0]):
-            # TODO(xiaozhe): this logic does not handle the case where
-            # a single input is too long to fit in the memory
-            # if self.memory_planner.can_allocate_request(self.waiting[0]):
-            pending_req = self.waiting.popleft()
-            handled_requests = [pending_req.req_id]
-            prefill_end_at, handled_requests, memory_event = self._prefill(
-                pending_req, start_at
-            )
-            return (
-                self.create_event(
-                    "prefill", handled_requests, start_at, prefill_end_at
-                ),
-                [],
-                prefill_end_at,
-                memory_event,
-            )
-            # else:
-            #     self.failed.append(self.waiting.popleft())
-            #     return None, [], start_at + 0.0001, None
+        if len(self.waiting) > 0:
+            # Try to find a request that can be allocated
+            allocatable_request = None
+            request_to_remove = None
+
+            # Look through waiting queue to find a request that fits in memory
+            for i, req in enumerate(self.waiting):
+                if self.memory_planner.can_allocate_request(req):
+                    allocatable_request = req
+                    request_to_remove = i
+                    break
+
+            if allocatable_request:
+                # Remove the request from the queue and process it
+                self.waiting.remove(allocatable_request)
+                handled_requests = [allocatable_request.req_id]
+                prefill_end_at, handled_requests, memory_event = self._prefill(
+                    allocatable_request, start_at
+                )
+                return (
+                    self.create_event(
+                        "prefill", handled_requests, start_at, prefill_end_at
+                    ),
+                    [],
+                    prefill_end_at,
+                    memory_event,
+                )
+            else:
+                # No requests can be allocated due to memory constraints
+                # Move to the time step so simulation can progress
+                return None, [], start_at + 0.0001, None
 
         elif len(self.running) > 0:
             # if there's no request needs prefill, proceed to decode
             # TODO(xiaozhe): let's assume we could do infinite batch size...
-            decode_finished_at, handled_requests, memory_event, finished_lst = self._decode(
-                list(self.running), start_at
-            )
+            (
+                decode_finished_at,
+                handled_requests,
+                memory_event,
+                finished_lst,
+            ) = self._decode(list(self.running), start_at)
             return (
                 self.create_event(
                     "decode", handled_requests, start_at, decode_finished_at
