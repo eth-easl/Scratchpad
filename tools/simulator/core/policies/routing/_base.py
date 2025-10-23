@@ -23,11 +23,14 @@ class BaseGlobalToLocalPolicy(ABC):
         ...
 
     @abstractmethod
-    def assign_requests(self, request: GenerationRequest):
+    def assign_requests(self, request: GenerationRequest) -> bool:
         """
         Assign a request to a specific engine.
 
         Args:
             request: The GenerationRequest to be assigned
+
+        Returns:
+            bool: True if the request was successfully assigned to an engine
         """
         ...

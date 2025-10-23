@@ -1,13 +1,18 @@
+import heapq
 import json
-from collections import deque, defaultdict
+import time
+from collections import defaultdict, deque
+from itertools import count
+from typing import Deque, Dict, List, Optional
+
+from core.env import EnvironmentChange, EnvironmentConfig, calculate_model_loading_time
+from utils.model_utils import get_model_size_gb
 
 from .engine import LLMEngine
-from .request import GenerationRequest
 from .policies import RandomGTLPolicy
 from .policies.engine_reprovisioning import RandomReprovisioningPolicy
+from .request import GenerationRequest
 from .trace import TraceEvent
-from core.env import EnvironmentChange, EnvironmentConfig, calculate_model_loading_time
-from typing import Dict, Deque, List, Optional
 
 
 class LLMGlobalEngine:
@@ -39,6 +44,10 @@ class LLMGlobalEngine:
         self.reprovisioning_policy = RandomReprovisioningPolicy()
         self.text2sql_requests: Dict[str, GenerationRequest] = {}
 
+        # Event-driven scheduler state
+        self._event_queue: list[tuple[float, int, LLMEngine]] = []
+        self._event_counter = count()
+
         # Environment configuration
         self.environment_config = environment_config
         self.environment_changes = environment_changes or []
@@ -52,12 +61,199 @@ class LLMGlobalEngine:
         # Track simulation timeout for stuck scenarios
         self.last_progress_time = 0.0
         self.simulation_timeout = 300.0  # 5 minutes timeout
-        self.print_interval = print_interval
+        self.print_interval = max(0.0, print_interval)
         self.last_print_time = 0.0
+        self.last_print_wall_time = time.monotonic()
 
         # Initialize engines from environment configuration
         if environment_config:
             self._initialize_engines_from_config(environment_config)
+
+    def _record_instant_event(
+        self,
+        name: str,
+        category: str,
+        timestamp_s: float,
+        *,
+        pid: str | int = "system",
+        tid: str | int = 0,
+        args: Optional[dict] = None,
+    ) -> None:
+        """Capture an instant-style trace event to aid human readability."""
+        self._trace.append(
+            TraceEvent(
+                name=name,
+                cat=category,
+                ph="X",
+                pid=pid,
+                tid=tid,
+                ts=int(max(timestamp_s, 0.0) * 1_000_000),
+                dur=0,
+                args=args or {},
+            )
+        )
+
+    def record_assignment_event(
+        self,
+        request: GenerationRequest,
+        engine: LLMEngine,
+        assigned_at: float,
+    ) -> None:
+        """Log when a request is routed to a specific engine."""
+        self._record_instant_event(
+            name=f"Assigned :: request {request.req_id}",
+            category="request.assignment",
+            timestamp_s=assigned_at,
+            pid=str(engine.engine_id),
+            args={
+                "request_id": request.req_id,
+                "model": request.model,
+                "engine_id": str(engine.engine_id),
+                "engine_model": engine.model_name,
+                "hardware": engine.hardware_name,
+                "arrival_time_s": round(request.arrive_at, 6),
+                "queued_duration_s": round(
+                    max(assigned_at - request.arrive_at, 0.0), 6
+                ),
+            },
+        )
+
+    def record_completion_event(
+        self,
+        request: GenerationRequest,
+        engine: LLMEngine,
+    ) -> None:
+        """Log when a request finishes generation on an engine."""
+        finished_at = request.generation_finished_at or self.global_timer
+        args = {
+            "request_id": request.req_id,
+            "model": request.model,
+            "engine_id": str(engine.engine_id),
+            "engine_model": engine.model_name,
+            "hardware": engine.hardware_name,
+            "arrival_time_s": round(request.arrive_at, 6),
+            "completed_at_s": round(finished_at, 6),
+            "latency_s": round(finished_at - request.arrive_at, 6),
+            "output_tokens_generated": request.generated_tokens,
+        }
+        if request.prefill_finished_at is not None:
+            args["prefill_finished_at_s"] = round(request.prefill_finished_at, 6)
+        self._record_instant_event(
+            name=f"Completed :: request {request.req_id}",
+            category="request.lifecycle",
+            timestamp_s=finished_at,
+            pid=str(engine.engine_id),
+            args=args,
+        )
+
+    def _reset_event_queue(self) -> None:
+        """Clear queued engine events and reset the sequence counter."""
+        self._event_queue.clear()
+        self._event_counter = count()
+
+    def _schedule_engine(self, engine: LLMEngine, ready_time: float) -> None:
+        """
+        Schedule an engine to take its next step at the provided simulation time.
+
+        Args:
+            engine: Engine instance that has pending work
+            ready_time: Simulation timestamp when the engine should be revisited
+        """
+        self.timers[engine.model_name][engine.engine_id] = ready_time
+        heapq.heappush(
+            self._event_queue,
+            (ready_time, next(self._event_counter), engine),
+        )
+
+    def _process_engine_events(self) -> bool:
+        """
+        Execute all engine steps scheduled for the current simulation time.
+
+        Returns:
+            bool: True if any request completed or new trace events were recorded
+        """
+        progress_made = False
+        while self._event_queue and self._event_queue[0][0] <= self.global_timer:
+            event_time, _, engine = heapq.heappop(self._event_queue)
+            scheduled_time = self.timers[engine.model_name].get(engine.engine_id)
+
+            # Skip stale events that were superseded by a newer schedule
+            if scheduled_time is None or abs(event_time - scheduled_time) > 1e-9:
+                continue
+
+            # Advance simulation time to the event if needed
+            if event_time > self.global_timer:
+                self.global_timer = event_time
+
+            progress_made = True
+            event, finished_lst, next_time, memory_event = engine.step(event_time)
+
+            if event:
+                self._trace.extend(event)
+            if memory_event is not None:
+                self._trace.append(memory_event)
+
+            if finished_lst:
+                progress_made = True
+                for finished_request in finished_lst:
+                    self.record_completion_event(finished_request, engine)
+                    self.handle_request_completion(finished_request, event_time)
+
+            if next_time is not None:
+                self._schedule_engine(engine, next_time)
+            else:
+                self.timers[engine.model_name][engine.engine_id] = None
+
+        return progress_made
+
+    def _next_pending_request_arrival(self, after_time: float) -> Optional[float]:
+        """
+        Find the earliest arrival time among pending requests that is after the provided time.
+        """
+        next_time: Optional[float] = None
+        for req in self.pending_requests:
+            if req.arrive_at > after_time:
+                if next_time is None or req.arrive_at < next_time:
+                    next_time = req.arrive_at
+        return next_time
+
+    def _next_environment_change_time(self, after_time: float) -> Optional[float]:
+        """
+        Fetch the timestamp of the next scheduled environment change.
+        """
+        if self.next_env_change_idx < len(self.environment_changes):
+            change_time = self.environment_changes[self.next_env_change_idx].timestamp
+            if change_time > after_time:
+                return change_time
+        return None
+
+    def _next_reprovision_completion_time(self, after_time: float) -> Optional[float]:
+        """
+        Determine the earliest completion time among in-flight re-provisioning operations.
+        """
+        next_time: Optional[float] = None
+        for end_time, _ in self.engine_reprovisioning_in_progress.values():
+            if end_time > after_time:
+                if next_time is None or end_time < next_time:
+                    next_time = end_time
+        return next_time
+
+    def on_request_assigned(
+        self, engine: LLMEngine, *, scheduled_time: Optional[float] = None
+    ) -> None:
+        """
+        Notify the global engine that a request was assigned to an engine.
+
+        Args:
+            engine: Engine that received new work
+            scheduled_time: Optional timestamp to use instead of the current time
+        """
+        engine_timers = self.timers[engine.model_name]
+        if engine_timers.get(engine.engine_id) is None:
+            ready_time = (
+                scheduled_time if scheduled_time is not None else self.global_timer
+            )
+            self._schedule_engine(engine, ready_time)
 
     def _initialize_engines_from_config(self, config: EnvironmentConfig):
         """
@@ -69,12 +265,12 @@ class LLMGlobalEngine:
         print(f"Initializing engines from environment configuration...")
 
         total_loading_time = 0.0
-        model_sizes_gb = {
-            "meta-llama/Meta-Llama-3-70B-Instruct": 140.0,
-        }
 
         for gpu_config in config.gpus:
-            model_size_gb = model_sizes_gb.get(gpu_config.model, 140.0)
+            model_size_gb = get_model_size_gb(
+                gpu_config.model,
+                weight_bits=gpu_config.precision.weight_bits,
+            )
 
             # Calculate loading time if model is not preloaded
             loading_time = 0.0
@@ -90,8 +286,8 @@ class LLMGlobalEngine:
 
                 # Add model loading trace event
                 loading_event = TraceEvent(
-                    name=f"model-loading-{gpu_config.model}",
-                    cat="model_loading",
+                    name=f"Load :: {gpu_config.model}",
+                    cat="system.model_loading",
                     ph="X",
                     pid=-1,  # Use -1 for system-level events
                     tid=0,
@@ -113,8 +309,8 @@ class LLMGlobalEngine:
 
                 # Add preloaded model trace event
                 loading_event = TraceEvent(
-                    name=f"model-preloaded-{gpu_config.model}",
-                    cat="model_loading",
+                    name=f"Preloaded :: {gpu_config.model}",
+                    cat="system.model_loading",
                     ph="X",
                     pid=-1,
                     tid=0,
@@ -164,7 +360,7 @@ class LLMGlobalEngine:
         self.supported_models.add(model_name)
         self.policy.prepare(self.engines)
         self.policy.set_global_engine(self)
-        self.timers[model_name][engine.engine_id] = 0
+        self.timers[model_name][engine.engine_id] = None
 
     def add_engines_at_time(
         self,
@@ -297,18 +493,18 @@ class LLMGlobalEngine:
 
         # Add re-provisioning trace event
         reprovision_event = TraceEvent(
-            name=f"engine-reprovision-{engine_to_repurpose.engine_id}",
-            cat="engine_reprovisioning",
+            name=f"Engine {engine_to_repurpose.engine_id} reprovision :: {model_name}",
+            cat="engine.reprovisioning",
             ph="X",
-            pid=engine_to_repurpose.engine_id,
+            pid=str(engine_to_repurpose.engine_id),
             tid=0,
             ts=int(current_time * 1_000_000),
             dur=int(reprovisioning_time * 1_000_000),
             args={
+                "engine_id": str(engine_to_repurpose.engine_id),
+                "hardware": engine_to_repurpose.hardware_name,
                 "source_model": source_model,
                 "target_model": model_name,
-                "engine_id": engine_to_repurpose.engine_id,
-                "hardware": engine_to_repurpose.hardware_name,
                 "reprovisioning_time_s": reprovisioning_time,
             },
         )
@@ -346,6 +542,8 @@ class LLMGlobalEngine:
                         engines.remove(engine)
                         if len(engines) == 0:
                             del self.engines[old_model]
+                        # Clean timer entry for previous model
+                        self.timers[old_model].pop(engine.engine_id, None)
 
                         # Update engine properties
                         engine.model_name = new_model
@@ -371,6 +569,7 @@ class LLMGlobalEngine:
                         if new_model not in self.engines:
                             self.engines[new_model] = []
                         self.engines[new_model].append(engine)
+                        self.timers[new_model][engine.engine_id] = None
 
                         # Update supported models
                         self.supported_models.add(new_model)
@@ -384,6 +583,19 @@ class LLMGlobalEngine:
                         print(
                             f"T: {current_time:.2f} Engine {engine_id} re-provisioning completed, "
                             f"now serving {new_model}"
+                        )
+                        self._record_instant_event(
+                            name=f"Engine {engine_id} ready :: {new_model}",
+                            category="engine.reprovisioning",
+                            timestamp_s=current_time,
+                            pid=str(engine_id),
+                            args={
+                                "engine_id": str(engine_id),
+                                "hardware": engine.hardware_name,
+                                "new_model": new_model,
+                                "previous_model": old_model,
+                                "reprovision_completed_at_s": round(current_time, 6),
+                            },
                         )
                         break
 
@@ -400,6 +612,17 @@ class LLMGlobalEngine:
         for req in requests:
             self.pending_requests.append(req)
             self.total_requests += 1
+            self._record_instant_event(
+                name=f"Request arrived :: {req.req_id}",
+                category="request.lifecycle",
+                timestamp_s=req.arrive_at,
+                args={
+                    "request_id": req.req_id,
+                    "model": req.model,
+                    "input_tokens": req.input_length,
+                    "target_output_tokens": req.output_length,
+                },
+            )
 
     def handle_request_completion(
         self, request: GenerationRequest, current_time: float
@@ -477,49 +700,40 @@ class LLMGlobalEngine:
             print(
                 f"Environment changes: {len(self.environment_changes)} events scheduled"
             )
-        time_queue = set()
-
-        # Track if any progress was made
+        self._reset_event_queue()
         previous_finished = 0
+        self.last_progress_time = self.global_timer
+        self.last_print_time = self.global_timer
+        self.last_print_wall_time = time.monotonic()
 
         while True:
-            made_progress = False
+            progress_at_current_time = False
 
-            for model in self.supported_models:
-                for engine in self.engines[model]:
-                    if self.timers[model][engine.engine_id] <= self.global_timer:
-                        event, finished_lst, next_time, memory_event = engine.step(
-                            self.timers[model][engine.engine_id]
-                        )
-                        self.timers[model][engine.engine_id] = next_time
-                        time_queue.add(next_time)
-                        if event is not None:
-                            self._trace.extend(event)
-                            self._trace.append(memory_event)
-                            if finished_lst:  # Any finished requests means progress
-                                made_progress = True
+            # Drain all events that occur at the current simulation time
+            while True:
+                loop_progress = False
 
-            # Add re-provisioning completion times to time queue
-            for engine_id, (
-                end_time,
-                _,
-            ) in self.engine_reprovisioning_in_progress.items():
-                time_queue.add(end_time)
-
-            if time_queue:
-                self.global_timer = min(time_queue)
-                time_queue.remove(self.global_timer)
-
-                # Apply environment changes that should occur by this time
+                prev_env_idx = self.next_env_change_idx
                 self.apply_environment_changes(self.global_timer)
+                if self.next_env_change_idx > prev_env_idx:
+                    loop_progress = True
 
-                # Check for completed re-provisioning
-                reprov_completed = len(self.engine_reprovisioning_in_progress)
+                reprov_before = len(self.engine_reprovisioning_in_progress)
                 self.check_reprovisioning_completions(self.global_timer)
-                if len(self.engine_reprovisioning_in_progress) < reprov_completed:
-                    made_progress = True  # Re-provisioning completed is progress
+                if len(self.engine_reprovisioning_in_progress) < reprov_before:
+                    loop_progress = True
 
-                self.check_new_requests(self.global_timer)
+                assigned_now = self.check_new_requests(self.global_timer)
+                if assigned_now:
+                    loop_progress = True
+
+                if self._process_engine_events():
+                    loop_progress = True
+
+                if not loop_progress:
+                    break
+
+                progress_at_current_time = True
 
             # Update progress tracking
             current_finished = sum(
@@ -528,12 +742,10 @@ class LLMGlobalEngine:
                 for engine in engines
             )
             if current_finished > previous_finished:
-                made_progress = True
-                self.last_progress_time = self.global_timer
                 previous_finished = current_finished
+                progress_at_current_time = True
 
-            # Check for timeout - if no progress for too long, end simulation
-            if made_progress:
+            if progress_at_current_time:
                 self.last_progress_time = self.global_timer
             elif self.global_timer - self.last_progress_time > self.simulation_timeout:
                 print(
@@ -542,15 +754,47 @@ class LLMGlobalEngine:
                 print(f"Finished: {self.finished_percentage:.2f}% of requests")
                 break
 
-            # Print progress with interval control
-            if self.global_timer - self.last_print_time >= self.print_interval:
-                print(
-                    f"Finished: {self.finished_percentage:.2f}%, Current Time: {self.global_timer:.2f}, Engines: {self.total_engines}",
-                    end="\r",
-                )
-                self.last_print_time = self.global_timer
+            # Print progress with interval control (supports wall and sim time)
+            if self.print_interval > 0.0:
+                now_wall = time.monotonic()
+                wall_elapsed = now_wall - self.last_print_wall_time
+                sim_elapsed = self.global_timer - self.last_print_time
+                if (
+                    wall_elapsed >= self.print_interval
+                    or sim_elapsed >= self.print_interval
+                ):
+                    print(
+                        f"Finished: {self.finished_percentage:.2f}%, Current Time: {self.global_timer:.2f}, Engines: {self.total_engines}",
+                        end="\r",
+                        flush=True,
+                    )
+                    self.last_print_time = self.global_timer
+                    self.last_print_wall_time = now_wall
+
             if not self.has_remaining_requests():
                 break
+
+            candidate_times: List[float] = []
+            if self._event_queue:
+                candidate_times.append(self._event_queue[0][0])
+            next_request = self._next_pending_request_arrival(self.global_timer)
+            if next_request is not None:
+                candidate_times.append(next_request)
+            next_env_change = self._next_environment_change_time(self.global_timer)
+            if next_env_change is not None:
+                candidate_times.append(next_env_change)
+            next_reprov = self._next_reprovision_completion_time(self.global_timer)
+            if next_reprov is not None:
+                candidate_times.append(next_reprov)
+
+            if not candidate_times:
+                break
+
+            next_time = min(candidate_times)
+            if next_time <= self.global_timer:
+                next_time = self.global_timer + 1e-9
+
+            self.global_timer = next_time
 
     def has_remaining_requests(self):
         """
@@ -567,23 +811,27 @@ class LLMGlobalEngine:
                     return True
         return False
 
-    def check_new_requests(self, end_at):
+    def check_new_requests(self, end_at) -> int:
         """
         Check for newly arrived requests and assign them to engines.
 
         Args:
             end_at: Current simulation time - requests with arrival_time <= end_at will be assigned
         """
+        assigned_count = 0
         if len(self.pending_requests) > 0:
             allocatable_requests = [
-                x for x in self.pending_requests if x.arrive_at <= end_at
+                x for x in list(self.pending_requests) if x.arrive_at <= end_at
             ]
             for req in allocatable_requests:
-                print(
-                    f"T: {self.global_timer:<.2f} Assigning request {req.req_id} @ {req.arrive_at:<.2f} to engine"
-                )
-                self.policy.assign_requests(req)
-                self.pending_requests.remove(req)
+                assigned = self.policy.assign_requests(req)
+                if assigned:
+                    print(
+                        f"T: {self.global_timer:<.2f} Assigning request {req.req_id} @ {req.arrive_at:<.2f} to engine"
+                    )
+                    self.pending_requests.remove(req)
+                    assigned_count += 1
+        return assigned_count
 
     @property
     def total_engines(self):

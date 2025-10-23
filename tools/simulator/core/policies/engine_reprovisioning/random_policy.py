@@ -1,6 +1,10 @@
 import random
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-from typing import Optional, List, Dict, Any
+
+from utils.model_utils import get_model_size_gb
+
 from .base import EngineReprovisioningPolicy
 from ...engine import LLMEngine
 from ...env import calculate_model_loading_time
@@ -28,9 +32,7 @@ class RandomReprovisioningPolicy(EngineReprovisioningPolicy):
             default_disk_bandwidth_mbps: Default disk bandwidth for model loading
             default_pcie_bandwidth_gbps: Default PCIe bandwidth for model loading
         """
-        self.model_sizes_gb = model_sizes_gb or {
-            "meta-llama/Meta-Llama-3-70B-Instruct": 140.0,
-        }
+        self.model_sizes_gb = dict(model_sizes_gb) if model_sizes_gb else {}
         self.default_disk_bandwidth_mbps = default_disk_bandwidth_mbps
         self.default_pcie_bandwidth_gbps = default_pcie_bandwidth_gbps
 
@@ -93,7 +95,11 @@ class RandomReprovisioningPolicy(EngineReprovisioningPolicy):
             return 0.0
 
         # Get model size for target model
-        model_size_gb = self.model_sizes_gb.get(target_model, 140.0)
+        model_size_gb = self.model_sizes_gb.get(target_model)
+        if model_size_gb is None:
+            weight_bits = getattr(engine, "w_bit", 16)
+            model_size_gb = get_model_size_gb(target_model, weight_bits=weight_bits)
+            self.model_sizes_gb[target_model] = model_size_gb
 
         # Calculate model loading time
         loading_time = calculate_model_loading_time(

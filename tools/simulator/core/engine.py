@@ -1,14 +1,27 @@
 from collections import deque
+from typing import Any, Deque, Dict, List, Optional
+
 from internal.analyzer import ModelAnalyzer
-from .trace import TraceEvent
-from .memory_planner import MemoryPlanner
 from internal.configs.hardware_params import hardware_params
-from typing import List, Deque
+
+from .memory_planner import MemoryPlanner, ParallelConfig
 from .request import GenerationRequest
+from .trace import TraceEvent
 
 
 class LLMEngine:
-    def __init__(self, engine_id, model_name, hardware_name, w_bit, a_bit, kv_bit):
+    def __init__(
+        self,
+        engine_id,
+        model_name,
+        hardware_name,
+        w_bit,
+        a_bit,
+        kv_bit,
+        *,
+        parallel_config: Optional[ParallelConfig] = None,
+        memory_override_bytes: Optional[float] = None,
+    ):
         """
         Initialize a single LLM inference engine.
 
@@ -19,6 +32,8 @@ class LLMEngine:
             w_bit: Weight precision in bits (e.g., 16 for FP16, 8 for INT8)
             a_bit: Activation precision in bits
             kv_bit: KV cache precision in bits
+            parallel_config: Optional tensor/pipeline parallel configuration
+            memory_override_bytes: Override for device memory (bytes) per shard
         """
         self.engine_id = engine_id
         self.model_name = model_name
@@ -36,14 +51,24 @@ class LLMEngine:
         self.running: Deque[GenerationRequest] = deque()
         self.finished: List[GenerationRequest] = []
         self.failed: List[GenerationRequest] = []
+        base_hardware = hardware_params.get(hardware_name)
+        if base_hardware is None:
+            raise ValueError(f"Unknown hardware profile: {hardware_name}")
+        self.hardware_spec = dict(base_hardware)
+        if memory_override_bytes is not None and memory_override_bytes > 0:
+            self.hardware_spec["vmemory"] = max(
+                memory_override_bytes, self.hardware_spec.get("vmemory", 0)
+            )
+        self.memory_override_bytes = memory_override_bytes
         self.memory_planner = MemoryPlanner(
             self.analyzer.model_params,
-            hardware_params[hardware_name],
+            self.hardware_spec,
             w_bit,
             a_bit,
             kv_bit,
+            parallel_config=parallel_config,
         )
-        self.memory_planner.print_status()
+        self.parallel_config: ParallelConfig = self.memory_planner.parallel_config
         self.finished_requests: int = 0
         self.configure()
 
@@ -53,6 +78,23 @@ class LLMEngine:
         to implement custom engine configurations.
         """
         pass
+
+    def update_parallel_config(self, parallel_config: ParallelConfig) -> None:
+        """
+        Update tensor/pipeline parallel configuration and rebuild memory planner.
+
+        Args:
+            parallel_config: New parallel configuration to apply.
+        """
+        self.parallel_config = parallel_config
+        self.memory_planner = MemoryPlanner(
+            self.analyzer.model_params,
+            self.hardware_spec,
+            self.w_bit,
+            self.a_bit,
+            self.kv_bit,
+            parallel_config=parallel_config,
+        )
 
     def add_request(self, request: GenerationRequest):
         """
@@ -85,7 +127,6 @@ class LLMEngine:
         return prefill_time + start_at, [request], memory_event
 
     def _decode(self, requests: List[GenerationRequest], start_at: float):
-        max_batch_size = len(requests)
         decode_time = []
         finished_requests_in_this_batch = []
         executable_requests = []
@@ -95,12 +136,14 @@ class LLMEngine:
                 executable_requests.append(req)
         batch_size = len(executable_requests)
         memory_event = self.memory_event(start_at)
+        if batch_size == 0:
+            return start_at + 0.0001, [], memory_event, []
         for req in executable_requests:
             if start_at < req.arrive_at:
                 start_at = req.arrive_at
             decode_result = self.analyzer.analyze(
                 req.input_length + req.generated_tokens,
-                batchsize=max_batch_size,
+                batchsize=batch_size,
                 w_bit=self.w_bit,
                 a_bit=self.a_bit,
                 kv_bit=self.kv_bit,
@@ -142,7 +185,6 @@ class LLMEngine:
                 - memory_event: Memory usage event for tracing
         """
         # let's assume that process one request per step is fine in terms of utilization
-        handled_requests = []
         # self.memory_planner.print_status()
 
         if len(self.waiting) > 0:
@@ -160,7 +202,6 @@ class LLMEngine:
             if allocatable_request:
                 # Remove the request from the queue and process it
                 self.waiting.remove(allocatable_request)
-                handled_requests = [allocatable_request.req_id]
                 prefill_end_at, handled_requests, memory_event = self._prefill(
                     allocatable_request, start_at
                 )
@@ -195,9 +236,8 @@ class LLMEngine:
                 memory_event,
             )
         else:
-            # add a shift to the timer,
-            # since we need to move on
-            return None, [], start_at + 0.0001, None
+            # No work pending; signal that the engine can stay idle until new requests arrive
+            return None, [], None, None
 
     def create_event(self, phase, handled_requests, start_at, end_at):
         """
@@ -213,18 +253,52 @@ class LLMEngine:
             List of TraceEvent objects compatible with Chrome tracing format
         """
         complete_events = []
-        handled_requests = [req.req_id for req in handled_requests]
+        start_us = int(max(start_at, 0) * 1_000_000)
+        duration_s = max(end_at - start_at, 0.0)
+        duration_us = max(int(duration_s * 1_000_000), 1)
+
         for req in handled_requests:
-            complete = TraceEvent(
-                name=f"{phase}-{req}",
-                cat=f"{phase,req}",
-                ph="X",
-                pid=self.engine_id,
-                tid=0,
-                ts=int(start_at * 1000 * 1000),  # convert to microseconds
-                dur=int((end_at - start_at) * 1000 * 1000),
+            event_args = {
+                "request_id": req.req_id,
+                "requested_model": req.model,
+                "engine_id": str(self.engine_id),
+                "engine_model": self.model_name,
+                "hardware": self.hardware_name,
+                "phase": phase,
+                "start_time_s": round(start_at, 6),
+                "end_time_s": round(end_at, 6),
+                "duration_s": round(duration_s, 6),
+            }
+
+            if phase == "prefill":
+                event_args.update(
+                    {
+                        "prompt_tokens": req.input_length,
+                        "target_output_tokens": req.output_length,
+                    }
+                )
+            elif phase == "decode":
+                event_args.update(
+                    {
+                        "target_output_tokens": req.output_length,
+                        "generated_tokens_total": req.generated_tokens,
+                        "tokens_emitted_this_step": 1,
+                    }
+                )
+
+            complete_events.append(
+                TraceEvent(
+                    name=f"{phase.upper()[0]}:{req.req_id}",
+                    cat=f"request.{phase}",
+                    ph="X",
+                    pid=str(self.engine_id),
+                    tid=0,
+                    ts=start_us,
+                    dur=duration_us,
+                    args=event_args,
+                )
             )
-            complete_events.append(complete)
+
         return complete_events
 
     def memory_event(self, start_at):
@@ -237,19 +311,47 @@ class LLMEngine:
         Returns:
             TraceEvent representing current memory block usage
         """
+        used_blocks, total_blocks = self.memory_planner.usage()
         return TraceEvent(
-            name="block usage",
+            name="Memory usage",
             ph="C",
-            ts=start_at * 1e6,
-            pid=self.engine_id,
+            ts=int(max(start_at, 0) * 1_000_000),
+            pid=str(self.engine_id),
             tid=0,
-            cat="memory",
+            cat="memory.allocator",
             args={
-                "used": self.memory_planner._allocated_blocks,
-                "free": self.memory_planner._max_num_blocks
-                - self.memory_planner._allocated_blocks,
+                "used_blocks": used_blocks,
+                "free_blocks": total_blocks - used_blocks,
+                "engine_model": self.model_name,
+                "hardware": self.hardware_name,
+                "tensor_parallel_size": self.parallel_config.tensor_parallel_size,
+                "pipeline_parallel_size": self.parallel_config.pipeline_parallel_size,
+                "waiting_requests": [req.req_id for req in self.waiting],
+                "running_requests": [req.req_id for req in self.running],
             },
         )
+
+    def status_snapshot(self) -> Dict[str, Any]:
+        """Return a concise status summary for periodic logging."""
+        used_blocks, total_blocks = self.memory_planner.usage()
+        if len(self.running) > 0:
+            state = "busy"
+        elif len(self.waiting) > 0:
+            state = "queued"
+        else:
+            state = "idle"
+
+        return {
+            "engine_id": str(self.engine_id),
+            "model": self.model_name,
+            "hardware": self.hardware_name,
+            "tensor_parallel_size": self.parallel_config.tensor_parallel_size,
+            "state": state,
+            "used_blocks": used_blocks,
+            "total_blocks": total_blocks,
+            "waiting": len(self.waiting),
+            "running": len(self.running),
+        }
 
     @property
     def empty(self):
@@ -260,3 +362,39 @@ class LLMEngine:
             bool: True if both waiting and running queues are empty
         """
         return len(self.waiting) == 0 and len(self.running) == 0
+
+    def reconfigure_model(
+        self,
+        model_name: str,
+        *,
+        w_bit: Optional[int] = None,
+        a_bit: Optional[int] = None,
+        kv_bit: Optional[int] = None,
+    ) -> None:
+        """Retarget this engine to serve a different model."""
+        if self.waiting or self.running:
+            raise RuntimeError("Cannot reconfigure engine while requests are in-flight")
+
+        if w_bit is not None:
+            self.w_bit = w_bit
+        if a_bit is not None:
+            self.a_bit = a_bit
+        if kv_bit is not None:
+            self.kv_bit = kv_bit
+
+        self.model_name = model_name
+        self.analyzer = ModelAnalyzer(
+            model_id=model_name,
+            hardware=self.hardware_name,
+            config_file="internal/configs/llama.py",
+            source="huggingface",
+        )
+        self.memory_planner = MemoryPlanner(
+            self.analyzer.model_params,
+            self.hardware_spec,
+            self.w_bit,
+            self.a_bit,
+            self.kv_bit,
+            parallel_config=self.parallel_config,
+        )
+        self.parallel_config = self.memory_planner.parallel_config

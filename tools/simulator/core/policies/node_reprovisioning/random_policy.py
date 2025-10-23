@@ -1,8 +1,9 @@
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from .base import NodeReprovisioningPolicy
 from ...node import ComputeNode
 from core.env import calculate_model_loading_time
+from utils.model_utils import get_model_size_gb
 
 
 class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
@@ -27,11 +28,7 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
             default_disk_bandwidth_mbps: Default disk bandwidth for model loading
             default_pcie_bandwidth_gbps: Default PCIe bandwidth for model loading
         """
-        self.model_sizes_gb = model_sizes_gb or {
-            "meta-llama/Meta-Llama-3-70B-Instruct": 140.0,
-            "meta-llama/Meta-Llama-3-8B-Instruct": 16.0,
-            "meta-llama/Meta-Llama-3.1-8B-Instruct": 16.0,
-        }
+        self.model_sizes_gb = dict(model_sizes_gb) if model_sizes_gb else {}
         self.default_disk_bandwidth_mbps = default_disk_bandwidth_mbps
         self.default_pcie_bandwidth_gbps = default_pcie_bandwidth_gbps
 
@@ -40,7 +37,7 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
         target_model: str,
         all_nodes: Dict[int, ComputeNode],
         current_time: float,
-        nodes_being_reprovisioned: set = None,
+        nodes_being_reprovisioned: Optional[Set[int]] = None,
     ) -> Optional[ComputeNode]:
         """
         Randomly select an idle node to re-purpose for the target model.
@@ -59,14 +56,6 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
 
         idle_nodes = []
 
-        print(
-            f"T: {current_time:.2f} Looking for nodes to re-purpose for {target_model}"
-        )
-        print(f"T: {current_time:.2f} Total nodes available: {len(all_nodes)}")
-        print(
-            f"T: {current_time:.2f} Nodes being re-provisioned: {nodes_being_reprovisioned}"
-        )
-
         # Find all idle nodes (not currently processing requests)
         for node_id, node in all_nodes.items():
             # Skip nodes that are already being re-provisioned
@@ -74,25 +63,15 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
                 continue
 
             can_repurpose = self.can_repurpose_node(node, target_model, current_time)
-            node_status = f"running_requests={len(node.running_requests)}, loading={len(node.model_loading_in_progress)}"
-
-            print(
-                f"T: {current_time:.2f} Node {node_id}: can_repurpose={can_repurpose}, status={node_status}"
-            )
 
             if can_repurpose:
                 idle_nodes.append((node_id, node))
-
-        print(
-            f"T: {current_time:.2f} Found {len(idle_nodes)} idle nodes for re-provisioning"
-        )
 
         if not idle_nodes:
             return None
 
         # Randomly select an idle node
         node_id, selected_node = random.choice(idle_nodes)
-        print(f"T: {current_time:.2f} Selected node {node_id} for re-provisioning")
         return selected_node
 
     def get_reprovisioning_time(
@@ -114,7 +93,10 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
             return 0.0
 
         # Get model size for target model
-        model_size_gb = self.model_sizes_gb.get(target_model, 140.0)
+        model_size_gb = self.model_sizes_gb.get(target_model)
+        if model_size_gb is None:
+            model_size_gb = get_model_size_gb(target_model)
+            self.model_sizes_gb[target_model] = model_size_gb
 
         # Calculate model loading time
         loading_time = calculate_model_loading_time(
@@ -143,5 +125,9 @@ class RandomNodeReprovisioningPolicy(NodeReprovisioningPolicy):
         # Node can be re-purposed if it's idle (no running requests)
         # and not currently loading models
         return (
-            len(node.running_requests) == 0 and len(node.model_loading_in_progress) == 0
+            len(node.waiting_requests) == 0
+            and len(node.running_requests) == 0
+            and len(node.model_loading_in_progress) == 0
+            and current_time
+            >= getattr(node, "next_available_time", current_time) - 1e-9
         )

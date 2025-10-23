@@ -12,6 +12,8 @@ console = Console()
 
 def run_simulation(args):
     print(args)
+    print_interval = max(0.0, float(args.print_interval))
+
     workload = load_trace(
         args.input,
         float(args.arrival_rate),
@@ -36,7 +38,7 @@ def run_simulation(args):
         server = NodeGlobalEngine(
             environment_config=environment_config,
             environment_changes=environment_changes,
-            print_interval=args.print_interval,
+            print_interval=print_interval,
         )
     else:
         # Fallback to legacy LLMGlobalEngine for backward compatibility
@@ -44,7 +46,7 @@ def run_simulation(args):
         server = LLMGlobalEngine(
             environment_config=environment_config,
             environment_changes=environment_changes,
-            print_interval=args.print_interval,
+            print_interval=print_interval,
         )
 
         # If no environment config is provided, use the old method
@@ -130,8 +132,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--print-interval",
         type=float,
-        help="Print interval for progress updates in seconds (default: 0.1)",
-        default=0.1,
+        help=("Seconds between progress updates; set to 0 to disable"),
+        default=0.5,
     )
     args = parser.parse_args()
     run_simulation(args)

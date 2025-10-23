@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from ...node import ComputeNode
 
 
@@ -13,7 +13,11 @@ class NodeReprovisioningPolicy(ABC):
 
     @abstractmethod
     def select_node_to_repurpose(
-        self, target_model: str, all_nodes: Dict[int, ComputeNode], current_time: float
+        self,
+        target_model: str,
+        all_nodes: Dict[int, ComputeNode],
+        current_time: float,
+        nodes_being_reprovisioned: Optional[Set[int]] = None,
     ) -> Optional[ComputeNode]:
         """
         Select a node to re-purpose for the target model.
@@ -22,6 +26,7 @@ class NodeReprovisioningPolicy(ABC):
             target_model: The model that needs a node
             all_nodes: Dictionary of all available nodes
             current_time: Current simulation time
+            nodes_being_reprovisioned: Node IDs already scheduled for re-provisioning
 
         Returns:
             Optional[ComputeNode]: Node to re-purpose, or None if no node can be re-purposed

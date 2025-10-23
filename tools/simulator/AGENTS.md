@@ -31,3 +31,5 @@
 ## Security & Configuration Tips
 - Review `internal/configs/hardware_params.py` and `examples/env.json` before adding hardware profiles; never commit production-specific credentials.
 - Treat environment-change JSONL fixtures as append-only—add new files for new scenarios instead of rewriting shared samples.
+
+If you need to use python, please use this one: $HOME/micromamba/envs/pg/bin/python

@@ -35,7 +35,7 @@ class RandomGTLPolicy(BaseGlobalToLocalPolicy):
         """
         self.global_engine = global_engine
 
-    def assign_requests(self, request: GenerationRequest) -> None:
+    def assign_requests(self, request: GenerationRequest) -> bool:
         """
         Assign a request to a randomly selected compatible engine.
 
@@ -57,7 +57,7 @@ class RandomGTLPolicy(BaseGlobalToLocalPolicy):
                 # Request will be assigned in the next iteration after re-provisioning completes
             else:
                 print(f"No engines available for {request.model} and cannot create one")
-            return
+            return False
 
         # Get available engines for the model
         available_engines = self.engines[request.model]
@@ -72,7 +72,13 @@ class RandomGTLPolicy(BaseGlobalToLocalPolicy):
 
         if not idle_engines:
             # All engines are busy or being re-provisioned
-            return
+            return False
 
         selected_engine = np.random.choice(idle_engines, 1)[0]
         selected_engine.add_request(request)
+        if self.global_engine:
+            self.global_engine.record_assignment_event(
+                request, selected_engine, self.global_engine.global_timer
+            )
+            self.global_engine.on_request_assigned(selected_engine)
+        return True
