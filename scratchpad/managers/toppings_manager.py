@@ -313,6 +313,7 @@ class ToppingsManager:
                     weight_indices,
                     lora_buffer=None,
                     delta_buffer=self.weights_buffer["lm_head"][:len_deltas],
+                    num_lora = len_loras
                 )
             elif "embed_tokens" in module_name:
                 module.set_topping_info(
@@ -320,6 +321,7 @@ class ToppingsManager:
                     weight_indices,
                     lora_buffer=None,
                     delta_buffer=self.weights_buffer["embed_tokens"][:len_deltas],
+                    num_lora = len_loras
                 )
             elif "qkv_proj" in module_name:
                 module.set_topping_info(
